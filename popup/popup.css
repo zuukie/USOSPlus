@@ -4,8 +4,8 @@ body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   width: 376px;
 }
-a { color: oklch(58% 0.15 262); text-decoration: none; cursor: pointer; }
-a:hover { color: oklch(48% 0.16 262); }
+a { color: oklch(58% 0.15 45); text-decoration: none; cursor: pointer; }
+a:hover { color: oklch(48% 0.16 45); }
 
 @keyframes usospp-fade-in {
   from { opacity: 0; transform: translateY(3px); }
@@ -43,9 +43,9 @@ a:hover { color: oklch(48% 0.16 262); }
 
 .pp-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 14px 18px; }
 .pp-brand { display: flex; align-items: center; gap: 9px; cursor: pointer; }
-.pp-logo { width: 26px; height: 26px; border-radius: 7px; background: oklch(62% 0.17 45); flex-shrink: 0; }
+.pp-logo { width: 26px; height: 26px; flex-shrink: 0; display: flex; }
 .pp-brand-text { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; color: var(--ink); }
-.pp-brand-text span { color: oklch(62% 0.17 45); }
+.pp-brand-text span { color: #d9773a; font-weight: 700; }
 .pp-status-pill { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; padding: 4px 10px 4px 8px; border-radius: 999px; background: var(--bg-subtle); color: var(--ink-2); }
 .pp-status-dot { width: 7px; height: 7px; border-radius: 999px; }
 
@@ -59,7 +59,8 @@ a:hover { color: oklch(48% 0.16 262); }
   padding: 14px; border-radius: 13px; font-size: 14.5px; font-weight: 700; font-family: inherit;
   cursor: pointer; transition: background 0.15s; border: none;
 }
-.pp-main-btn.off { background: oklch(62% 0.17 45); color: #fff; }
+.pp-main-btn.off { background: #d9773a; color: #fff; }
+.pp-main-btn.off:hover { background: oklch(52% 0.15 45); }
 .pp-main-btn.on { background: var(--bg-subtle); color: var(--ink); border: 1px solid var(--border); }
 .pp-main-hint { font-size: 11.5px; color: var(--ink-3); text-align: center; margin-top: -6px; }
 
@@ -97,7 +98,7 @@ a:hover { color: oklch(48% 0.16 262); }
 .pp-settings-icon { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--ink-2); }
 
 .pp-switch { width: 34px; height: 19px; border-radius: 999px; cursor: pointer; position: relative; transition: background 0.15s; background: var(--border); flex-shrink: 0; }
-.pp-switch.on { background: oklch(60% 0.15 262); }
+.pp-switch.on { background: oklch(60% 0.15 45); }
 .pp-switch-knob { width: 15px; height: 15px; border-radius: 999px; background: #fff; position: absolute; top: 2px; left: 2px; transition: left 0.15s; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
 .pp-switch.on .pp-switch-knob { left: 17px; }
 

@@ -17,6 +17,11 @@
     oceny: 'kontroler.php?_action=dla_stud/studia/oceny/index',
     plan: 'kontroler.php?_action=home/plan',
     egzaminy: 'kontroler.php?_action=dla_stud/rejestracja/egzaminy',
+    // University-wide announcements — also the site's own landing page
+    // (news/default), verified against real markup: a repeating sequence of
+    // sibling .title-wrapper-section / plain content divs inside .wrtext
+    // (see adapter.getNews).
+    news: 'kontroler.php?_action=news/default',
     // Personalized hub listing the student's own programme stage(s) (see
     // adapter.getOwnProgrammes) — used to filter the faculty-wide
     // registration calendar down to just this student's kierunek.
@@ -86,12 +91,13 @@
   }
 
   async function collectAll(adapter) {
-    const [homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc] = await Promise.all([
+    const [homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc] = await Promise.all([
       fetchDoc(PATHS.home),
       fetchDoc(PATHS.zaliczenia),
       fetchDoc(PATHS.oceny),
       fetchDoc(PATHS.plan),
       fetchDoc(PATHS.zapisyHub),
+      fetchDoc(PATHS.news),
     ]);
 
     // Prefer the fetched home page (has the album/faculty info panel); fall
@@ -110,6 +116,9 @@
     const ownProgrammesResult = zapisyHubDoc
       ? adapter.getOwnProgrammes(zapisyHubDoc)
       : { supported: false, verified: false, programmes: [] };
+    const newsResult = newsDoc
+      ? adapter.getNews(newsDoc)
+      : { supported: false, verified: false, items: [] };
 
     let examsResult = { supported: false, verified: false, exams: [] };
     try {
@@ -148,7 +157,7 @@
       }
     }
 
-    return { user, etapyResult, gradesResult, planResult, examsResult, registrationsResult, ownProgrammesResult, stageSubjectsResult };
+    return { user, etapyResult, gradesResult, planResult, examsResult, registrationsResult, ownProgrammesResult, stageSubjectsResult, newsResult };
   }
 
   window.USOSPP_SCRAPE = { collectAll, fetchDoc, PATHS };

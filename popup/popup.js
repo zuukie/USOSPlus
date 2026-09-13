@@ -25,8 +25,17 @@ const QUICK_ACTIONS = [
   { key: 'plan', label: 'Plan', view: 'plan', path: 'kontroler.php?_action=home/plan' },
   { key: 'oceny', label: 'Oceny', view: 'oceny', path: 'kontroler.php?_action=dla_stud/studia/oceny/index' },
   { key: 'egzaminy', label: 'Egzaminy', view: 'egzaminy', path: 'kontroler.php?_action=dla_stud/rejestracja/egzaminy' },
-  { key: 'powiadomienia', label: 'Powiad.', view: 'powiadomienia', path: 'kontroler.php?_action=news/default' },
+  { key: 'ustawienia', label: 'Ustaw.', view: 'ustawienia', path: 'kontroler.php?_action=home/index' },
 ];
+
+// USOS++ mark per the brand system: a rounded orange tile with two bold white
+// "+" glyphs. The popup's brand logo renders at 26px, just under the 32px
+// threshold where the brand system switches to the "compact" variant (wider
+// gap between the two pluses so they don't visually merge at small sizes).
+const LOGO_TILE_COMPACT = '<rect x="0" y="0" width="100" height="100" rx="18" fill="#d9773a"/><rect x="26.42" y="37.75" width="6.66" height="18.5" rx="1.87" fill="#fff"/><rect x="20.5" y="43.67" width="18.5" height="6.66" rx="1.87" fill="#fff"/><rect x="66.92" y="37.75" width="6.66" height="18.5" rx="1.87" fill="#fff"/><rect x="61" y="43.67" width="18.5" height="6.66" rx="1.87" fill="#fff"/>';
+function logoSvg() {
+  return `<svg viewBox="0 0 100 100" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">${LOGO_TILE_COMPACT}</svg>`;
+}
 
 const appEl = document.getElementById('app');
 
@@ -108,7 +117,7 @@ function renderMainHeader() {
   return `
     <div class="pp-header">
       <div class="pp-brand">
-        <div class="pp-logo"></div>
+        <div class="pp-logo">${logoSvg()}</div>
         <div class="pp-brand-text">USOS<span>++</span></div>
       </div>
       <div class="pp-status-pill">
@@ -171,7 +180,7 @@ function renderMainBody() {
       <div>
         <div class="pp-section-heading">Stan danych</div>
         <div class="pp-list-item">
-          <div class="pp-list-bar" style="background:oklch(55% 0.15 262);"></div>
+          <div class="pp-list-bar" style="background:oklch(55% 0.15 45);"></div>
           <div>
             <div class="pp-list-title">${snapshot.planEventCount || 0} poz. w planie · ${snapshot.examCount || 0} egzaminów</div>
             <div class="pp-list-sub">${snapshot.user && snapshot.user.name ? esc(snapshot.user.name) : 'Nie rozpoznano użytkownika'}</div>

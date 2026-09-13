@@ -32,7 +32,7 @@
     const n = parseFloat(gradeStr);
     if (Number.isNaN(n)) return { bg: 'var(--bg-subtle)', color: 'var(--ink-3)' };
     if (n >= 4.5) return { bg: 'oklch(90% 0.08 150)', color: 'oklch(35% 0.1 150)' };
-    if (n >= 3.5) return { bg: 'oklch(92% 0.03 262)', color: 'oklch(40% 0.13 262)' };
+    if (n >= 3.5) return { bg: 'oklch(92% 0.03 45)', color: 'oklch(40% 0.13 45)' };
     return { bg: 'oklch(92% 0.06 80)', color: 'oklch(42% 0.1 70)' };
   }
 
@@ -153,16 +153,56 @@
 
   const NAV_ITEMS = [
     { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
+    { id: 'aktualnosci', label: 'Aktualności', icon: 'bell' },
     { id: 'plan', label: 'Plan zajęć', icon: 'calendar' },
     { id: 'oceny', label: 'Oceny', icon: 'bars' },
     { id: 'przedmioty', label: 'Przedmioty', icon: 'book' },
-    { id: 'zapisy', label: 'Zapisy', icon: 'ticket' },
-    { id: 'planer', label: 'Generator planu', icon: 'layers' },
     { id: 'egzaminy', label: 'Egzaminy', icon: 'check' },
     { id: 'ects', label: 'ECTS / Postęp', icon: 'ring' },
-    { id: 'powiadomienia', label: 'Powiadomienia', icon: 'bell' },
-    { id: 'ustawienia', label: 'Ustawienia', icon: 'settings' },
   ];
+
+  // "przedmioty" is a hub tile screen — Przegląd/Zapisy/Generator planu live
+  // one level under it now instead of each having their own nav row. A nav
+  // item should still read as "active" while the user is anywhere inside its
+  // group (including a subject-detail page opened from within it), even
+  // though only the hub id itself appears in NAV_ITEMS.
+  const NAV_GROUPS = { przedmioty: ['przedmioty', 'przedmiotyLista', 'zapisy', 'planer'] };
+
+  // A plain document reload (classic USOSweb navigation, not an SPA route
+  // change) tears down and re-mounts the whole App, which used to always
+  // land back on the dashboard. sessionStorage survives a reload of the same
+  // tab but clears when the tab actually closes — exactly "stay where you
+  // were" semantics, without a freshly opened USOS tab inheriting whatever
+  // section a *different* tab last looked at (chrome.storage would do that).
+  const VIEW_STORAGE_KEY = 'usospp_lastView';
+  const VALID_VIEWS = new Set([
+    ...NAV_ITEMS.map((item) => item.id),
+    'przedmiotyLista', 'zapisy', 'planer', 'ustawienia', 'subjectPage',
+  ]);
+
+  // "Is there a new announcement since I last opened Aktualności" — chrome
+  // .storage.local (device-local, not synced, survives tab close unlike
+  // sessionStorage) remembers a signature of the titles shown last time the
+  // user actually visited the page; any mismatch means something changed.
+  // Keyed by origin so a future second-university install (see
+  // background.js's registerUniversity) doesn't mix the two up.
+  const NEWS_SEEN_KEY = 'usospp:newsSeenSignature:' + location.origin;
+  function newsSignature(newsResult) {
+    return ((newsResult && newsResult.items) || []).map((it) => it.title).join('|');
+  }
+
+  function saveViewState(payload) {
+    try { sessionStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(payload)); } catch (e) { /* private mode etc. */ }
+  }
+
+  function loadViewState() {
+    try {
+      const raw = sessionStorage.getItem(VIEW_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
 
   const ICONS = {
     grid: '<rect x="2.5" y="2.5" width="6.5" height="6.5" rx="1.5"></rect><rect x="11" y="2.5" width="6.5" height="6.5" rx="1.5"></rect><rect x="2.5" y="11" width="6.5" height="6.5" rx="1.5"></rect><rect x="11" y="11" width="6.5" height="6.5" rx="1.5"></rect>',
@@ -181,18 +221,36 @@
     return `<svg width="${size}" height="${size}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${ICONS[name] || ''}</svg>`;
   }
 
+  // Sub-pages one level under a nav hub (przedmiotyLista/zapisy/planer under
+  // "Przedmioty", or a subject-detail page under whatever it was opened from)
+  // no longer have their own persistent sidebar row, so they need this to get
+  // back up a level.
+  function backLink(viewId, label = '← Wróć') {
+    return `<a data-action="nav" data-view="${esc(viewId)}" class="usospp-back-link">${esc(label)}</a>`;
+  }
+
+  // USOS++ mark per the brand system: a rounded orange tile (23% radius) with
+  // two bold white "+" glyphs (59% of tile width, 16% inner gap). Below 32px
+  // the tile radius shrinks and the gap widens (tracking -> 0) so the two
+  // pluses don't visually merge — that's the "compact" variant.
+  const LOGO_TILE_MASTER = '<rect x="0" y="0" width="100" height="100" rx="23" fill="#d9773a"/><rect x="27.7" y="36.25" width="7.1" height="21.5" rx="1.99" fill="#fff"/><rect x="20.5" y="43.45" width="21.5" height="7.1" rx="1.99" fill="#fff"/><rect x="65.2" y="36.25" width="7.1" height="21.5" rx="1.99" fill="#fff"/><rect x="58" y="43.45" width="21.5" height="7.1" rx="1.99" fill="#fff"/>';
+  const LOGO_TILE_COMPACT = '<rect x="0" y="0" width="100" height="100" rx="18" fill="#d9773a"/><rect x="26.42" y="37.75" width="6.66" height="18.5" rx="1.87" fill="#fff"/><rect x="20.5" y="43.67" width="18.5" height="6.66" rx="1.87" fill="#fff"/><rect x="66.92" y="37.75" width="6.66" height="18.5" rx="1.87" fill="#fff"/><rect x="61" y="43.67" width="18.5" height="6.66" rx="1.87" fill="#fff"/>';
+  function logoSvg(compact) {
+    return `<svg viewBox="0 0 100 100" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">${compact ? LOGO_TILE_COMPACT : LOGO_TILE_MASTER}</svg>`;
+  }
+
   const TITLES = {
     dashboard: ['Dashboard', 'Podsumowanie'],
+    aktualnosci: ['Aktualności', 'Ogłoszenia i komunikaty z USOSweb'],
     plan: ['Plan zajęć', 'Bieżący tydzień'],
     oceny: ['Oceny', 'Aktualny widok z USOSweb'],
-    przedmioty: ['Przedmioty', 'Na podstawie danych z USOSweb'],
+    przedmioty: ['Przedmioty', 'Przegląd, zapisy i generator planu'],
+    przedmiotyLista: ['Przegląd przedmiotów', 'Na podstawie danych z USOSweb'],
     zapisy: ['Zapisy', 'Rejestracja na przedmioty — kalendarz wydziałowy'],
     planer: ['Generator planu', 'Podgląd — niczego tu nie zapisujemy w USOS'],
     egzaminy: ['Egzaminy', 'Zapisy i wyniki sesji'],
     ects: ['ECTS / Postęp', 'Realizacja programu studiów'],
-    powiadomienia: ['Powiadomienia', 'Funkcja w przygotowaniu'],
     ustawienia: ['Ustawienia', 'Profil, wygląd i powiadomienia'],
-    styleguide: ['System designu', 'Kolory, typografia i komponenty'],
     subjectPage: ['Przedmiot', 'Szczegóły z katalogu USOS'],
   };
 
@@ -201,10 +259,30 @@
       this.root = root;
       this.data = data;
       this.settings = initialSettings; // { darkMode, features }
+
+      const saved = loadViewState();
+      let initialView = 'dashboard';
+      let initialSubjectUrl = null;
+      let initialSubjectBackView = 'przedmiotyLista';
+      if (saved && VALID_VIEWS.has(saved.view)) {
+        if (saved.view === 'subjectPage') {
+          if (saved.subjectUrl) {
+            initialView = 'subjectPage';
+            initialSubjectUrl = saved.subjectUrl;
+            initialSubjectBackView = (saved.subjectBackView && VALID_VIEWS.has(saved.subjectBackView) && saved.subjectBackView !== 'subjectPage')
+              ? saved.subjectBackView
+              : 'przedmiotyLista';
+          }
+        } else {
+          initialView = saved.view;
+        }
+      }
+
       this.state = {
-        view: 'dashboard',
+        view: initialView,
         notifPanelOpen: false,
         avatarMenuOpen: false,
+        newsHasUpdate: false,
         examModalOpen: false,
         semesterInfoOpen: false,
         calcAvg: '',
@@ -213,9 +291,9 @@
         calcNewEcts: '5',
         zapisyFilter: '',
         zapisyOwnOnly: true,
-        subjectBackView: 'przedmioty',
-        subjectUrl: null,
-        subjectLoading: false,
+        subjectBackView: initialSubjectBackView,
+        subjectUrl: initialSubjectUrl,
+        subjectLoading: initialView === 'subjectPage',
         subjectError: false,
         subjectData: null,
         plannerExpandedUrl: null,
@@ -234,12 +312,54 @@
       // re-render on every keystroke would replace the focused <input> node
       // and drop the cursor mid-typing.
       this.root.addEventListener('change', this._onChange);
+      this.setupTitleGuard();
       this.loadPlannerPicks();
+      this.checkNewsUpdate();
+      if (initialView === 'subjectPage' && initialSubjectUrl) {
+        this.fetchSubjectData(initialSubjectUrl);
+      }
     }
 
     destroy() {
       this.root.removeEventListener('click', this._onClick);
       this.root.removeEventListener('change', this._onChange);
+      if (this._titleObserver) this._titleObserver.disconnect();
+    }
+
+    // Classic USOSweb ships a static server-rendered <title> and no script
+    // touches it afterwards (verified live) — but just in case some page we
+    // haven't seen does, re-assert our title if anything changes it out from
+    // under us instead of silently losing the tab label.
+    setupTitleGuard() {
+      let titleEl = document.querySelector('title');
+      if (!titleEl) {
+        titleEl = document.createElement('title');
+        document.head.appendChild(titleEl);
+      }
+      this._titleObserver = new MutationObserver(() => {
+        if (this._lastTitle && document.title !== this._lastTitle) {
+          document.title = this._lastTitle;
+        }
+      });
+      this._titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+
+    updateDocumentTitle() {
+      let [title] = TITLES[this.state.view] || [];
+      if (this.state.view === 'subjectPage' && this.state.subjectData) {
+        title = this.state.subjectData.subjectName || title;
+      }
+      const full = title ? `${title} – USOS++` : 'USOS++';
+      this._lastTitle = full;
+      if (document.title !== full) document.title = full;
+    }
+
+    persistViewState() {
+      saveViewState({
+        view: this.state.view,
+        subjectUrl: this.state.view === 'subjectPage' ? this.state.subjectUrl : null,
+        subjectBackView: this.state.view === 'subjectPage' ? this.state.subjectBackView : null,
+      });
     }
 
     setState(patch) {
@@ -263,13 +383,77 @@
       el.innerHTML = this.renderPlannerBody();
     }
 
+    // Same idea as setPlannerState: opening/closing the bell or avatar dropdown
+    // only ever changes the topbar, but going through setState rebuilt the
+    // whole page and replayed .usospp-view's fade-in across all the content
+    // underneath it, which read as the page reloading itself.
+    setTopbarState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      const el = this.root.querySelector('[data-topbar-root]');
+      if (!el) { this.render(); return; }
+      el.outerHTML = this.renderTopbar();
+    }
+
+    // checkNewsUpdate() resolves well after the initial render, completely
+    // outside any click — going through setState would flash the fade-in
+    // across the whole page just to light up one small dot in the sidebar.
+    setSidebarState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      const el = this.root.querySelector('[data-sidebar-root]');
+      if (!el) { this.render(); return; }
+      el.outerHTML = this.renderSidebar();
+    }
+
     updateSettings(settings) {
       this.settings = settings;
       this.render();
     }
 
     navigate(view) {
-      this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
+      const patch = { view, notifPanelOpen: false, avatarMenuOpen: false };
+      if (view === 'aktualnosci' && this.state.newsHasUpdate) {
+        patch.newsHasUpdate = false;
+        this.persistNewsSeen();
+      }
+      this.setState(patch);
+      this.persistViewState();
+    }
+
+    persistNewsSeen() {
+      const signature = newsSignature(this.data.newsResult);
+      try { chrome.storage.local.set({ [NEWS_SEEN_KEY]: signature }); } catch (e) { /* ignore */ }
+    }
+
+    // Compares today's announcement titles against whatever was on the page
+    // last time the user actually opened Aktualności (see persistNewsSeen)
+    // to light up a small dot in the sidebar — same idea as the background
+    // grade-check's hash diff in background.js, just for the news list and
+    // surfaced in-app instead of as an OS notification.
+    async checkNewsUpdate() {
+      if (!this.data.newsResult || !this.data.newsResult.supported) return;
+      const signature = newsSignature(this.data.newsResult);
+      if (!signature) return;
+      let stored;
+      try {
+        const res = await chrome.storage.local.get(NEWS_SEEN_KEY);
+        stored = res[NEWS_SEEN_KEY];
+      } catch (e) {
+        return;
+      }
+      if (this.state.view === 'aktualnosci') {
+        // Already looking at it on this very load — nothing to flag.
+        if (stored !== signature) this.persistNewsSeen();
+        return;
+      }
+      if (stored === undefined) {
+        // First time ever — no prior signature to compare against, so
+        // there's nothing genuinely "new" to announce yet.
+        this.persistNewsSeen();
+        return;
+      }
+      if (stored !== signature) {
+        this.setSidebarState({ newsHasUpdate: true });
+      }
     }
 
     handleClick(e) {
@@ -281,10 +465,10 @@
           this.navigate(el.dataset.view);
           break;
         case 'toggleNotifPanel':
-          this.setState((s) => ({ notifPanelOpen: !s.notifPanelOpen, avatarMenuOpen: false }));
+          this.setTopbarState((s) => ({ notifPanelOpen: !s.notifPanelOpen, avatarMenuOpen: false }));
           break;
         case 'toggleAvatarMenu':
-          this.setState((s) => ({ avatarMenuOpen: !s.avatarMenuOpen, notifPanelOpen: false }));
+          this.setTopbarState((s) => ({ avatarMenuOpen: !s.avatarMenuOpen, notifPanelOpen: false }));
           break;
         case 'closeMenus':
           // Every click on empty space resolves here (it's the outermost
@@ -292,7 +476,7 @@
           // open, otherwise every click on the page would force a full
           // innerHTML rebuild and feel like the page reloading itself.
           if (e.target === el && (this.state.notifPanelOpen || this.state.avatarMenuOpen)) {
-            this.setState({ notifPanelOpen: false, avatarMenuOpen: false });
+            this.setTopbarState({ notifPanelOpen: false, avatarMenuOpen: false });
           }
           break;
         case 'stop':
@@ -369,6 +553,15 @@
         subjectError: false,
         subjectData: null,
       }));
+      this.persistViewState();
+      this.fetchSubjectData(url);
+    }
+
+    // Split out of openSubjectPage so a restored session (page reload landing
+    // back on a previously open subject via sessionStorage) can re-fetch the
+    // same data without re-deriving subjectBackView from a throwaway initial
+    // state.
+    fetchSubjectData(url) {
       const scrape = window.USOSPP_SCRAPE;
       const adapters = window.USOSPP_ADAPTERS;
       if (!scrape || !adapters) {
@@ -741,40 +934,45 @@
           </div>
         </div>
       `;
+      this.updateDocumentTitle();
     }
 
     renderSidebar() {
       const u = this.data.user || {};
       const initials = (u.name || '? ?').split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
       return `
-        <aside class="usospp-sidebar">
+        <aside class="usospp-sidebar" data-sidebar-root>
           <div class="usospp-brand">
-            <div class="usospp-logo"></div>
+            <div class="usospp-logo">${logoSvg(false)}</div>
             <div class="usospp-brand-text">USOS<span>++</span></div>
           </div>
           <nav class="usospp-nav">
             ${NAV_ITEMS.map((item) => `
-              <div class="usospp-nav-item${this.state.view === item.id ? ' active' : ''}" data-action="nav" data-view="${item.id}">
+              <div class="usospp-nav-item${this.isNavActive(item.id) ? ' active' : ''}" data-action="nav" data-view="${item.id}">
                 ${icon(item.icon)}<span>${esc(item.label)}</span>
+                ${item.id === 'aktualnosci' && this.state.newsHasUpdate ? '<span class="usospp-nav-dot"></span>' : ''}
               </div>
             `).join('')}
           </nav>
-          <div class="usospp-nav-section">
-            <div class="usospp-nav-heading">Zasoby</div>
-            <div class="usospp-nav-item${this.state.view === 'styleguide' ? ' active' : ''}" data-action="nav" data-view="styleguide">
-              ${icon('book')}<span>System designu</span>
-            </div>
-          </div>
           <div class="usospp-spacer"></div>
-          <div class="usospp-user-card">
+          <div class="usospp-user-card" data-action="nav" data-view="ustawienia" title="Ustawienia">
             <div class="usospp-avatar">${esc(initials || '—')}</div>
             <div class="usospp-user-meta">
               <div class="usospp-user-name">${esc(u.name || 'Nie rozpoznano')}</div>
-              <div class="usospp-user-sub">${esc(u.faculty || (u.album ? `nr albumu ${u.album}` : '—'))}</div>
+              <div class="usospp-user-sub">${esc(this.kierunek || u.faculty || (u.album ? `nr albumu ${u.album}` : '—'))}</div>
             </div>
           </div>
         </aside>
       `;
+    }
+
+    // "przedmioty" groups przedmiotyLista/zapisy/planer under one nav row
+    // (see NAV_GROUPS) — a nav item should read as active from anywhere in
+    // its group, including a subject-detail page opened from within it.
+    isNavActive(itemId) {
+      const group = NAV_GROUPS[itemId] || [itemId];
+      if (group.includes(this.state.view)) return true;
+      return this.state.view === 'subjectPage' && group.includes(this.state.subjectBackView);
     }
 
     renderTopbar() {
@@ -785,7 +983,7 @@
       const u = this.data.user || {};
       const initials = (u.name || '? ?').split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
       return `
-        <header class="usospp-topbar">
+        <header class="usospp-topbar" data-topbar-root>
           <div>
             <div class="usospp-title">${esc(title)}</div>
             <div class="usospp-subtitle">${esc(subtitle)}</div>
@@ -796,16 +994,16 @@
               ${this.state.notifPanelOpen ? `
                 <div class="usospp-dropdown" data-action="stop">
                   <div class="usospp-dropdown-head">
-                    <span>Powiadomienia</span>
+                    <span>Aktualności</span>
                   </div>
-                  <div class="usospp-empty-hint">Funkcja jest w przygotowaniu — jeszcze nie odczytujemy komunikatów z USOS.</div>
+                  ${this.renderNotifPanelBody()}
                 </div>
               ` : ''}
             </div>
             <div class="usospp-divider"></div>
             <div class="usospp-menu-wrap">
               <div class="usospp-avatar-trigger" data-action="toggleAvatarMenu">
-                <div class="usospp-avatar usospp-avatar-blue">${esc(initials || '—')}</div>
+                <div class="usospp-avatar">${esc(initials || '—')}</div>
                 <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="var(--ink-2)" stroke-width="2"><path d="M5 8l5 5 5-5"></path></svg>
               </div>
               ${this.state.avatarMenuOpen ? `
@@ -824,19 +1022,36 @@
       `;
     }
 
+    // Small preview inside the topbar's bell dropdown — full announcements
+    // (with their formatted body) live on the "Aktualności" nav page, this
+    // is just titles + a link over there.
+    renderNotifPanelBody() {
+      const news = this.data.newsResult || {};
+      const items = (news.items || []).slice(0, 4);
+      if (!news.supported || items.length === 0) {
+        return `<div class="usospp-empty-hint">Brak aktualności do wyświetlenia.</div>`;
+      }
+      return `
+        ${items.map((item) => `
+          <div class="usospp-dropdown-item" data-action="nav" data-view="aktualnosci">${esc(item.title)}</div>
+        `).join('')}
+        <div class="usospp-dropdown-item" data-action="nav" data-view="aktualnosci" style="text-align:center;color:#d9773a;font-weight:600;">Zobacz wszystkie →</div>
+      `;
+    }
+
     renderView() {
       switch (this.state.view) {
         case 'dashboard': return this.renderDashboard();
+        case 'aktualnosci': return this.renderAktualnosci();
         case 'plan': return this.renderPlan();
         case 'oceny': return this.renderOceny();
-        case 'przedmioty': return this.renderPrzedmioty();
+        case 'przedmioty': return this.renderPrzedmiotyHub();
+        case 'przedmiotyLista': return this.renderPrzedmiotyLista();
         case 'zapisy': return this.renderZapisy();
         case 'planer': return this.renderPlanner();
         case 'egzaminy': return this.renderEgzaminy();
         case 'ects': return this.renderEcts();
-        case 'powiadomienia': return this.renderPowiadomienia();
         case 'ustawienia': return this.renderUstawienia();
-        case 'styleguide': return this.renderStyleGuide();
         case 'subjectPage': return this.renderSubjectPage();
         default: return '';
       }
@@ -888,6 +1103,13 @@
       return Array.isArray(p.programmes) ? p.programmes : [];
     }
 
+    // Same source renderZapisy already relies on for "Tylko mój kierunek" —
+    // the "Wymagania etapów studiów" hub is the only reliable "what's my
+    // kierunek" signal we have (see getOwnProgrammes' comment in adapters.js).
+    get kierunek() {
+      return this.ownProgrammes.find((p) => p.directionName)?.directionName || null;
+    }
+
     get stageSubjects() {
       const s = this.data.stageSubjectsResult || {};
       return Array.isArray(s.stages) ? s.stages : [];
@@ -923,7 +1145,7 @@
             <div class="usospp-card usospp-stat">
               <div class="usospp-stat-label">Egzaminy</div>
               <div class="usospp-stat-value">${this.exams.length || 0}</div>
-              <div class="usospp-stat-hint" data-action="nav" data-view="egzaminy" style="cursor:pointer;font-weight:600;color:oklch(58% 0.15 262);">zobacz →</div>
+              <div class="usospp-stat-hint" data-action="nav" data-view="egzaminy" style="cursor:pointer;font-weight:600;color:oklch(58% 0.15 45);">zobacz →</div>
             </div>
           </div>
 
@@ -942,6 +1164,32 @@
               `).join('') : `<div class="usospp-empty-hint">Brak danych o etapach.</div>`}
             </div>
           </div>
+        </div>
+      `;
+    }
+
+    // Same "strona główna" announcements USOS classic shows on login — see
+    // adapter.getNews. Body HTML is already sanitized down to a plain-text
+    // allowlist by the adapter (it's fetched HTML from a page we don't
+    // control, not something we generated), so it's safe to inject directly
+    // here without another esc() pass.
+    renderAktualnosci() {
+      const news = this.data.newsResult || {};
+      const items = news.items || [];
+      if (!news.supported) {
+        return `<div class="usospp-view"><div class="usospp-empty-hint">Nie udało się odczytać aktualności ze strony USOS.</div></div>`;
+      }
+      if (items.length === 0) {
+        return `<div class="usospp-view"><div class="usospp-empty-hint">Brak aktualności.</div></div>`;
+      }
+      return `
+        <div class="usospp-view">
+          ${items.map((item) => `
+            <div class="usospp-card">
+              <div class="usospp-card-title" style="margin-bottom:10px;">${esc(item.title)}</div>
+              <div class="usospp-news-body">${item.html}</div>
+            </div>
+          `).join('')}
         </div>
       `;
     }
@@ -998,11 +1246,36 @@
       `;
     }
 
-    renderPrzedmioty() {
+    // The hub tile screen behind the "Przedmioty" nav item — Przegląd,
+    // Zapisy and Generator planu each used to be their own top-level nav row;
+    // grouping them here freed up sidebar space for future sections.
+    renderPrzedmiotyHub() {
+      const tiles = [
+        { view: 'przedmiotyLista', icon: 'book', title: 'Przegląd przedmiotów', desc: 'Etapy studiów i przedmioty przypisane do Twojego programu.' },
+        { view: 'zapisy', icon: 'ticket', title: 'Zapisy na przedmioty', desc: 'Kalendarz tur rejestracji na wydziale — bez zapisywania niczego za Ciebie.' },
+        { view: 'planer', icon: 'layers', title: 'Generator planu', desc: 'Poukładaj sobie plan zajęć na próbę, zanim zapiszesz się naprawdę.' },
+      ];
+      return `
+        <div class="usospp-view">
+          <div class="usospp-hub-grid">
+            ${tiles.map((t) => `
+              <div class="usospp-hub-tile" data-action="nav" data-view="${esc(t.view)}">
+                <div class="usospp-hub-tile-icon">${icon(t.icon, 20)}</div>
+                <div class="usospp-hub-tile-title">${esc(t.title)}</div>
+                <div class="usospp-hub-tile-desc">${esc(t.desc)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    renderPrzedmiotyLista() {
       const etapy = this.etapy;
       const stages = this.stageSubjects;
       return `
         <div class="usospp-view">
+          ${backLink('przedmioty')}
           <div class="usospp-card">
             <div class="usospp-card-head">
               <div class="usospp-card-title">Przedmioty / etapy studiów</div>
@@ -1058,10 +1331,8 @@
 
     renderSubjectPage() {
       const s = this.state;
-      const backView = s.subjectBackView || 'przedmioty';
-      const header = `
-        <a data-action="nav" data-view="${esc(backView)}" style="font-size:12.5px;font-weight:600;">← Wróć</a>
-      `;
+      const backView = s.subjectBackView || 'przedmiotyLista';
+      const header = backLink(backView);
       if (s.subjectLoading) {
         return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie…</div></div></div>`;
       }
@@ -1240,6 +1511,7 @@
 
       return `
         <div class="usospp-view">
+          ${backLink('przedmioty')}
           <div class="usospp-card">
             <div class="usospp-card-head">
               <div class="usospp-card-title">Rejestracje na przedmioty</div>
@@ -1283,7 +1555,7 @@
       return `
         <div class="usospp-list-row" style="align-items:flex-start;">
           <div>
-            <div style="font-size:13.5px;font-weight:600;">${esc(g.groupLabel)}${round.isOwnSemester ? ' <span class="usospp-tag-muted" style="font-style:normal;font-weight:600;color:oklch(58% 0.15 262);">· Twój semestr?</span>' : ''}</div>
+            <div style="font-size:13.5px;font-weight:600;">${esc(g.groupLabel)}${round.isOwnSemester ? ' <span class="usospp-tag-muted" style="font-style:normal;font-weight:600;color:oklch(58% 0.15 45);">· Twój semestr?</span>' : ''}</div>
             <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(round.roundType || '')}${round.roundNote ? ' · ' + esc(round.roundNote) : ''}</div>
             <div style="font-size:12px;color:var(--ink-2);margin-top:4px;">${esc(round.state || '—')}</div>
             ${round.startsAt ? `<div style="font-size:11.5px;color:var(--ink-3);margin-top:2px;">${esc(round.startsAt)}${round.endsAt ? ' – ' + esc(round.endsAt) : ''}</div>` : ''}
@@ -1305,7 +1577,12 @@
     // adding/removing a pick) goes through setPlannerState, which patches
     // just this node's innerHTML — see setPlannerState's own comment.
     renderPlanner() {
-      return `<div class="usospp-view" data-planner-root>${this.renderPlannerBody()}</div>`;
+      return `
+        <div class="usospp-view">
+          ${backLink('przedmioty')}
+          <div data-planner-root>${this.renderPlannerBody()}</div>
+        </div>
+      `;
     }
 
     renderPlannerBody() {
@@ -1721,27 +1998,8 @@
               </div>
               <div class="usospp-calc-result">
                 <div style="font-size:11px;color:var(--ink-3);font-weight:600;">nowa średnia</div>
-                <div style="font-size:20px;font-weight:700;color:oklch(58% 0.15 262);">${projected || '—'}</div>
+                <div style="font-size:20px;font-weight:700;color:oklch(58% 0.15 45);">${projected || '—'}</div>
               </div>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    renderPowiadomienia() {
-      const f = this.settings.features || {};
-      return `
-        <div class="usospp-view" style="max-width:640px;">
-          <div class="usospp-card">
-            <div class="usospp-card-title">Powiadomienia</div>
-            <p class="usospp-muted-text">Odczytywanie ogłoszeń i komunikatów z USOS jest w przygotowaniu. Poniżej możesz włączyć sprawdzanie nowych ocen w tle — powiadomimy Cię systemowym powiadomieniem Chrome, gdy pojawi się nowa ocena.</p>
-            <div class="usospp-list-row">
-              <div>
-                <div style="font-size:13.5px;font-weight:500;">Sprawdzanie nowych ocen w tle</div>
-                <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">Co 15 minut, w oparciu o stronę „oceny”</div>
-              </div>
-              <div class="usospp-switch ${f.notif ? 'on' : ''}" data-action="toggleFeature" data-key="notif"><div class="usospp-switch-knob"></div></div>
             </div>
           </div>
         </div>
@@ -1767,100 +2025,80 @@
           label: 'Działają niezależnie od USOS++',
           keys: {
             quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, gdy USOS++ jest wyłączony'],
-            notif: ['Sprawdzanie nowych ocen w tle', 'Działa zawsze, co 15 minut, niezależnie od trybu'],
           },
         },
       ];
       return `
-        <div class="usospp-view" style="max-width:640px;">
-          <div class="usospp-card">
-            <div class="usospp-card-title" style="margin-bottom:18px;">Profil</div>
-            <div class="usospp-field-stack">
-              <div>
-                <label class="usospp-field-label">Imię i nazwisko</label>
-                <input class="usospp-input" value="${esc(u.name || '—')}" readonly>
-              </div>
-              <div>
-                <label class="usospp-field-label">Numer albumu</label>
-                <input class="usospp-input" value="${esc(u.album || '—')}" readonly>
-              </div>
-              <div>
-                <label class="usospp-field-label">Jednostka</label>
-                <input class="usospp-input" value="${esc(u.faculty || '—')}" readonly>
-              </div>
-            </div>
-          </div>
-
-          <div class="usospp-card">
-            <div class="usospp-card-title" style="margin-bottom:6px;">Wygląd</div>
-            <div class="usospp-muted-text" style="margin-bottom:16px;">Wybierz jasny lub ciemny motyw interfejsu USOS++.</div>
-            <div style="display:flex;gap:10px;">
-              <button class="usospp-mode-btn ${!dark ? 'active' : ''}" data-action="setDark" data-value="false">☀ Jasny</button>
-              <button class="usospp-mode-btn ${dark ? 'active' : ''}" data-action="setDark" data-value="true">☾ Ciemny</button>
-            </div>
-          </div>
-
-          ${featureGroups.map((group) => `
-            <div class="usospp-card">
-              <div class="usospp-card-title" style="margin-bottom:16px;">${esc(group.label)}</div>
-              <div class="usospp-field-stack">
-                ${Object.keys(group.keys).map((key) => `
-                  <div class="usospp-list-row">
-                    <div>
-                      <div style="font-size:13.5px;font-weight:500;">${esc(group.keys[key][0])}</div>
-                      <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(group.keys[key][1])}</div>
-                    </div>
-                    <div class="usospp-switch ${f[key] ? 'on' : ''}" data-action="toggleFeature" data-key="${key}"><div class="usospp-switch-knob"></div></div>
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    renderStyleGuide() {
-      const swatches = [
-        ['Tło strony', 'var(--bg-page)'],
-        ['Karta', 'var(--bg-card)'],
-        ['Obramowanie', 'var(--border)'],
-        ['Akcent (niebieski)', 'oklch(60% 0.15 262)'],
-        ['Akcent (bursztyn)', 'oklch(62% 0.17 45)'],
-      ];
-      return `
         <div class="usospp-view">
-          <div class="usospp-card">
-            <div class="usospp-eyebrow">Kolory</div>
-            <div class="usospp-swatch-grid">
-              ${swatches.map(([name, color]) => `
-                <div>
-                  <div class="usospp-swatch" style="background:${color};"></div>
-                  <div style="font-size:11.5px;font-weight:600;margin-top:6px;">${esc(name)}</div>
+          <div class="usospp-two-col">
+            <div style="display:flex;flex-direction:column;gap:20px;">
+              <div class="usospp-card">
+                <div class="usospp-card-title" style="margin-bottom:18px;">Profil</div>
+                <div class="usospp-field-stack">
+                  <div>
+                    <label class="usospp-field-label">Imię i nazwisko</label>
+                    <input class="usospp-input" value="${esc(u.name || '—')}" readonly>
+                  </div>
+                  <div>
+                    <label class="usospp-field-label">Numer albumu</label>
+                    <input class="usospp-input" value="${esc(u.album || '—')}" readonly>
+                  </div>
+                  <div>
+                    <label class="usospp-field-label">Jednostka</label>
+                    <input class="usospp-input" value="${esc(u.faculty || '—')}" readonly>
+                  </div>
+                  <div>
+                    <label class="usospp-field-label">Kierunek</label>
+                    <input class="usospp-input" value="${esc(this.kierunek || '—')}" readonly>
+                  </div>
+                </div>
+              </div>
+
+              <div class="usospp-card">
+                <div class="usospp-card-title" style="margin-bottom:6px;">Wygląd</div>
+                <div class="usospp-muted-text" style="margin-bottom:16px;">Wybierz jasny lub ciemny motyw interfejsu USOS++.</div>
+                <div style="display:flex;gap:10px;">
+                  <button class="usospp-mode-btn ${!dark ? 'active' : ''}" data-action="setDark" data-value="false">☀ Jasny</button>
+                  <button class="usospp-mode-btn ${dark ? 'active' : ''}" data-action="setDark" data-value="true">☾ Ciemny</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:20px;">
+              <div class="usospp-card">
+                <div class="usospp-card-title">Powiadomienia</div>
+                <p class="usospp-muted-text">Odczytywanie ogłoszeń i komunikatów z USOS jest w przygotowaniu. Poniżej możesz włączyć sprawdzanie nowych ocen w tle — powiadomimy Cię systemowym powiadomieniem Chrome, gdy pojawi się nowa ocena.</p>
+                <div class="usospp-list-row">
+                  <div>
+                    <div style="font-size:13.5px;font-weight:500;">Sprawdzanie nowych ocen w tle</div>
+                    <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">Co 15 minut, w oparciu o stronę „oceny”</div>
+                  </div>
+                  <div class="usospp-switch ${f.notif ? 'on' : ''}" data-action="toggleFeature" data-key="notif"><div class="usospp-switch-knob"></div></div>
+                </div>
+              </div>
+
+              ${featureGroups.map((group) => `
+                <div class="usospp-card">
+                  <div class="usospp-card-title" style="margin-bottom:16px;">${esc(group.label)}</div>
+                  <div class="usospp-field-stack">
+                    ${Object.keys(group.keys).map((key) => `
+                      <div class="usospp-list-row">
+                        <div>
+                          <div style="font-size:13.5px;font-weight:500;">${esc(group.keys[key][0])}</div>
+                          <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(group.keys[key][1])}</div>
+                        </div>
+                        <div class="usospp-switch ${f[key] ? 'on' : ''}" data-action="toggleFeature" data-key="${key}"><div class="usospp-switch-knob"></div></div>
+                      </div>
+                    `).join('')}
+                  </div>
                 </div>
               `).join('')}
             </div>
           </div>
-          <div class="usospp-card">
-            <div class="usospp-eyebrow">Typografia</div>
-            <div style="display:flex;flex-direction:column;gap:12px;">
-              <div style="font-size:28px;font-weight:700;letter-spacing:-0.01em;">Nagłówek H1 / 28·700</div>
-              <div style="font-size:19px;font-weight:700;">Nagłówek H2 / 19·700</div>
-              <div style="font-size:16px;font-weight:600;">Nagłówek H3 / 16·600</div>
-              <div style="font-size:14px;">Tekst podstawowy / 14·400</div>
-              <div style="font-size:12.5px;color:var(--ink-3);">Tekst pomocniczy / 12.5·400</div>
-            </div>
-          </div>
-          <div class="usospp-card">
-            <div class="usospp-eyebrow">Przyciski</div>
-            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
-              <button class="usospp-btn-primary">Podstawowy</button>
-              <button class="usospp-btn-ghost">Drugorzędny</button>
-            </div>
-          </div>
         </div>
       `;
     }
+
   }
 
   window.USOSPP_APP = {

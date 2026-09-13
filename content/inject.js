@@ -76,6 +76,7 @@
     const data = await collectAll(adapter);
     app.data = data;
     app.render();
+    app.checkNewsUpdate();
     maybeUpdateBadge(data);
   }
 
@@ -164,7 +165,7 @@
   function onKeydown(e) {
     if (!app) return;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement && document.activeElement.tagName)) return;
-    const map = { '1': 'dashboard', '2': 'plan', '3': 'oceny', '4': 'przedmioty', '5': 'egzaminy', '6': 'ects', '7': 'powiadomienia', '8': 'ustawienia' };
+    const map = { '1': 'dashboard', '2': 'aktualnosci', '3': 'plan', '4': 'oceny', '5': 'przedmioty', '6': 'egzaminy', '7': 'ects', '8': 'ustawienia' };
     if (map[e.key]) app.navigate(map[e.key]);
   }
 

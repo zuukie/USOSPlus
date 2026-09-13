@@ -12,7 +12,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === 'usospp:setBadge') {
     chrome.action.setBadgeText({ text: msg.text || '' });
-    chrome.action.setBadgeBackgroundColor({ color: '#c96b31' });
+    chrome.action.setBadgeBackgroundColor({ color: '#d9773a' });
     return undefined;
   }
 

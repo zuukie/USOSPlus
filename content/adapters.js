@@ -37,6 +37,42 @@
     return m ? m[1] : null;
   }
 
+  // Announcement bodies come from the university's own page, but we still
+  // don't trust raw innerHTML from a fetched document enough to inject it
+  // straight into the extension's own DOM — this walks the parsed (inert,
+  // DOMParser-produced, non-executing) content and rebuilds it using only an
+  // allowlist of safe formatting tags, dropping everything else down to its
+  // text. Unknown wrapper tags (span/div/font from the CMS) are unwrapped
+  // rather than dropped, so their text/links still come through.
+  const NEWS_ALLOWED_TAGS = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'UL', 'OL', 'LI', 'A']);
+  function sanitizeNewsNode(node, targetDoc) {
+    if (node.nodeType === Node.TEXT_NODE) return targetDoc.createTextNode(node.textContent);
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+    const isAllowed = NEWS_ALLOWED_TAGS.has(node.tagName);
+    const container = isAllowed ? targetDoc.createElement(node.tagName.toLowerCase()) : targetDoc.createDocumentFragment();
+    if (isAllowed && node.tagName === 'A') {
+      const href = node.getAttribute('href') || '';
+      if (/^https?:\/\//i.test(href)) {
+        container.setAttribute('href', href);
+        container.setAttribute('target', '_blank');
+        container.setAttribute('rel', 'noopener noreferrer');
+      }
+    }
+    node.childNodes.forEach((child) => {
+      const clean = sanitizeNewsNode(child, targetDoc);
+      if (clean) container.appendChild(clean);
+    });
+    return container;
+  }
+  function sanitizeNewsHtml(nodes, doc) {
+    const wrap = doc.createElement('div');
+    nodes.forEach((node) => {
+      const clean = sanitizeNewsNode(node, doc);
+      if (clean) wrap.appendChild(clean);
+    });
+    return wrap.innerHTML;
+  }
+
   function hasModernShell() {
     return !!document.querySelector('usos-layout, usos-frame, cas-bar');
   }
@@ -259,6 +295,41 @@
         programmes.push({ prgKod, etpKod, semester, directionName, label: text });
       });
       return { supported: programmes.length > 0, verified: true, programmes };
+    },
+
+    // Verified against real markup at .../news/default (also the site's own
+    // landing page once logged in). Announcements render as a flat sequence
+    // of siblings inside a <div class="wrtext">: each one's heading is a
+    // <div class="title-wrapper-section">…<h4>…</h4></div>, immediately
+    // followed by one or more plain <div> wrappers holding its <p> body —
+    // there's no shared container per-announcement, so we walk the sibling
+    // list ourselves and split on the heading markers. The very first
+    // heading on the page ("Witaj w systemie USOSweb") uses the plain
+    // "title-wrapper" class instead (no "-section" suffix) — that's the
+    // page's own generic greeting, not a real announcement, so it's
+    // naturally excluded by matching only "title-wrapper-section".
+    getNews(doc = document) {
+      const anyHeading = doc.querySelector('.title-wrapper-section');
+      const wrtext = anyHeading ? anyHeading.closest('.wrtext') : null;
+      if (!wrtext) return { supported: false, verified: false, items: [] };
+
+      const items = [];
+      let current = null;
+      Array.from(wrtext.children).forEach((child) => {
+        if (child.classList.contains('title-wrapper-section')) {
+          if (current) items.push(current);
+          const h = child.querySelector('h1,h2,h3,h4,h5,h6');
+          current = { title: textOf(h) || textOf(child), bodyNodes: [] };
+        } else if (current) {
+          current.bodyNodes.push(...Array.from(child.childNodes));
+        }
+      });
+      if (current) items.push(current);
+
+      const news = items
+        .filter((it) => it.title)
+        .map((it) => ({ title: it.title, html: sanitizeNewsHtml(it.bodyNodes, doc) }));
+      return { supported: news.length > 0, verified: true, items: news };
     },
 
     // Verified against real markup at .../katalog2/programy/pokazEtapProgramu
@@ -618,6 +689,7 @@
     getExams() { return { supported: false, verified: false, exams: [] }; },
     getRegistrationRounds() { return { supported: false, verified: false, groups: [] }; },
     getOwnProgrammes() { return { supported: false, verified: false, programmes: [] }; },
+    getNews() { return { supported: false, verified: false, items: [] }; },
     getStageSubjects() { return { supported: false, verified: false, sections: [] }; },
     getSubjectPage() { return { supported: false, verified: false, generalInfo: [], cycles: [] }; },
     getSubjectTimetable() { return { supported: false, verified: false, hourStart: null, hourEnd: null, days: [] }; },
