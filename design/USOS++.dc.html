@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap">
+<style>
+  body{margin:0;background:var(--bg-page,oklch(97.5% 0.006 60));font-family:'General Sans',system-ui,-apple-system,sans-serif;}
+  a{color:oklch(58% 0.15 262);text-decoration:none;}
+  a:hover{color:oklch(48% 0.16 262);}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:oklch(88% 0.008 55);border-radius:8px;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+</style>
+</helmet>
+
+<div style="{{ rootStyle }}">
+
+  <!-- SIDEBAR -->
+  <aside style="width:252px;flex-shrink:0;background:oklch(19% 0.014 55);display:flex;flex-direction:column;padding:24px 14px;position:sticky;top:0;height:100vh;">
+    <div style="display:flex;align-items:center;gap:10px;padding:0 10px 24px 10px;">
+      <div style="width:32px;height:32px;border-radius:9px;background:oklch(62% 0.17 45);flex-shrink:0;"></div>
+      <div style="color:oklch(97% 0.004 55);font-weight:700;font-size:17px;letter-spacing:-0.02em;">USOS<span style="color:oklch(70% 0.15 45);">++</span></div>
+    </div>
+
+    <nav style="display:flex;flex-direction:column;gap:2px;">
+      <div onClick="{{ goDashboard }}" style="{{ navDashboard }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="2.5" width="6.5" height="6.5" rx="1.5"></rect><rect x="11" y="2.5" width="6.5" height="6.5" rx="1.5"></rect><rect x="2.5" y="11" width="6.5" height="6.5" rx="1.5"></rect><rect x="11" y="11" width="6.5" height="6.5" rx="1.5"></rect></svg>
+        <span>Dashboard</span>
+      </div>
+      <div onClick="{{ goPlan }}" style="{{ navPlan }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="3.5" width="15" height="14" rx="2"></rect><line x1="2.5" y1="8" x2="17.5" y2="8"></line><line x1="6.5" y1="2" x2="6.5" y2="5"></line><line x1="13.5" y1="2" x2="13.5" y2="5"></line></svg>
+        <span>Plan zajęć</span>
+      </div>
+      <div onClick="{{ goOceny }}" style="{{ navOceny }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="4" y1="16" x2="4" y2="9"></line><line x1="10" y1="16" x2="10" y2="4"></line><line x1="16" y1="16" x2="16" y2="12"></line></svg>
+        <span>Oceny</span>
+      </div>
+      <div onClick="{{ goPrzedmioty }}" style="{{ navPrzedmioty }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="2.5" width="12" height="15" rx="1.5"></rect><rect x="6" y="4.5" width="9" height="13" rx="1.5" fill="oklch(19% 0.014 55)"></rect><line x1="8.5" y1="8" x2="12.5" y2="8"></line><line x1="8.5" y1="11" x2="12.5" y2="11"></line></svg>
+        <span>Przedmioty</span>
+      </div>
+      <div onClick="{{ goEgzaminy }}" style="{{ navEgzaminy }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7.2"></circle><path d="M6.8 10.2l2 2 4.2-4.4"></path></svg>
+        <span>Egzaminy</span>
+      </div>
+      <div onClick="{{ goEcts }}" style="{{ navEcts }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7.2" stroke-opacity="0.35"></circle><path d="M10 2.8a7.2 7.2 0 0 1 5.1 12.3"></path></svg>
+        <span>ECTS / Postęp</span>
+      </div>
+      <div onClick="{{ goPowiadomienia }}" style="{{ navPowiadomienia }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 8.2a5 5 0 0 1 10 0c0 3.6 1.3 4.8 1.3 4.8H3.7S5 11.8 5 8.2z"></path><path d="M8.2 15.6a1.9 1.9 0 0 0 3.6 0"></path></svg>
+        <span style="flex:1;">Powiadomienia</span>
+        <sc-if value="{{ unreadCount }}" hint-placeholder-val="{{ 0 }}">
+          <span style="background:oklch(62% 0.17 45);color:#fff;font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;">{{ unreadCount }}</span>
+        </sc-if>
+      </div>
+      <div onClick="{{ goUstawienia }}" style="{{ navUstawienia }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="3" y1="5" x2="17" y2="5"></line><circle cx="12" cy="5" r="1.8" fill="oklch(19% 0.014 55)"></circle><line x1="3" y1="10" x2="17" y2="10"></line><circle cx="7" cy="10" r="1.8" fill="oklch(19% 0.014 55)"></circle><line x1="3" y1="15" x2="17" y2="15"></line><circle cx="14" cy="15" r="1.8" fill="oklch(19% 0.014 55)"></circle></svg>
+        <span>Ustawienia</span>
+      </div>
+    </nav>
+
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid oklch(28% 0.016 55);">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:oklch(58% 0.014 55);padding:0 10px 8px 10px;">Zasoby</div>
+      <div onClick="{{ goStyleGuide }}" style="{{ navStyleGuide }}">
+        <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="2.5" width="6" height="15" rx="1.5"></rect><rect x="11.5" y="2.5" width="6" height="6" rx="1.5"></rect><rect x="11.5" y="11.5" width="6" height="6" rx="1.5"></rect></svg>
+        <span>System designu</span>
+      </div>
+    </div>
+
+    <div style="flex:1;"></div>
+
+    <div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;background:oklch(24% 0.016 55);">
+      <div style="width:34px;height:34px;border-radius:999px;background:oklch(62% 0.17 45);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0;">MK</div>
+      <div style="min-width:0;">
+        <div style="color:oklch(95% 0.004 55);font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Marta Kamińska</div>
+        <div style="color:oklch(60% 0.012 55);font-size:12px;">Informatyka, sem. 5</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+
+    <!-- TOPBAR -->
+    <header style="height:68px;flex-shrink:0;background:var(--bg-card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 32px;position:sticky;top:0;z-index:20;">
+      <div>
+        <div style="font-size:19px;font-weight:700;letter-spacing:-0.01em;">{{ viewTitle }}</div>
+        <div style="font-size:12.5px;color:var(--ink-3);margin-top:1px;">{{ viewSubtitle }}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;">
+        <div style="display:flex;align-items:center;gap:8px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:10px;padding:8px 14px;width:280px;">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="var(--ink-3)" stroke-width="1.8"><circle cx="8.5" cy="8.5" r="5.5"></circle><line x1="16" y1="16" x2="12.6" y2="12.6"></line></svg>
+          <span style="color:var(--ink-3);font-size:13px;">Szukaj przedmiotu, oceny...</span>
+        </div>
+        <div style="position:relative;">
+          <button onClick="{{ toggleNotifPanel }}" style="position:relative;width:38px;height:38px;border-radius:10px;border:1px solid var(--border);background:var(--bg-card);cursor:pointer;display:flex;align-items:center;justify-content:center;">
+            <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="var(--ink)" stroke-width="1.6"><path d="M5 8.2a5 5 0 0 1 10 0c0 3.6 1.3 4.8 1.3 4.8H3.7S5 11.8 5 8.2z"></path><path d="M8.2 15.6a1.9 1.9 0 0 0 3.6 0"></path></svg>
+            <sc-if value="{{ unreadCount }}" hint-placeholder-val="{{ 0 }}">
+              <span style="position:absolute;top:-3px;right:-3px;width:16px;height:16px;border-radius:999px;background:oklch(58% 0.19 25);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg-card);">{{ unreadCount }}</span>
+            </sc-if>
+          </button>
+          <sc-if value="{{ notifPanelOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute;top:46px;right:0;width:340px;background:var(--bg-card);border:1px solid var(--border);border-radius:14px;box-shadow:0 12px 32px rgba(20,15,10,0.14);padding:10px;animation:fadeIn 0.15s ease;">
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px 10px 8px;">
+                <span style="font-weight:600;font-size:13.5px;">Powiadomienia</span>
+                <a onClick="{{ markAllRead }}" style="font-size:12px;cursor:pointer;">Oznacz wszystkie</a>
+              </div>
+              <sc-for list="{{ notifPreview }}" as="n" hint-placeholder-count="3">
+                <div style="display:flex;gap:10px;padding:9px 8px;border-radius:9px;">
+                  <div style="width:7px;height:7px;border-radius:999px;background:{{ n.dotColor }};margin-top:6px;flex-shrink:0;"></div>
+                  <div style="min-width:0;">
+                    <div style="font-size:12.5px;color:var(--ink-2);line-height:1.4;">{{ n.text }}</div>
+                    <div style="font-size:11px;color:var(--ink-3);margin-top:2px;">{{ n.time }}</div>
+                  </div>
+                </div>
+              </sc-for>
+              <div onClick="{{ goPowiadomienia }}" style="text-align:center;padding:9px;font-size:12.5px;font-weight:600;color:oklch(58% 0.15 262);cursor:pointer;border-top:1px solid var(--border-soft);margin-top:4px;">Zobacz wszystkie</div>
+            </div>
+          </sc-if>
+        </div>
+        <div style="width:1px;height:24px;background:var(--border);"></div>
+        <div style="position:relative;">
+          <div onClick="{{ toggleAvatarMenu }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <div style="width:34px;height:34px;border-radius:999px;background:oklch(60% 0.15 262);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;">MK</div>
+            <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="var(--ink-2)" stroke-width="2"><path d="M5 8l5 5 5-5"></path></svg>
+          </div>
+          <sc-if value="{{ avatarMenuOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute;top:46px;right:0;width:200px;background:var(--bg-card);border:1px solid var(--border);border-radius:14px;box-shadow:0 12px 32px rgba(20,15,10,0.14);padding:8px;animation:fadeIn 0.15s ease;">
+              <div style="padding:10px 10px 12px 10px;border-bottom:1px solid var(--border-soft);margin-bottom:6px;">
+                <div style="font-weight:600;font-size:13.5px;">Marta Kamińska</div>
+                <div style="font-size:12px;color:var(--ink-3);">nr albumu 268341</div>
+              </div>
+              <div onClick="{{ goUstawienia }}" style="padding:8px 10px;border-radius:8px;font-size:13px;cursor:pointer;">Ustawienia konta</div>
+              <div style="padding:8px 10px;border-radius:8px;font-size:13px;cursor:pointer;">Pomoc</div>
+              <div style="padding:8px 10px;border-radius:8px;font-size:13px;cursor:pointer;color:oklch(58% 0.19 25);">Wyloguj się</div>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </header>
+
+    <!-- CONTENT -->
+    <main onClick="{{ closeMenus }}" style="flex:1;padding:32px;max-width:1360px;width:100%;margin:0 auto;box-sizing:border-box;">
+
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:24px;animation:fadeIn 0.2s ease;">
+          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Średnia ocen</div>
+              <div style="font-size:30px;font-weight:700;margin-top:8px;">4.32</div>
+              <div style="font-size:12px;color:oklch(58% 0.13 150);margin-top:4px;">↑ 0.08 vs. semestr 4</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Punkty ECTS</div>
+              <div style="font-size:30px;font-weight:700;margin-top:8px;">120<span style="font-size:16px;color:var(--ink-3);font-weight:500;"> / 210</span></div>
+              <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">57% programu studiów</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Kolejne zajęcia</div>
+              <div style="font-size:22px;font-weight:700;margin-top:8px;">Bazy danych</div>
+              <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">dziś, 10:15 · sala 2.28</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Nieprzeczytane</div>
+              <div style="font-size:30px;font-weight:700;margin-top:8px;">{{ unreadCount }}</div>
+              <div onClick="{{ goPowiadomienia }}" style="font-size:12px;color:oklch(58% 0.15 262);margin-top:4px;cursor:pointer;font-weight:600;">powiadomienia →</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:20px;align-items:start;">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                <div style="font-size:16px;font-weight:600;">Dzisiejszy plan · poniedziałek</div>
+                <a onClick="{{ goPlan }}" style="font-size:12.5px;font-weight:600;cursor:pointer;">cały tydzień →</a>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <sc-for list="{{ todayClasses }}" as="c" hint-placeholder-count="2">
+                  <div style="display:flex;gap:16px;padding:14px 8px;border-bottom:1px solid var(--border-soft);">
+                    <div style="width:64px;flex-shrink:0;font-size:12.5px;color:var(--ink-2);font-weight:600;padding-top:2px;">{{ c.time }}</div>
+                    <div style="width:3px;border-radius:2px;background:{{ c.color }};flex-shrink:0;"></div>
+                    <div style="flex:1;">
+                      <div style="font-size:14px;font-weight:600;">{{ c.name }}</div>
+                      <div style="font-size:12.5px;color:var(--ink-3);margin-top:2px;">{{ c.type }} · sala {{ c.room }} · {{ c.lecturer }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:20px;">
+              <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+                <div style="font-size:16px;font-weight:600;margin-bottom:14px;">Ostatnie oceny</div>
+                <sc-for list="{{ recentGrades }}" as="g" hint-placeholder-count="2">
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border-soft);">
+                    <div style="font-size:13px;">{{ g.course }}</div>
+                    <div style="font-size:13px;font-weight:700;background:{{ g.badgeBg }};color:{{ g.badgeColor }};padding:2px 10px;border-radius:999px;">{{ g.grade }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+                <div style="font-size:16px;font-weight:600;margin-bottom:14px;">Nadchodzące terminy</div>
+                <div style="display:flex;flex-direction:column;gap:12px;">
+                  <div style="display:flex;gap:10px;">
+                    <div style="width:6px;height:6px;border-radius:999px;background:oklch(58% 0.19 25);margin-top:6px;flex-shrink:0;"></div>
+                    <div style="font-size:13px;color:var(--ink);">Egzamin: Bazy danych — 26.01.2027</div>
+                  </div>
+                  <div style="display:flex;gap:10px;">
+                    <div style="width:6px;height:6px;border-radius:999px;background:oklch(68% 0.14 80);margin-top:6px;flex-shrink:0;"></div>
+                    <div style="font-size:13px;color:var(--ink);">Zapisy na egzamin z Sieci komp. — od 15.01</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isPlan }}" hint-placeholder-val="{{ false }}">
+        <div style="animation:fadeIn 0.2s ease;">
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;overflow:hidden;">
+            <div style="display:grid;grid-template-columns:64px repeat(5,1fr);border-bottom:1px solid var(--border);">
+              <div></div>
+              <sc-for list="{{ weekDays }}" as="d" hint-placeholder-count="5">
+                <div style="padding:14px 12px;text-align:center;font-weight:600;font-size:13px;border-left:1px solid var(--border-soft);">{{ d }}</div>
+              </sc-for>
+            </div>
+            <div style="display:grid;grid-template-columns:64px repeat(5,1fr);">
+              <div style="display:flex;flex-direction:column;">
+                <sc-for list="{{ hourLabels }}" as="h" hint-placeholder-count="10">
+                  <div style="height:64px;display:flex;align-items:flex-start;justify-content:flex-end;padding:0 8px;font-size:11.5px;color:var(--ink-3);transform:translateY(-6px);">{{ h }}</div>
+                </sc-for>
+              </div>
+              <sc-for list="{{ scheduleColumns }}" as="col" hint-placeholder-count="5">
+                <div style="position:relative;border-left:1px solid var(--border-soft);background-image:repeating-linear-gradient(to bottom, var(--border-soft) 0, var(--border-soft) 1px, transparent 1px, transparent 64px);">
+                  <sc-for list="{{ col.classes }}" as="cls" hint-placeholder-count="1">
+                    <div style="position:absolute;left:4px;right:4px;top:{{ cls.top }}px;height:{{ cls.height }}px;background:{{ cls.bg }};border-left:3px solid {{ cls.border }};border-radius:8px;padding:6px 8px;overflow:hidden;">
+                      <div style="font-size:11.5px;font-weight:700;color:{{ cls.text }};line-height:1.3;">{{ cls.name }}</div>
+                      <div style="font-size:10.5px;color:{{ cls.text }};opacity:0.8;margin-top:1px;">{{ cls.meta }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isOceny }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:20px;animation:fadeIn 0.2s ease;">
+          <div style="display:flex;gap:16px;">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px 24px;flex:1;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Średnia ważona</div>
+              <div style="font-size:28px;font-weight:700;margin-top:6px;">4.32</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px 24px;flex:1;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Zaliczone przedmioty</div>
+              <div style="font-size:28px;font-weight:700;margin-top:6px;">18</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px 24px;flex:1;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Rozkład ocen</div>
+              <div style="display:flex;align-items:flex-end;gap:5px;height:36px;margin-top:8px;">
+                <sc-for list="{{ gradeDistribution }}" as="b" hint-placeholder-count="5">
+                  <div style="width:16px;height:{{ b.h }}px;background:oklch(60% 0.15 262);border-radius:3px 3px 0 0;" title="{{ b.label }}"></div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <div style="position:relative;">
+            <button onClick="{{ toggleSemesterFilter }}" style="display:flex;align-items:center;gap:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:9px 14px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--ink);">
+              {{ selectedSemester }}
+              <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="var(--ink-2)" stroke-width="2"><path d="M5 8l5 5 5-5"></path></svg>
+            </button>
+            <sc-if value="{{ semesterFilterOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;top:44px;left:0;width:220px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(20,15,10,0.12);padding:6px;z-index:10;">
+                <sc-for list="{{ semesterOptions }}" as="s" hint-placeholder-count="5">
+                  <div onClick="{{ s.select }}" style="padding:9px 10px;border-radius:8px;font-size:13px;cursor:pointer;">{{ s.label }}</div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;overflow:hidden;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead>
+                <tr style="background:var(--bg-subtle);">
+                  <th style="text-align:left;padding:12px 20px;font-size:12px;color:var(--ink-2);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Przedmiot</th>
+                  <th style="text-align:left;padding:12px 20px;font-size:12px;color:var(--ink-2);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Forma</th>
+                  <th style="text-align:left;padding:12px 20px;font-size:12px;color:var(--ink-2);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Data</th>
+                  <th style="text-align:right;padding:12px 20px;font-size:12px;color:var(--ink-2);font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Ocena</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ currentGrades }}" as="g" hint-placeholder-count="4">
+                  <tr style="border-top:1px solid var(--border-soft);">
+                    <td style="padding:14px 20px;font-size:13.5px;font-weight:500;">{{ g.course }}</td>
+                    <td style="padding:14px 20px;font-size:13.5px;color:var(--ink-2);">{{ g.type }}</td>
+                    <td style="padding:14px 20px;font-size:13.5px;color:var(--ink-2);">{{ g.date }}</td>
+                    <td style="padding:14px 20px;text-align:right;">
+                      <span style="font-size:13px;font-weight:700;background:{{ g.badgeBg }};color:{{ g.badgeColor }};padding:3px 12px;border-radius:999px;">{{ g.grade }}</span>
+                    </td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+            <sc-if value="{{ noGradesThisSemester }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:48px 20px;text-align:center;">
+                <div style="font-size:14px;color:var(--ink-3);">Brak ocen w wybranym semestrze.</div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isPrzedmioty }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;animation:fadeIn 0.2s ease;">
+          <sc-for list="{{ courses }}" as="c" hint-placeholder-count="6">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:12px;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                <div style="font-size:15px;font-weight:600;line-height:1.3;">{{ c.name }}</div>
+                <span style="flex-shrink:0;font-size:11.5px;font-weight:700;background:{{ c.statusBg }};color:{{ c.statusColor }};padding:3px 10px;border-radius:999px;">{{ c.statusLabel }}</span>
+              </div>
+              <div style="font-size:12.5px;color:var(--ink-3);">{{ c.lecturer }} · {{ c.ects }} ECTS</div>
+              <div>
+                <div style="height:6px;border-radius:999px;background:var(--bg-subtle);overflow:hidden;">
+                  <div style="height:100%;width:{{ c.progress }}%;background:oklch(60% 0.15 262);"></div>
+                </div>
+                <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px;">{{ c.progress }}% ukończone</div>
+              </div>
+              <button onClick="{{ c.openDetails }}" style="margin-top:4px;background:transparent;border:1px solid var(--border);border-radius:9px;padding:9px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--ink);">Szczegóły</button>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ courseModalOpen }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ closeCourseModal }}" style="position:fixed;inset:0;background:rgba(25,18,12,0.4);display:flex;align-items:center;justify-content:center;z-index:50;animation:fadeIn 0.15s ease;">
+            <div onClick="{{ stopProp }}" style="background:var(--bg-card);border-radius:18px;width:440px;max-width:90vw;padding:28px;box-shadow:0 24px 60px rgba(20,15,10,0.25);">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+                <div style="font-size:19px;font-weight:700;">{{ activeCourse.name }}</div>
+                <div onClick="{{ closeCourseModal }}" style="cursor:pointer;color:var(--ink-3);padding:2px;">✕</div>
+              </div>
+              <div style="font-size:13px;color:var(--ink-3);margin-bottom:20px;">{{ activeCourse.lecturer }} · {{ activeCourse.ects }} ECTS · {{ activeCourse.statusLabel }}</div>
+              <div style="display:flex;flex-direction:column;gap:10px;font-size:13.5px;">
+                <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid var(--border-soft);"><span style="color:var(--ink-3);">Forma zajęć</span><span style="font-weight:600;">Wykład + laboratorium</span></div>
+                <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid var(--border-soft);"><span style="color:var(--ink-3);">Postęp</span><span style="font-weight:600;">{{ activeCourse.progress }}%</span></div>
+                <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft);"><span style="color:var(--ink-3);">Sylabus</span><a href="#">pobierz PDF</a></div>
+              </div>
+              <button onClick="{{ closeCourseModal }}" style="margin-top:22px;width:100%;background:oklch(62% 0.17 45);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">Zamknij</button>
+            </div>
+          </div>
+        </sc-if>
+      </sc-if>
+
+      <sc-if value="{{ isEgzaminy }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:28px;animation:fadeIn 0.2s ease;">
+          <div>
+            <div style="font-size:16px;font-weight:600;margin-bottom:14px;">Nadchodzące egzaminy</div>
+            <div style="display:flex;flex-direction:column;gap:12px;">
+              <sc-for list="{{ exams }}" as="e" hint-placeholder-count="3">
+                <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;">
+                  <div>
+                    <div style="font-size:14.5px;font-weight:600;">{{ e.course }}</div>
+                    <div style="font-size:12.5px;color:var(--ink-3);margin-top:3px;">{{ e.date }} · {{ e.time }} · sala {{ e.room }}</div>
+                    <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
+                      <span style="width:7px;height:7px;border-radius:999px;background:{{ e.statusColor }};"></span>
+                      <span style="font-size:12px;font-weight:600;color:{{ e.statusColor }};">{{ e.statusLabel }}</span>
+                      <span style="font-size:12px;color:var(--ink-3);">· {{ e.seatsLabel }}</span>
+                    </div>
+                  </div>
+                  <button onClick="{{ e.action }}" disabled="{{ e.disabled }}" style="{{ e.btnStyle }}">{{ e.btnLabel }}</button>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:16px;font-weight:600;margin-bottom:14px;">Wyniki poprzednich sesji</div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;overflow:hidden;">
+              <table style="width:100%;border-collapse:collapse;">
+                <tbody>
+                  <sc-for list="{{ pastExams }}" as="p" hint-placeholder-count="3">
+                    <tr style="border-top:1px solid var(--border-soft);">
+                      <td style="padding:14px 22px;font-size:13.5px;font-weight:500;">{{ p.course }}</td>
+                      <td style="padding:14px 22px;font-size:13px;color:var(--ink-3);">{{ p.date }}</td>
+                      <td style="padding:14px 22px;text-align:right;"><span style="font-size:13px;font-weight:700;background:{{ p.badgeBg }};color:{{ p.badgeColor }};padding:3px 12px;border-radius:999px;">{{ p.grade }}</span></td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <sc-if value="{{ examModalOpen }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ closeExamModal }}" style="position:fixed;inset:0;background:rgba(25,18,12,0.4);display:flex;align-items:center;justify-content:center;z-index:50;animation:fadeIn 0.15s ease;">
+            <div onClick="{{ stopProp }}" style="background:var(--bg-card);border-radius:18px;width:400px;max-width:90vw;padding:28px;box-shadow:0 24px 60px rgba(20,15,10,0.25);">
+              <div style="font-size:18px;font-weight:700;margin-bottom:8px;">Zapisać się na egzamin?</div>
+              <div style="font-size:13.5px;color:var(--ink-2);line-height:1.5;margin-bottom:22px;">{{ pendingExam.course }}, {{ pendingExam.date }} o {{ pendingExam.time }}, sala {{ pendingExam.room }}.</div>
+              <div style="display:flex;gap:10px;">
+                <button onClick="{{ closeExamModal }}" style="flex:1;background:transparent;border:1px solid var(--border);border-radius:10px;padding:11px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--ink);">Anuluj</button>
+                <button onClick="{{ confirmExamSignup }}" style="flex:1;background:oklch(62% 0.17 45);color:#fff;border:none;border-radius:10px;padding:11px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;">Zapisz mnie</button>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+      </sc-if>
+
+      <sc-if value="{{ isEcts }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:24px;animation:fadeIn 0.2s ease;">
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;display:flex;align-items:center;gap:20px;">
+              <svg width="72" height="72" viewBox="0 0 72 72">
+                <circle cx="36" cy="36" r="30" fill="none" stroke="var(--border-soft)" stroke-width="8"></circle>
+                <circle cx="36" cy="36" r="30" fill="none" stroke="oklch(60% 0.15 262)" stroke-width="8" stroke-linecap="round" stroke-dasharray="188.5" stroke-dashoffset="{{ ectsRingOffset }}" transform="rotate(-90 36 36)"></circle>
+              </svg>
+              <div>
+                <div style="font-size:24px;font-weight:700;">120<span style="font-size:14px;color:var(--ink-3);font-weight:500;"> / 210 ECTS</span></div>
+                <div style="font-size:12.5px;color:var(--ink-3);margin-top:4px;">57% programu ukończone</div>
+              </div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Średnia ważona (cały tok)</div>
+              <div style="font-size:30px;font-weight:700;margin-top:8px;">4.21</div>
+              <div style="font-size:12px;color:oklch(58% 0.13 150);margin-top:4px;">↑ 0.05 vs. poprzedni semestr</div>
+            </div>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+              <div style="font-size:12.5px;color:var(--ink-3);font-weight:600;">Przewidywany termin obrony</div>
+              <div style="font-size:22px;font-weight:700;margin-top:8px;">czerwiec 2028</div>
+              <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">przy obecnym tempie</div>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:16px;font-weight:600;margin-bottom:16px;">Postęp wg semestrów</div>
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              <sc-for list="{{ semesterProgress }}" as="s" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:16px;">
+                  <div style="width:90px;flex-shrink:0;font-size:13px;font-weight:600;">{{ s.label }}</div>
+                  <div style="flex:1;height:10px;border-radius:999px;background:var(--bg-subtle);overflow:hidden;">
+                    <div style="height:100%;width:{{ s.pct }}%;background:oklch(60% 0.15 262);border-radius:999px;"></div>
+                  </div>
+                  <div style="width:70px;flex-shrink:0;text-align:right;font-size:12.5px;color:var(--ink-3);">{{ s.ects }} ECTS</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:16px;font-weight:600;margin-bottom:4px;">Kalkulator średniej</div>
+            <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:18px;">Sprawdź, jak kolejna ocena wpłynie na Twoją średnią.</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:16px;align-items:end;">
+              <div>
+                <label style="font-size:12px;color:var(--ink-3);font-weight:600;display:block;margin-bottom:6px;">Spodziewana ocena</label>
+                <select value="{{ calcGrade }}" onChange="{{ setCalcGrade }}" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--border);font-size:13.5px;font-family:inherit;background:var(--bg-card);color:var(--ink);box-sizing:border-box;">
+                  <sc-for list="{{ gradeOptions }}" as="go" hint-placeholder-count="6">
+                    <option value="{{ go }}">{{ go }}</option>
+                  </sc-for>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--ink-3);font-weight:600;display:block;margin-bottom:6px;">Liczba punktów ECTS przedmiotu</label>
+                <select value="{{ calcEcts }}" onChange="{{ setCalcEcts }}" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--border);font-size:13.5px;font-family:inherit;background:var(--bg-card);color:var(--ink);box-sizing:border-box;">
+                  <sc-for list="{{ ectsOptions }}" as="eo" hint-placeholder-count="4">
+                    <option value="{{ eo }}">{{ eo }}</option>
+                  </sc-for>
+                </select>
+              </div>
+              <div style="background:var(--bg-subtle);border-radius:9px;padding:10px 18px;text-align:center;">
+                <div style="font-size:11px;color:var(--ink-3);font-weight:600;">nowa średnia</div>
+                <div style="font-size:20px;font-weight:700;color:oklch(58% 0.15 262);">{{ projectedAverage }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isPowiadomienia }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:16px;animation:fadeIn 0.2s ease;max-width:720px;">
+          <div style="display:flex;justify-content:flex-end;">
+            <a onClick="{{ markAllRead }}" style="font-size:13px;font-weight:600;cursor:pointer;">Oznacz wszystkie jako przeczytane</a>
+          </div>
+          <sc-for list="{{ allNotifications }}" as="n" hint-placeholder-count="6">
+            <div style="background:{{ n.rowBg }};border:1px solid var(--border);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:flex-start;">
+              <div style="width:9px;height:9px;border-radius:999px;background:{{ n.dotColor }};margin-top:6px;flex-shrink:0;"></div>
+              <div style="flex:1;">
+                <div style="font-size:13.5px;color:var(--ink);line-height:1.45;">{{ n.text }}</div>
+                <div style="font-size:12px;color:var(--ink-3);margin-top:5px;">{{ n.category }} · {{ n.time }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isUstawienia }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:20px;max-width:640px;animation:fadeIn 0.2s ease;">
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:16px;font-weight:600;margin-bottom:18px;">Profil</div>
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              <div>
+                <label style="font-size:12px;color:var(--ink-3);font-weight:600;display:block;margin-bottom:6px;">Imię i nazwisko</label>
+                <input value="Marta Kamińska" readonly="true" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--border);font-size:13.5px;font-family:inherit;background:var(--bg-subtle);color:var(--ink);box-sizing:border-box;"></input>
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--ink-3);font-weight:600;display:block;margin-bottom:6px;">Adres e-mail</label>
+                <input value="marta.kaminska@student.pwr.edu.pl" readonly="true" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--border);font-size:13.5px;font-family:inherit;background:var(--bg-subtle);color:var(--ink);box-sizing:border-box;"></input>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:16px;font-weight:600;margin-bottom:6px;">Wygląd</div>
+            <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:16px;">Wybierz jasny lub ciemny motyw interfejsu.</div>
+            <div style="display:flex;gap:10px;">
+              <button onClick="{{ setLightMode }}" style="{{ lightBtnStyle }}">☀ Jasny</button>
+              <button onClick="{{ setDarkMode }}" style="{{ darkBtnStyle }}">☾ Ciemny</button>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:16px;font-weight:600;margin-bottom:16px;">Powiadomienia</div>
+            <div style="display:flex;flex-direction:column;gap:16px;">
+              <sc-for list="{{ notifSettings }}" as="ns" hint-placeholder-count="4">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <div>
+                    <div style="font-size:13.5px;font-weight:500;">{{ ns.label }}</div>
+                    <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">{{ ns.hint }}</div>
+                  </div>
+                  <div onClick="{{ ns.toggle }}" style="{{ ns.trackStyle }}">
+                    <div style="{{ ns.knobStyle }}"></div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isStyleGuide }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:28px;animation:fadeIn 0.2s ease;">
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--ink-3);margin-bottom:16px;">Kolory</div>
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;">
+              <sc-for list="{{ paletteSwatches }}" as="sw" hint-placeholder-count="6">
+                <div>
+                  <div style="height:56px;border-radius:10px;background:{{ sw.color }};border:1px solid var(--border);"></div>
+                  <div style="font-size:11.5px;font-weight:600;margin-top:6px;">{{ sw.name }}</div>
+                  <div style="font-size:10.5px;color:var(--ink-3);">{{ sw.value }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--ink-3);margin-bottom:16px;">Typografia</div>
+            <div style="display:flex;flex-direction:column;gap:12px;">
+              <div style="font-size:28px;font-weight:700;letter-spacing:-0.01em;">Nagłówek H1 / 28·700</div>
+              <div style="font-size:19px;font-weight:700;">Nagłówek H2 / 19·700</div>
+              <div style="font-size:16px;font-weight:600;">Nagłówek H3 / 16·600</div>
+              <div style="font-size:14px;font-weight:400;">Tekst podstawowy / 14·400 — Politechnika Wrocławska, semestr zimowy 2026/2027.</div>
+              <div style="font-size:12.5px;color:var(--ink-3);">Tekst pomocniczy / 12.5·400</div>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--ink-3);margin-bottom:16px;">Przyciski</div>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+              <button style="background:oklch(62% 0.17 45);color:#fff;border:none;border-radius:10px;padding:11px 20px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;">Podstawowy</button>
+              <button style="background:transparent;border:1px solid var(--border);color:var(--ink);border-radius:10px;padding:11px 20px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;">Drugorzędny</button>
+              <button disabled="true" style="background:var(--bg-subtle);color:var(--ink-3);border:none;border-radius:10px;padding:11px 20px;font-size:13.5px;font-weight:600;font-family:inherit;cursor:not-allowed;">Wyłączony</button>
+              <button style="background:transparent;border:none;color:oklch(58% 0.19 25);border-radius:10px;padding:11px 20px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;">Destrukcyjny</button>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--ink-3);margin-bottom:16px;">Odznaki i status</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <span style="font-size:12.5px;font-weight:700;background:oklch(90% 0.08 150);color:oklch(35% 0.1 150);padding:4px 12px;border-radius:999px;">Zaliczony</span>
+              <span style="font-size:12.5px;font-weight:700;background:oklch(92% 0.06 80);color:oklch(42% 0.1 70);padding:4px 12px;border-radius:999px;">W trakcie</span>
+              <span style="font-size:12.5px;font-weight:700;background:oklch(90% 0.09 25);color:oklch(40% 0.15 25);padding:4px 12px;border-radius:999px;">Niezaliczony</span>
+              <span style="font-size:12.5px;font-weight:700;background:oklch(92% 0.03 262);color:oklch(40% 0.13 262);padding:4px 12px;border-radius:999px;">Zaplanowany</span>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--ink-3);margin-bottom:16px;">Pola formularza</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:520px;">
+              <div>
+                <label style="font-size:12px;color:var(--ink-3);font-weight:600;display:block;margin-bottom:6px;">Pole tekstowe</label>
+                <input placeholder="np. Bazy danych" style="width:100%;padding:10px 12px;border-radius:9px;border:1px solid var(--border);font-size:13.5px;font-family:inherit;background:var(--bg-card);color:var(--ink);box-sizing:border-box;"></input>
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--ink-3);font-weight:600;display:block;margin-bottom:6px;">Pole z fokusem</label>
+                <input placeholder="aktywne" style="width:100%;padding:10px 12px;border-radius:9px;border:2px solid oklch(60% 0.15 262);font-size:13.5px;font-family:inherit;background:var(--bg-card);color:var(--ink);box-sizing:border-box;outline:none;"></input>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:24px;">
+            <div style="font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--ink-3);margin-bottom:16px;">Spacing (skala 4px)</div>
+            <div style="display:flex;align-items:flex-end;gap:12px;">
+              <sc-for list="{{ spacingScale }}" as="sp" hint-placeholder-count="6">
+                <div style="text-align:center;">
+                  <div style="width:{{ sp.px }}px;height:{{ sp.px }}px;background:oklch(60% 0.15 262);border-radius:4px;margin:0 auto;"></div>
+                  <div style="font-size:11px;color:var(--ink-3);margin-top:6px;">{{ sp.px }}px</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+        </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    view: 'dashboard',
+    darkMode: false,
+    notifPanelOpen: false,
+    avatarMenuOpen: false,
+    courseModalOpen: false,
+    activeCourseId: null,
+    examModalOpen: false,
+    pendingExamId: null,
+    semesterFilterOpen: false,
+    selectedSemesterId: 'sem5',
+    calcGrade: '5.0',
+    calcEcts: '5',
+    notifications: [
+      { id: 1, text: 'Nowa ocena z Baz danych: 5.0', category: 'Oceny', time: '2 godz. temu', read: false },
+      { id: 2, text: 'Zapisy na egzamin z Sieci komputerowych rozpoczynają się jutro o 8:00', category: 'Egzaminy', time: '5 godz. temu', read: false },
+      { id: 3, text: 'Zmiana sali dla wykładu z Systemów operacyjnych: 3.15 → 2.28', category: 'Plan zajęć', time: 'wczoraj', read: false },
+      { id: 4, text: 'Twoja średnia za semestr wzrosła do 4.32', category: 'ECTS', time: 'wczoraj', read: true },
+      { id: 5, text: 'Dziekanat: termin składania wniosków o stypendium do 30.11', category: 'Ogłoszenia', time: '2 dni temu', read: true },
+      { id: 6, text: 'Wystawiono ocenę z laboratorium: Programowanie obiektowe', category: 'Oceny', time: '3 dni temu', read: true },
+      { id: 7, text: 'Przypomnienie: kolokwium z Algorytmów i struktur danych w piątek', category: 'Egzaminy', time: '4 dni temu', read: true },
+    ],
+    notifSettings: {
+      grades: true, exams: true, schedule: false, announcements: true,
+    },
+  };
+
+  courses = [
+    { id: 1, name: 'Bazy danych', lecturer: 'dr inż. P. Nowicki', ects: 6, progress: 80, status: 'active' },
+    { id: 2, name: 'Sieci komputerowe', lecturer: 'dr hab. A. Wysocka', ects: 5, progress: 55, status: 'active' },
+    { id: 3, name: 'Systemy operacyjne', lecturer: 'dr inż. K. Malinowski', ects: 5, progress: 90, status: 'active' },
+    { id: 4, name: 'Programowanie obiektowe', lecturer: 'prof. dr hab. M. Zawadzka', ects: 6, progress: 100, status: 'done' },
+    { id: 5, name: 'Algorytmy i struktury danych', lecturer: 'dr M. Sobczak', ects: 6, progress: 65, status: 'active' },
+    { id: 6, name: 'Wstęp do sztucznej inteligencji', lecturer: 'dr inż. R. Lipka', ects: 4, progress: 20, status: 'active' },
+  ];
+
+  exams = [
+    { id: 1, course: 'Bazy danych', date: '26.01.2027', time: '10:00', room: 'C13, 105', capacity: 60, taken: 41, signedUp: true },
+    { id: 2, course: 'Sieci komputerowe', date: '29.01.2027', time: '12:15', room: 'D1, 202', capacity: 45, taken: 45, signedUp: false },
+    { id: 3, course: 'Algorytmy i struktury danych', date: '02.02.2027', time: '9:00', room: 'C13, 210', capacity: 50, taken: 12, signedUp: false },
+  ];
+
+  pastExams = [
+    { course: 'Programowanie obiektowe', date: '18.06.2026', grade: '5.0', badgeBg: 'oklch(90% 0.08 150)', badgeColor: 'oklch(35% 0.1 150)' },
+    { course: 'Matematyka dyskretna', date: '20.06.2026', grade: '4.0', badgeBg: 'oklch(92% 0.06 262)', badgeColor: 'oklch(40% 0.13 262)' },
+    { course: 'Elektronika cyfrowa', date: '23.06.2026', grade: '3.5', badgeBg: 'oklch(92% 0.06 80)', badgeColor: 'oklch(42% 0.1 70)' },
+  ];
+
+  gradesBySemester = {
+    sem5: [
+      { course: 'Bazy danych', type: 'laboratorium', date: '12.11.2026', grade: '5.0' },
+      { course: 'Sieci komputerowe', type: 'projekt', date: '05.11.2026', grade: '4.5' },
+      { course: 'Systemy operacyjne', type: 'kolokwium', date: '28.10.2026', grade: '4.0' },
+      { course: 'Programowanie obiektowe', type: 'egzamin', date: '18.06.2026', grade: '5.0' },
+    ],
+    sem4: [
+      { course: 'Matematyka dyskretna', type: 'egzamin', date: '20.06.2026', grade: '4.0' },
+      { course: 'Elektronika cyfrowa', type: 'egzamin', date: '23.06.2026', grade: '3.5' },
+      { course: 'Bazy danych', type: 'projekt', date: '02.06.2026', grade: '4.5' },
+    ],
+    sem3: [], sem2: [], sem1: [],
+  };
+
+  semesterProgress = [
+    { label: 'Semestr 1', pct: 100, ects: 30 },
+    { label: 'Semestr 2', pct: 100, ects: 30 },
+    { label: 'Semestr 3', pct: 100, ects: 30 },
+    { label: 'Semestr 4', pct: 100, ects: 30 },
+    { label: 'Semestr 5', pct: 33, ects: 10 },
+  ];
+
+  weekDays = ['Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek'];
+  hourLabels = ['8:00','9:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00'];
+
+  scheduleRaw = [
+    [{ name: 'Bazy danych', meta: 'wykład · sala 2.28', start: 10.25, dur: 1.5, color: 'blue' }],
+    [{ name: 'Sieci komputerowe', meta: 'laboratorium · sala D1.12', start: 8, dur: 2, color: 'amber' }, { name: 'Systemy operacyjne', meta: 'wykład · sala 3.15', start: 13, dur: 1.5, color: 'violet' }],
+    [{ name: 'Algorytmy i struktury danych', meta: 'ćwiczenia · sala 1.44', start: 9, dur: 1.5, color: 'green' }],
+    [{ name: 'Bazy danych', meta: 'laboratorium · sala D1.05', start: 11, dur: 2, color: 'blue' }, { name: 'Wstęp do SI', meta: 'wykład · sala 2.02', start: 15, dur: 1.5, color: 'amber' }],
+    [{ name: 'Programowanie obiektowe', meta: 'konsultacje · sala 2.28', start: 10, dur: 1, color: 'violet' }],
+  ];
+
+  colorMap = {
+    blue: { bg: 'oklch(92% 0.03 262)', border: 'oklch(55% 0.15 262)', text: 'oklch(32% 0.1 262)' },
+    amber: { bg: 'oklch(93% 0.05 70)', border: 'oklch(62% 0.17 45)', text: 'oklch(38% 0.1 55)' },
+    violet: { bg: 'oklch(92% 0.04 300)', border: 'oklch(58% 0.16 300)', text: 'oklch(35% 0.1 300)' },
+    green: { bg: 'oklch(92% 0.05 150)', border: 'oklch(55% 0.12 150)', text: 'oklch(33% 0.09 150)' },
+  };
+
+  gradeToBadge(g) {
+    const n = parseFloat(g);
+    if (n >= 4.5) return { bg: 'oklch(90% 0.08 150)', color: 'oklch(35% 0.1 150)' };
+    if (n >= 3.5) return { bg: 'oklch(92% 0.03 262)', color: 'oklch(40% 0.13 262)' };
+    return { bg: 'oklch(92% 0.06 80)', color: 'oklch(42% 0.1 70)' };
+  }
+
+  navItem(active) {
+    return `display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:13.5px;font-weight:${active ? '600' : '500'};color:${active ? '#fff' : 'oklch(72% 0.01 55)'};background:${active ? 'oklch(30% 0.02 45)' : 'transparent'};`;
+  }
+
+  setView(v) { this.setState({ view: v, notifPanelOpen: false, avatarMenuOpen: false, semesterFilterOpen: false }); }
+
+  toggleSignup(examId, signup) {
+    const e = this.exams.find(x => x.id === examId);
+    if (!e) return;
+    e.signedUp = signup;
+    e.taken = signup ? e.taken + 1 : e.taken - 1;
+    this.setState({ examModalOpen: false, pendingExamId: null });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const dark = s.darkMode;
+    const rootStyle = {
+      display: 'flex', minHeight: '100vh', fontSize: '14px',
+      '--bg-page': dark ? 'oklch(18% 0.01 55)' : 'oklch(97.5% 0.006 60)',
+      '--bg-card': dark ? 'oklch(22% 0.012 55)' : 'oklch(99.4% 0.002 60)',
+      '--bg-subtle': dark ? 'oklch(27% 0.013 55)' : 'oklch(96% 0.006 55)',
+      '--border': dark ? 'oklch(32% 0.014 55)' : 'oklch(91% 0.008 55)',
+      '--border-soft': dark ? 'oklch(28% 0.013 55)' : 'oklch(94% 0.006 55)',
+      '--ink': dark ? 'oklch(94% 0.004 55)' : 'oklch(21% 0.014 55)',
+      '--ink-2': dark ? 'oklch(78% 0.008 55)' : 'oklch(45% 0.012 55)',
+      '--ink-3': dark ? 'oklch(62% 0.01 55)' : 'oklch(55% 0.01 55)',
+      color: 'var(--ink)', background: 'var(--bg-page)',
+    };
+
+    const notifPreview = s.notifications.slice(0, 3).map(n => ({
+      text: n.text, time: n.time, dotColor: n.read ? 'var(--border)' : 'oklch(62% 0.17 45)',
+    }));
+    const unreadCount = s.notifications.filter(n => !n.read).length;
+
+    const activeCourse = this.courses.find(c => c.id === s.activeCourseId) || this.courses[0];
+    const statusMeta = {
+      done: { label: 'Zaliczony', bg: 'oklch(90% 0.08 150)', color: 'oklch(35% 0.1 150)' },
+      active: { label: 'W trakcie', bg: 'oklch(92% 0.06 80)', color: 'oklch(42% 0.1 70)' },
+    };
+    const coursesVm = this.courses.map(c => ({
+      ...c, statusLabel: statusMeta[c.status].label, statusBg: statusMeta[c.status].bg, statusColor: statusMeta[c.status].color,
+      openDetails: () => this.setState({ courseModalOpen: true, activeCourseId: c.id }),
+    }));
+    const activeCourseVm = { ...activeCourse, statusLabel: statusMeta[activeCourse.status].label };
+
+    const semesterOptions = [
+      { id: 'sem5', label: 'Semestr 5 (2026/2027)' },
+      { id: 'sem4', label: 'Semestr 4 (2025/2026)' },
+      { id: 'sem3', label: 'Semestr 3 (2025/2026)' },
+      { id: 'sem2', label: 'Semestr 2 (2024/2025)' },
+      { id: 'sem1', label: 'Semestr 1 (2024/2025)' },
+    ].map(o => ({ ...o, select: () => this.setState({ selectedSemesterId: o.id, semesterFilterOpen: false }) }));
+    const selectedSemester = semesterOptions.find(o => o.id === s.selectedSemesterId).label;
+    const currentGrades = (this.gradesBySemester[s.selectedSemesterId] || []).map(g => {
+      const b = this.gradeToBadge(g.grade);
+      return { ...g, badgeBg: b.bg, badgeColor: b.color };
+    });
+
+    const distBuckets = ['3.0','3.5','4.0','4.5','5.0'];
+    const allGrades = Object.values(this.gradesBySemester).flat();
+    const gradeDistribution = distBuckets.map(label => {
+      const count = allGrades.filter(g => g.grade === label).length;
+      return { label, h: 6 + count * 12 };
+    });
+
+    const exams = this.exams.map(e => {
+      const full = e.taken >= e.capacity;
+      const statusColor = e.signedUp ? 'oklch(55% 0.13 150)' : full ? 'oklch(58% 0.19 25)' : 'oklch(62% 0.17 45)';
+      const statusLabel = e.signedUp ? 'Zapisano' : full ? 'Brak miejsc' : 'Otwarte zapisy';
+      const btnLabel = e.signedUp ? 'Wypisz się' : full ? 'Brak miejsc' : 'Zapisz się';
+      const disabled = full && !e.signedUp;
+      const btnStyle = `padding:9px 16px;border-radius:9px;font-size:13px;font-weight:600;font-family:inherit;cursor:${disabled ? 'not-allowed' : 'pointer'};background:${e.signedUp ? 'transparent' : disabled ? 'var(--bg-subtle)' : 'oklch(62% 0.17 45)'};color:${e.signedUp ? 'oklch(58% 0.19 25)' : disabled ? 'var(--ink-3)' : '#fff'};border:${e.signedUp ? '1px solid var(--border)' : 'none'};`;
+      return {
+        ...e, statusColor, statusLabel, btnLabel, disabled,
+        seatsLabel: `${e.taken}/${e.capacity} miejsc`,
+        btnStyle,
+        action: () => e.signedUp ? this.toggleSignup(e.id, false) : this.setState({ examModalOpen: true, pendingExamId: e.id }),
+      };
+    });
+    const pendingExam = this.exams.find(e => e.id === s.pendingExamId) || this.exams[0];
+
+    const totalAvg = 4.21, totalEcts = 120;
+    const g = parseFloat(s.calcGrade), ec = parseFloat(s.calcEcts);
+    const projectedAverage = ((totalAvg * totalEcts + g * ec) / (totalEcts + ec)).toFixed(2);
+
+    const notifMeta = { grades: ['Oceny', 'Nowe oceny i zmiany w rozliczeniach'], exams: ['Egzaminy', 'Terminy egzaminów i wyniki zapisów'], schedule: ['Plan zajęć', 'Zmiany sal i odwołane zajęcia'], announcements: ['Ogłoszenia', 'Komunikaty dziekanatu i uczelni'] };
+    const notifSettings = Object.keys(s.notifSettings).map(key => {
+      const on = s.notifSettings[key];
+      const [label, hint] = notifMeta[key];
+      return {
+        label, hint, key, on,
+        toggle: () => this.setState(st => ({ notifSettings: { ...st.notifSettings, [key]: !on } })),
+        trackStyle: `width:40px;height:22px;border-radius:999px;cursor:pointer;position:relative;transition:background 0.15s;background:${on ? 'oklch(60% 0.15 262)' : 'var(--border)'};`,
+        knobStyle: `width:18px;height:18px;border-radius:999px;background:#fff;position:absolute;top:2px;left:${on ? '20px' : '2px'};transition:left 0.15s;box-shadow:0 1px 3px rgba(0,0,0,0.2);`,
+      };
+    });
+
+    const allNotifications = s.notifications.map(n => ({
+      ...n, dotColor: n.read ? 'var(--border)' : 'oklch(62% 0.17 45)',
+      rowBg: n.read ? 'var(--bg-card)' : 'var(--bg-subtle)',
+    }));
+
+    const scheduleColumns = this.scheduleRaw.map(col => ({
+      classes: col.map(cls => {
+        const c = this.colorMap[cls.color];
+        return { name: cls.name, meta: cls.meta, top: (cls.start - 8) * 64 + 2, height: cls.dur * 64 - 4, bg: c.bg, border: c.border, text: c.text };
+      }),
+    }));
+
+    const titles = {
+      dashboard: ['Dashboard', 'Podsumowanie semestru zimowego 2026/2027'],
+      plan: ['Plan zajęć', 'Tydzień 17–21 listopada'],
+      oceny: ['Oceny', 'Historia i statystyki ocen'],
+      przedmioty: ['Przedmioty', 'Kursy w bieżącym semestrze'],
+      egzaminy: ['Egzaminy', 'Zapisy i wyniki sesji'],
+      ects: ['ECTS / Postęp', 'Realizacja programu studiów'],
+      powiadomienia: ['Powiadomienia', `${unreadCount} nieprzeczytanych`],
+      ustawienia: ['Ustawienia', 'Profil, wygląd i powiadomienia'],
+      styleguide: ['System designu', 'Kolory, typografia i komponenty'],
+    };
+    const [viewTitle, viewSubtitle] = titles[s.view];
+
+    return {
+      rootStyle,
+      viewTitle, viewSubtitle,
+      isDashboard: s.view === 'dashboard', isPlan: s.view === 'plan', isOceny: s.view === 'oceny',
+      isPrzedmioty: s.view === 'przedmioty', isEgzaminy: s.view === 'egzaminy', isEcts: s.view === 'ects',
+      isPowiadomienia: s.view === 'powiadomienia', isUstawienia: s.view === 'ustawienia', isStyleGuide: s.view === 'styleguide',
+      navDashboard: this.navItem(s.view === 'dashboard'), navPlan: this.navItem(s.view === 'plan'),
+      navOceny: this.navItem(s.view === 'oceny'), navPrzedmioty: this.navItem(s.view === 'przedmioty'),
+      navEgzaminy: this.navItem(s.view === 'egzaminy'), navEcts: this.navItem(s.view === 'ects'),
+      navPowiadomienia: this.navItem(s.view === 'powiadomienia'), navUstawienia: this.navItem(s.view === 'ustawienia'),
+      navStyleGuide: this.navItem(s.view === 'styleguide'),
+      goDashboard: () => this.setView('dashboard'), goPlan: () => this.setView('plan'), goOceny: () => this.setView('oceny'),
+      goPrzedmioty: () => this.setView('przedmioty'), goEgzaminy: () => this.setView('egzaminy'), goEcts: () => this.setView('ects'),
+      goPowiadomienia: () => this.setView('powiadomienia'), goUstawienia: () => this.setView('ustawienia'), goStyleGuide: () => this.setView('styleguide'),
+      unreadCount, notifPreview,
+      notifPanelOpen: s.notifPanelOpen, avatarMenuOpen: s.avatarMenuOpen,
+      toggleNotifPanel: () => this.setState(st => ({ notifPanelOpen: !st.notifPanelOpen, avatarMenuOpen: false })),
+      toggleAvatarMenu: () => this.setState(st => ({ avatarMenuOpen: !st.avatarMenuOpen, notifPanelOpen: false })),
+      closeMenus: () => this.setState({ notifPanelOpen: false, avatarMenuOpen: false, semesterFilterOpen: false }),
+      stopProp: e => e.stopPropagation(),
+      markAllRead: () => this.setState(st => ({ notifications: st.notifications.map(n => ({ ...n, read: true })) })),
+      todayClasses: [
+        { time: '9:00', name: 'Algorytmy i struktury danych', type: 'ćwiczenia', room: '1.44', lecturer: 'dr M. Sobczak', color: 'oklch(55% 0.12 150)' },
+        { time: '10:15', name: 'Bazy danych', type: 'wykład', room: '2.28', lecturer: 'dr inż. P. Nowicki', color: 'oklch(55% 0.15 262)' },
+        { time: '13:00', name: 'Systemy operacyjne', type: 'wykład', room: '3.15', lecturer: 'dr inż. K. Malinowski', color: 'oklch(58% 0.16 300)' },
+      ],
+      recentGrades: [
+        { course: 'Bazy danych', grade: '5.0', badgeBg: 'oklch(90% 0.08 150)', badgeColor: 'oklch(35% 0.1 150)' },
+        { course: 'Sieci komputerowe', grade: '4.5', badgeBg: 'oklch(92% 0.03 262)', badgeColor: 'oklch(40% 0.13 262)' },
+      ],
+      weekDays: this.weekDays, hourLabels: this.hourLabels, scheduleColumns,
+      gradeDistribution, selectedSemester, semesterOptions, semesterFilterOpen: s.semesterFilterOpen,
+      toggleSemesterFilter: () => this.setState(st => ({ semesterFilterOpen: !st.semesterFilterOpen })),
+      currentGrades, noGradesThisSemester: currentGrades.length === 0,
+      courses: coursesVm, courseModalOpen: s.courseModalOpen, activeCourse: activeCourseVm,
+      closeCourseModal: () => this.setState({ courseModalOpen: false }),
+      exams, pastExams: this.pastExams, examModalOpen: s.examModalOpen, pendingExam,
+      closeExamModal: () => this.setState({ examModalOpen: false }),
+      confirmExamSignup: () => this.toggleSignup(s.pendingExamId, true),
+      ectsRingOffset: 188.5 * (1 - 120 / 210),
+      semesterProgress: this.semesterProgress,
+      gradeOptions: ['5.0','4.5','4.0','3.5','3.0'], ectsOptions: ['3','4','5','6'],
+      calcGrade: s.calcGrade, calcEcts: s.calcEcts, projectedAverage,
+      setCalcGrade: e => this.setState({ calcGrade: e.target.value }),
+      setCalcEcts: e => this.setState({ calcEcts: e.target.value }),
+      allNotifications,
+      notifSettings,
+      lightBtnStyle: `flex:1;padding:11px;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid ${dark ? 'var(--border)' : 'oklch(60% 0.15 262)'};background:${dark ? 'transparent' : 'oklch(92% 0.03 262)'};color:${dark ? 'var(--ink)' : 'oklch(40% 0.13 262)'};`,
+      darkBtnStyle: `flex:1;padding:11px;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:1px solid ${dark ? 'oklch(60% 0.15 262)' : 'var(--border)'};background:${dark ? 'oklch(92% 0.03 262)' : 'transparent'};color:${dark ? 'oklch(40% 0.13 262)' : 'var(--ink)'};`,
+      setLightMode: () => this.setState({ darkMode: false }), setDarkMode: () => this.setState({ darkMode: true }),
+      paletteSwatches: [
+        { name: 'Tło strony', value: dark ? 'oklch(18% 0.01 55)' : 'oklch(97.5% 0.006 60)', color: 'var(--bg-page)' },
+        { name: 'Karta', value: 'var(--bg-card)', color: 'var(--bg-card)' },
+        { name: 'Obramowanie', value: 'var(--border)', color: 'var(--border)' },
+        { name: 'Akcent (niebieski)', value: 'oklch(60% 0.15 262)', color: 'oklch(60% 0.15 262)' },
+        { name: 'Akcent (bursztyn)', value: 'oklch(62% 0.17 45)', color: 'oklch(62% 0.17 45)' },
+        { name: 'Sukces / błąd', value: '150 / 25', color: 'linear-gradient(90deg, oklch(58% 0.13 150), oklch(58% 0.19 25))' },
+      ],
+      spacingScale: [4,8,12,16,24,32].map(px => ({ px })),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

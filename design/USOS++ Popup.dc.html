@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+  body{margin:0;font-family:'Inter',system-ui,-apple-system,sans-serif;}
+  a{color:oklch(58% 0.15 262);text-decoration:none;}
+  a:hover{color:oklch(48% 0.16 262);}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:translateY(0);}}
+</style>
+</helmet>
+
+<div style="{{ rootStyle }}">
+
+  <!-- HEADER -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px 14px 18px;">
+    <sc-if value="{{ isFeaturesView }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ goMain }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--ink)" stroke-width="1.8"><path d="M12.5 5L7 10l5.5 5"></path></svg>
+        <div style="font-weight:700;font-size:15px;letter-spacing:-0.01em;color:var(--ink);">Funkcje</div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ isMainView }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;align-items:center;gap:9px;">
+        <div style="width:26px;height:26px;border-radius:7px;background:oklch(62% 0.17 45);flex-shrink:0;"></div>
+        <div style="font-weight:700;font-size:15px;letter-spacing:-0.01em;color:var(--ink);">USOS<span style="color:oklch(62% 0.17 45);">++</span></div>
+      </div>
+      <div style="{{ statusPillStyle }}">
+        <span style="{{ statusDotStyle }}"></span>
+        {{ statusLabel }}
+      </div>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{ isFeaturesView }}" hint-placeholder-val="{{ false }}">
+    <div style="padding:0 18px 18px 18px;display:flex;flex-direction:column;gap:6px;animation:fadeIn 0.15s ease;">
+      <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px;">Włącz lub wyłącz poszczególne funkcje USOS++.</div>
+      <sc-for list="{{ featureToggles }}" as="f" hint-placeholder-count="6">
+        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:11px 14px;">
+          <div style="min-width:0;padding-right:10px;">
+            <div style="font-size:13px;font-weight:600;color:var(--ink);">{{ f.label }}</div>
+            <div style="font-size:11px;color:var(--ink-3);margin-top:2px;">{{ f.hint }}</div>
+          </div>
+          <div onClick="{{ f.toggle }}" style="{{ f.trackStyle }}">
+            <div style="{{ f.knobStyle }}"></div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isMainView }}" hint-placeholder-val="{{ true }}">
+  <div style="padding:0 18px 18px 18px;display:flex;flex-direction:column;gap:14px;">
+
+    <!-- MAIN TOGGLE -->
+    <button onClick="{{ toggleEnabled }}" style="{{ mainButtonStyle }}">
+      <span style="{{ mainButtonIconWrap }}">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 3v6"></path><path d="M5.5 5.8a6.5 6.5 0 1 0 9 0"></path></svg>
+      </span>
+      {{ mainButtonLabel }}
+    </button>
+    <div style="font-size:11.5px;color:var(--ink-3);text-align:center;margin-top:-6px;">{{ mainButtonHint }}</div>
+
+    <!-- STAT CARDS -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div style="background:var(--bg-subtle);border-radius:12px;padding:12px 14px;">
+        <div style="font-size:11px;color:var(--ink-3);font-weight:600;">Średnia ocen</div>
+        <div style="font-size:20px;font-weight:700;margin-top:4px;color:var(--ink);">4.32</div>
+        <div style="font-size:10.5px;color:oklch(58% 0.13 150);margin-top:2px;">↑ 0.08</div>
+      </div>
+      <div style="background:var(--bg-subtle);border-radius:12px;padding:12px 14px;">
+        <div style="font-size:11px;color:var(--ink-3);font-weight:600;">ECTS</div>
+        <div style="font-size:20px;font-weight:700;margin-top:4px;color:var(--ink);">120<span style="font-size:12px;color:var(--ink-3);font-weight:500;"> / 210</span></div>
+        <div style="font-size:10.5px;color:var(--ink-3);margin-top:2px;">57% programu</div>
+      </div>
+    </div>
+
+    <!-- NAJBLIŻSZE -->
+    <div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-3);margin-bottom:8px;">Najbliższe</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <div style="display:flex;gap:10px;align-items:flex-start;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;">
+          <div style="width:3px;border-radius:2px;background:oklch(55% 0.15 262);align-self:stretch;flex-shrink:0;"></div>
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:12.5px;font-weight:600;color:var(--ink);">Bazy danych</div>
+            <div style="font-size:11.5px;color:var(--ink-3);margin-top:1px;">wykład · dziś, 10:15 · sala 2.28</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;">
+          <div style="width:3px;border-radius:2px;background:oklch(62% 0.17 45);align-self:stretch;flex-shrink:0;"></div>
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:12.5px;font-weight:600;color:var(--ink);">Egzamin: Sieci komputerowe</div>
+            <div style="font-size:11.5px;color:var(--ink-3);margin-top:1px;">29.01.2027 · 12:15</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KOMUNIKAT -->
+    <sc-if value="{{ hasImportantNotif }}" hint-placeholder-val="{{ true }}">
+      <div onClick="{{ goNotifications }}" style="display:flex;gap:10px;align-items:flex-start;background:var(--accent-soft-bg);border-radius:12px;padding:10px 12px;cursor:pointer;">
+        <span style="width:7px;height:7px;border-radius:999px;background:oklch(62% 0.17 45);margin-top:5px;flex-shrink:0;"></span>
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:12px;color:var(--ink);line-height:1.4;">Dziekanat: termin składania wniosków o stypendium do 30.11</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- QUICK ACTIONS -->
+    <div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-3);margin-bottom:8px;">Szybki dostęp</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;">
+        <div onClick="{{ goPlan }}" style="{{ quickActionStyle }}">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2.5" y="3.5" width="15" height="14" rx="2"></rect><line x1="2.5" y1="8" x2="17.5" y2="8"></line></svg>
+          <span>Plan</span>
+        </div>
+        <div onClick="{{ goOceny }}" style="{{ quickActionStyle }}">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="4" y1="16" x2="4" y2="9"></line><line x1="10" y1="16" x2="10" y2="4"></line><line x1="16" y1="16" x2="16" y2="12"></line></svg>
+          <span>Oceny</span>
+        </div>
+        <div onClick="{{ goEgzaminy }}" style="{{ quickActionStyle }}">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7.2"></circle><path d="M6.8 10.2l2 2 4.2-4.4"></path></svg>
+          <span>Egzaminy</span>
+        </div>
+        <div onClick="{{ goPowiadomienia }}" style="{{ quickActionStyle }}">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 8.2a5 5 0 0 1 10 0c0 3.6 1.3 4.8 1.3 4.8H3.7S5 11.8 5 8.2z"></path><path d="M8.2 15.6a1.9 1.9 0 0 0 3.6 0"></path></svg>
+          <span>Powiad.</span>
+        </div>
+      </div>
+    </div>
+
+    <div onClick="{{ goFeatures }}" style="display:flex;align-items:center;justify-content:space-between;background:var(--bg-subtle);border-radius:12px;padding:11px 14px;cursor:pointer;">
+      <span style="font-size:12.5px;font-weight:600;color:var(--ink-2);">Zarządzaj funkcjami</span>
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="var(--ink-3)" stroke-width="2"><path d="M7.5 5l5.5 5-5.5 5"></path></svg>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- FOOTER -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-top:1px solid var(--border);">
+    <div onClick="{{ toggleDarkMode }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+      <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--ink-2)" stroke-width="1.7"><path d="M16 11.5A6.5 6.5 0 1 1 8.5 4a5.2 5.2 0 0 0 7.5 7.5z"></path></svg>
+      <span style="font-size:12.5px;color:var(--ink-2);font-weight:500;">Tryb ciemny</span>
+      <div style="{{ darkToggleTrackStyle }}">
+        <div style="{{ darkToggleKnobStyle }}"></div>
+      </div>
+    </div>
+    <div onClick="{{ goSettings }}" style="display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--ink-2);">
+      <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="2.4"></circle><path d="M10 2.5v2.2M10 15.3v2.2M17.5 10h-2.2M4.7 10H2.5M15 5l-1.5 1.5M6.5 13.5L5 15M15 15l-1.5-1.5M6.5 6.5L5 5"></path></svg>
+    </div>
+  </div>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:376,&quot;height&quot;:600}}">
+class Component extends DCLogic {
+  state = {
+    enabled: false,
+    darkMode: false,
+    view: 'main',
+    features: {
+      dashboard: true,
+      quickbar: true,
+      notif: true,
+      autorefresh: false,
+      gradeBadge: true,
+      keyboardNav: false,
+    },
+  };
+
+  featureMeta = {
+    dashboard: ['Nowy pulpit startowy', 'Zamienia stronę główną USOSweb na dashboard USOS++'],
+    quickbar: ['Szybkie akcje w toolbarze', 'Pasek z szybkim dostępem do sekcji na stronie USOS'],
+    notif: ['Powiadomienia w tle', 'Sprawdzaj nowe oceny i komunikaty co 15 minut'],
+    autorefresh: ['Automatyczne odświeżanie planu', 'Plan zajęć aktualizuje się bez przeładowania strony'],
+    gradeBadge: ['Odznaka średniej na ikonie', 'Pokazuje aktualną średnią na ikonie rozszerzenia'],
+    keyboardNav: ['Nawigacja klawiaturą', 'Skróty klawiszowe do przełączania sekcji'],
+  };
+
+  toggleEnabled = () => this.setState(s => ({ enabled: !s.enabled }));
+  toggleDarkMode = () => this.setState(s => ({ darkMode: !s.darkMode }));
+  goFeatures = () => this.setState({ view: 'features' });
+  goMain = () => this.setState({ view: 'main' });
+  toggleFeature = (key) => this.setState(s => ({ features: { ...s.features, [key]: !s.features[key] } }));
+  noop = () => {};
+
+  renderVals() {
+    const s = this.state;
+    const dark = s.darkMode;
+    const enabled = s.enabled;
+
+    const rootStyle = {
+      width: '376px', boxSizing: 'border-box', fontSize: '14px',
+      display: 'flex', flexDirection: 'column',
+      '--bg-page': dark ? 'oklch(18% 0.01 55)' : 'oklch(97.5% 0.006 60)',
+      '--bg-card': dark ? 'oklch(22% 0.012 55)' : 'oklch(99.4% 0.002 60)',
+      '--bg-subtle': dark ? 'oklch(27% 0.013 55)' : 'oklch(96% 0.006 55)',
+      '--border': dark ? 'oklch(32% 0.014 55)' : 'oklch(91% 0.008 55)',
+      '--ink': dark ? 'oklch(94% 0.004 55)' : 'oklch(21% 0.014 55)',
+      '--ink-2': dark ? 'oklch(78% 0.008 55)' : 'oklch(45% 0.012 55)',
+      '--ink-3': dark ? 'oklch(62% 0.01 55)' : 'oklch(55% 0.01 55)',
+      '--accent-soft-bg': dark ? 'oklch(30% 0.03 45)' : 'oklch(95% 0.04 55)',
+      color: 'var(--ink)', background: 'var(--bg-page)',
+    };
+
+    const statusLabel = enabled ? 'Aktywne' : 'Nieaktywne';
+    const statusPillStyle = `display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:4px 10px 4px 8px;border-radius:999px;background:var(--bg-subtle);color:var(--ink-2);`;
+    const statusDotStyle = `width:7px;height:7px;border-radius:999px;background:${enabled ? 'oklch(58% 0.13 150)' : 'var(--ink-3)'};`;
+
+    const mainButtonLabel = enabled ? 'Wyłącz USOS++' : 'Włącz USOS++';
+    const mainButtonHint = enabled ? 'Klasyczny USOSweb jest zastąpiony nowym interfejsem' : 'Przełącz aktualną stronę USOSweb na nowy interfejs';
+    const mainButtonStyle = `width:100%;display:flex;align-items:center;justify-content:center;gap:9px;padding:14px;border-radius:13px;font-size:14.5px;font-weight:700;font-family:inherit;cursor:pointer;border:${enabled ? '1px solid var(--border)' : 'none'};background:${enabled ? 'var(--bg-subtle)' : 'oklch(62% 0.17 45)'};color:${enabled ? 'var(--ink)' : '#fff'};transition:background 0.15s;`;
+    const mainButtonIconWrap = `display:flex;color:${enabled ? 'var(--ink-2)' : '#fff'};`;
+
+    const quickActionStyle = `display:flex;flex-direction:column;align-items:center;gap:5px;padding:10px 4px;border-radius:11px;background:var(--bg-card);border:1px solid var(--border);cursor:pointer;color:var(--ink-2);font-size:10.5px;font-weight:600;`;
+
+    const darkToggleTrackStyle = `width:34px;height:19px;border-radius:999px;cursor:pointer;position:relative;transition:background 0.15s;background:${dark ? 'oklch(60% 0.15 262)' : 'var(--border)'};`;
+    const darkToggleKnobStyle = `width:15px;height:15px;border-radius:999px;background:#fff;position:absolute;top:2px;left:${dark ? '17px' : '2px'};transition:left 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.2);`;
+
+    const featureToggles = Object.keys(s.features).map(key => {
+      const on = s.features[key];
+      const [label, hint] = this.featureMeta[key];
+      return {
+        key, label, hint, on,
+        toggle: () => this.toggleFeature(key),
+        trackStyle: `width:34px;height:19px;border-radius:999px;cursor:pointer;position:relative;flex-shrink:0;transition:background 0.15s;background:${on ? 'oklch(60% 0.15 262)' : 'var(--border)'};`,
+        knobStyle: `width:15px;height:15px;border-radius:999px;background:#fff;position:absolute;top:2px;left:${on ? '17px' : '2px'};transition:left 0.15s;box-shadow:0 1px 2px rgba(0,0,0,0.2);`,
+      };
+    });
+
+    return {
+      rootStyle,
+      isMainView: s.view === 'main', isFeaturesView: s.view === 'features',
+      goFeatures: this.goFeatures, goMain: this.goMain, featureToggles,
+      statusLabel, statusPillStyle, statusDotStyle,
+      toggleEnabled: this.toggleEnabled,
+      mainButtonLabel, mainButtonHint, mainButtonStyle, mainButtonIconWrap,
+      hasImportantNotif: true,
+      quickActionStyle,
+      toggleDarkMode: this.toggleDarkMode,
+      darkToggleTrackStyle, darkToggleKnobStyle,
+      goPlan: this.noop, goOceny: this.noop, goEgzaminy: this.noop, goPowiadomienia: this.noop,
+      goNotifications: this.noop, goSettings: this.noop,
+    };
+  }
+}
+
+</script>
+</body>
+</html>
