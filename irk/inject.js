@@ -92,11 +92,29 @@
   // Same bypass usos/inject.js supports — a "otwórz w IRK" link needs to
   // actually show classic IRK for that one load, even with the dashboard
   // globally enabled for the domain (see irk/app.js's withUsospOff).
-  const bypassThisLoad = new URLSearchParams(location.search).has('usospp_off');
+  const bypassParam = new URLSearchParams(location.search).has('usospp_off');
+
+  // /pl/auth/login/, /pl/auth/register/…, and (verified live — this one
+  // path alone skips the /pl/ prefix) /auth/logout/ all render with IRK's
+  // shared header/footer/title, so looksLikeIrk() (and therefore
+  // detectPlatform()) matches them same as any other IRK page. Mounting the
+  // dashboard on top of the actual login FORM hid the real e-mail/password
+  // fields behind our own shell — and since that page's URL has no
+  // recruitment slug in it, the shell showed "Nie wybrano rekrutacji", so
+  // clicking through it re-selected a recruitment INSTEAD of ever reaching
+  // the login form. Bug report (2026-09-14): a candidate who first picked a
+  // recruitment, then hit a protected view's "Zaloguj się →" button, got
+  // stuck looping back to "pick a recruitment" and could never actually log
+  // in. Native IRK needs to render itself, unmodified, on these pages —
+  // once login/registration/logout completes, IRK's own redirect lands back
+  // on a normal page where USOS++ re-mounts fresh, same as any other
+  // navigation.
+  const isAuthPage = /^\/(?:pl\/)?auth\//.test(location.pathname);
+  const bypassThisLoad = bypassParam || isAuthPage;
 
   (async () => {
     const settings = await getState();
-    console.info('[USOS++] initial settings, irkEnabled =', settings.irkEnabled, bypassThisLoad ? '(bypassed via usospp_off)' : '');
+    console.info('[USOS++] initial settings, irkEnabled =', settings.irkEnabled, bypassThisLoad ? `(bypassed via ${isAuthPage ? 'auth page' : 'usospp_off'})` : '');
     await applyState(bypassThisLoad ? { ...settings, irkEnabled: false } : settings);
   })();
 

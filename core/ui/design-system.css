@@ -66,6 +66,10 @@
 .usospp-brand-text span { color: #d9773a; font-weight: 700; }
 
 .usospp-nav { display: flex; flex-direction: column; gap: 2px; }
+/* Separates nav items usable without logging in from ones that need a
+   candidate/student session (e.g. IRK's Zgłoszenia) — sits inside the dark
+   sidebar background, not the light card background. */
+.usospp-nav-divider { height: 1px; background: oklch(32% 0.016 55); margin: 8px 8px; }
 .usospp-nav-item {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 12px; border-radius: 10px; cursor: pointer;
@@ -199,8 +203,31 @@
 .usospp-list-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
 .usospp-list-row:last-child { border-bottom: none; }
 .usospp-badge { font-size: 12px; font-weight: 700; padding: 3px 12px; border-radius: 999px; white-space: nowrap; }
+/* Tone variants (e.g. IRK's zgłoszenia: opłacono/zakwalifikowany/przyjęty
+   vs. niezakwalifikowany vs. a decision still pending) — same shape as the
+   plain gray .usospp-badge, colored via the row's own tone rather than a
+   hardcoded per-feature class. */
+.usospp-badge-positive { background: oklch(91% 0.07 150); color: oklch(32% 0.09 150); }
+.usospp-root[data-theme="dark"] .usospp-badge-positive { background: oklch(30% 0.06 150); color: oklch(88% 0.06 150); }
+.usospp-badge-negative { background: oklch(92% 0.05 25); color: oklch(38% 0.13 25); }
+.usospp-root[data-theme="dark"] .usospp-badge-negative { background: oklch(32% 0.08 25); color: oklch(88% 0.05 25); }
+.usospp-badge-warning { background: oklch(93% 0.06 95); color: oklch(35% 0.05 90); }
+.usospp-root[data-theme="dark"] .usospp-badge-warning { background: oklch(32% 0.05 90); color: oklch(90% 0.04 95); }
 
 .usospp-empty-hint { font-size: 13.5px; color: var(--ink-3); padding: 20px 0; }
+
+/* ---- Disclosure (native <details>/<summary> — e.g. IRK's "pokaż minione
+   tury" list, tucked away by default instead of dumped inline as one long
+   paragraph) ---- */
+.usospp-disclosure { margin-top: 10px; }
+.usospp-disclosure > summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: #d9773a; list-style: none; }
+.usospp-disclosure > summary::-webkit-details-marker { display: none; }
+.usospp-disclosure > summary::before { content: '▸ '; }
+.usospp-disclosure[open] > summary::before { content: '▾ '; }
+.usospp-disclosure-list { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.usospp-disclosure-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.usospp-disclosure-row-label { font-weight: 600; }
+.usospp-disclosure-row-range { color: var(--ink-3); }
 
 /* ---- Centered empty/blocked state (USOS's "musisz się zalogować do
    USOSweb"; reusable for an equivalent IRK "zaloguj się, aby zobaczyć status
@@ -236,6 +263,12 @@
 
 .usospp-muted-text { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; }
 .usospp-tag-muted { font-size: 11px; color: var(--ink-3); font-style: italic; }
+/* A link used as muted metadata (e.g. IRK's Jednostki row linking out to
+   USOSweb/a faculty site) should read as plain text, not stand out with the
+   usual orange link color — .usospp-root a's element selector otherwise
+   overrides it regardless of this ancestor's color. */
+.usospp-tag-muted a { color: inherit; }
+.usospp-tag-muted a:hover { color: inherit; text-decoration: underline; }
 
 /* ---- Sanitized rich-text body (USOS's Aktualności, IRK's Aktualności /
    programme description sections — see core/sanitize-html.js) ---- */
