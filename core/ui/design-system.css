@@ -1,6 +1,9 @@
-/* USOS++ redesign shell. Ported from design/USOS++.dc.html's inline-styled
-   mockup into real CSS classes (the mockup used inline styles because it was
-   rendered by a template engine; here we have normal stylesheets). */
+/* USOS++ shared design system — design tokens + generic UI primitives (Card,
+   Modal, Dropdown, Badge, Notification, layout shell...) used by BOTH usos/
+   and irk/. Extracted from usos/usos.css (originally the only consumer) once
+   irk/ got its first real screen — see ARCHITECTURE.md. Page/view-specific
+   classes stay in usos/usos.css and irk/irk.css; nothing USOS- or
+   IRK-specific belongs here. */
 
 .usospp-host-hidden {
   display: none !important;
@@ -44,7 +47,7 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ---- sidebar ---- */
+/* ---- app shell: sidebar ---- */
 .usospp-sidebar {
   width: 252px;
   flex-shrink: 0;
@@ -87,7 +90,7 @@
   font-weight: 700; font-size: 13px; flex-shrink: 0;
 }
 
-/* ---- main / topbar ---- */
+/* ---- app shell: main / topbar ---- */
 .usospp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .usospp-topbar {
   height: 68px; flex-shrink: 0; background: var(--bg-card); border-bottom: 1px solid var(--border);
@@ -98,7 +101,8 @@
 .usospp-subtitle { font-size: 12.5px; color: var(--ink-3); margin-top: 1px; }
 .usospp-topbar-actions { display: flex; align-items: center; gap: 16px; }
 
-/* ---- topbar search (Katalog: przedmioty / jednostki / programy) ---- */
+/* ---- search box (generic — e.g. USOS's Katalog search, a future IRK
+   kierunki search) ---- */
 .usospp-search-wrap { position: relative; width: 300px; }
 .usospp-search-input {
   width: 100%; height: 38px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--border);
@@ -108,9 +112,8 @@
 .usospp-search-input:focus { background: var(--bg-card); border-color: #d9773a; outline: none; }
 .usospp-search-input::placeholder { font-family: inherit; }
 .usospp-search-dropdown {
-  /* Anchored to the input's right edge, not its left — the search box now
-     sits near the topbar's right end (next to the bell), so a dropdown
-     growing rightward from "left:0" would run off the viewport. */
+  /* Anchored to the input's right edge, not its left — fine as long as the
+     input sits near its container's right end. */
   position: absolute; top: 44px; right: 0; width: 340px; background: var(--bg-card);
   border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 12px 32px rgba(20,15,10,0.14);
   padding: 8px; max-height: 60vh; overflow-y: auto; z-index: 30;
@@ -129,6 +132,7 @@
 }
 .usospp-avatar-trigger { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 
+/* ---- Dropdown (notif panel, avatar menu, ...) ---- */
 .usospp-dropdown {
   position: absolute; top: 46px; right: 0; width: 300px; background: var(--bg-card);
   border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 12px 32px rgba(20,15,10,0.14);
@@ -141,7 +145,8 @@
 .usospp-dropdown-item { padding: 8px 10px; border-radius: 8px; font-size: 13px; cursor: pointer; }
 .usospp-dropdown-item:hover { background: var(--bg-subtle); }
 
-/* ---- payment details modal (see App.renderPaymentDetailsModal) ---- */
+/* ---- Modal (used for several unrelated dialogs — payment details, class
+   groups, link pickers in usos/, and whatever irk/ needs later) ---- */
 .usospp-modal-backdrop {
   position: fixed; inset: 0; background: rgba(15, 10, 5, 0.45);
   display: flex; align-items: center; justify-content: center; padding: 24px;
@@ -158,13 +163,7 @@
 .usospp-content { flex: 1; padding: 32px; max-width: 1360px; width: 100%; margin: 0 auto; box-sizing: border-box; }
 .usospp-view { display: flex; flex-direction: column; gap: 20px; animation: usospp-fade-in 0.2s ease; }
 
-/* The planner's own subtree is patched independently of the outer .usospp-view
-   (see setPlannerState in app.js — avoids replaying the fade-in on every
-   click), so it needs the same column/gap layout applied directly, without
-   the animation that comes bundled on .usospp-view itself. */
-[data-planner-root] { display: flex; flex-direction: column; gap: 20px; }
-
-/* ---- cards / stats ---- */
+/* ---- Card / stats ---- */
 .usospp-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 20px 24px; }
 .usospp-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
 .usospp-card-title { font-size: 16px; font-weight: 600; }
@@ -180,7 +179,8 @@
 
 .usospp-back-link { display: inline-block; font-size: 12.5px; font-weight: 600; }
 
-/* ---- nav hub tiles (Przedmioty: Przegląd / Zapisy / Generator planu) ---- */
+/* ---- Hub tiles — a grid of clickable cards linking into sub-sections
+   (USOS's Przedmioty hub, an IRK dashboard's Oferta/Aktualności/... tiles) ---- */
 .usospp-hub-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 900px) { .usospp-hub-grid { grid-template-columns: 1fr; } }
 .usospp-hub-tile {
@@ -202,12 +202,15 @@
 
 .usospp-empty-hint { font-size: 13.5px; color: var(--ink-3); padding: 20px 0; }
 
-/* ---- Logged out of USOSweb (see App#renderLoggedOut) — sidebar/topbar
-   stay up, only the content pane swaps to this on every view. ---- */
+/* ---- Centered empty/blocked state (USOS's "musisz się zalogować do
+   USOSweb"; reusable for an equivalent IRK "zaloguj się, aby zobaczyć status
+   zgłoszenia" state) ---- */
 .usospp-loggedout { text-align: center; padding: 90px 20px 40px; max-width: 420px; margin: 0 auto; }
 .usospp-loggedout-logo { width: 44px; height: 44px; margin: 0 auto 20px; }
 .usospp-loggedout-title { font-size: 19px; font-weight: 700; margin: 0 0 10px 0; }
 .usospp-loggedout-text { font-size: 14px; color: var(--ink-2); line-height: 1.55; margin: 0 0 22px 0; }
+
+/* ---- Inline notice / beta banner ---- */
 .usospp-notice {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
   background: oklch(92% 0.03 45); color: oklch(30% 0.02 45); border-radius: 10px;
@@ -231,38 +234,17 @@
 }
 .usospp-beta-notice-close:hover { opacity: 1; background: oklch(0% 0 0 / 0.06); }
 
-/* ---- Classic USOSweb widgets — injected straight into native USOS pages
-   when the full redesign is off (see inject.js's applyClassicWidgets).
-   Deliberately NOT scoped under .usospp-root: these live inside the native
-   page, not our own shell, so they use their own standalone tokens. ---- */
-.usospp-classic-widget {
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  padding: 12px 16px; margin: 0 0 14px 0; border-radius: 10px;
-  font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 1.4;
-}
-.usospp-classic-widget strong { font-size: 18px; font-weight: 700; }
-.usospp-classic-widget-tag { font-size: 11px; opacity: 0.6; margin-left: auto; white-space: nowrap; }
-.usospp-classic-widget--info { background: oklch(94% 0.03 45); color: oklch(30% 0.02 45); }
-.usospp-classic-widget--warning { background: oklch(93% 0.06 95); color: oklch(35% 0.05 90); }
+.usospp-muted-text { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; }
+.usospp-tag-muted { font-size: 11px; color: var(--ink-3); font-style: italic; }
 
-.usospp-classic-home-summary {
-  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
-  font-family: Roboto, system-ui, sans-serif; font-size: 13.5px; color: oklch(30% 0.02 45);
-}
-.usospp-classic-home-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.usospp-classic-home-row strong { font-weight: 700; }
-.usospp-classic-home-row a { color: #d9773a; text-decoration: none; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
-.usospp-classic-home-row a:hover { color: oklch(48% 0.16 45); }
-
-/* ---- Aktualności (sanitized announcement body — see adapter.getNews) ---- */
+/* ---- Sanitized rich-text body (USOS's Aktualności, IRK's Aktualności /
+   programme description sections — see core/sanitize-html.js) ---- */
 .usospp-news-body { font-size: 13.5px; color: var(--ink-2); line-height: 1.6; }
 .usospp-news-body p { margin: 0 0 10px 0; }
 .usospp-news-body p:last-child { margin-bottom: 0; }
 .usospp-news-body a { color: #d9773a; }
 .usospp-news-body a:hover { color: oklch(52% 0.15 45); }
 .usospp-news-body ul, .usospp-news-body ol { margin: 0 0 10px 0; padding-left: 20px; }
-.usospp-muted-text { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; }
-.usospp-tag-muted { font-size: 11px; color: var(--ink-3); font-style: italic; }
 
 .usospp-raw-dump {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -273,6 +255,7 @@
 .usospp-table { width: 100%; border-collapse: collapse; }
 .usospp-table td { padding: 10px 14px; font-size: 13px; border-top: 1px solid var(--border-soft); }
 
+/* ---- Buttons ---- */
 .usospp-btn-ghost, .usospp-btn-primary, .usospp-mode-btn {
   font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 9px; padding: 9px 16px;
 }
@@ -281,15 +264,16 @@
 .usospp-btn-primary:hover { background: oklch(52% 0.15 45); }
 /* .usospp-root a's own color rule (higher specificity: class+element) would
    otherwise win over .usospp-btn-primary here when the button is an <a>
-   (e.g. the "Zaloguj się" login link) — orange text on an orange
-   background, unreadable. Every other primary/ghost button is a <button>,
-   unaffected by that rule, so this only needs to target the anchor case. */
+   (e.g. a "Zaloguj się" login link) — orange text on an orange background,
+   unreadable. Every other primary/ghost button is a <button>, unaffected by
+   that rule, so this only needs to target the anchor case. */
 .usospp-root a.usospp-btn-primary,
 .usospp-root a.usospp-btn-primary:hover { color: #fff; }
 .usospp-mode-btn { flex: 1; border: 1px solid var(--border); background: transparent; color: var(--ink); padding: 11px; }
 .usospp-mode-btn.active { border-color: oklch(60% 0.15 45); background: oklch(92% 0.03 45); color: oklch(40% 0.13 45); }
 .usospp-root[data-theme="dark"] .usospp-mode-btn.active { background: oklch(30% 0.03 45); color: oklch(85% 0.05 45); }
 
+/* ---- Form fields ---- */
 .usospp-field-label { font-size: 12px; color: var(--ink-3); font-weight: 600; display: block; margin-bottom: 6px; }
 .usospp-input {
   width: 100%; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--border);
@@ -297,10 +281,8 @@
 }
 .usospp-input[readonly] { background: var(--bg-subtle); }
 .usospp-field-stack { display: flex; flex-direction: column; gap: 14px; }
-.usospp-calc-grid { display: grid; grid-template-columns: 1fr 1fr auto; gap: 16px; align-items: end; }
-@media (max-width: 700px) { .usospp-calc-grid { grid-template-columns: 1fr; } }
-.usospp-calc-result { background: var(--bg-subtle); border-radius: 9px; padding: 10px 18px; text-align: center; }
 
+/* ---- Switch ---- */
 .usospp-switch {
   width: 40px; height: 22px; border-radius: 999px; cursor: pointer; position: relative;
   transition: background 0.15s; background: var(--border); flex-shrink: 0;
@@ -311,58 +293,3 @@
   top: 2px; left: 2px; transition: left 0.15s; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
 }
 .usospp-switch.on .usospp-switch-knob { left: 20px; }
-
-/* ---- weekly timetable grid ---- */
-.usospp-timetable { display: flex; gap: 8px; overflow-x: auto; }
-.usospp-tt-hours { position: relative; width: 40px; flex-shrink: 0; margin-top: 26px; }
-.usospp-tt-hour {
-  position: absolute; right: 4px; transform: translateY(-50%);
-  font-size: 10.5px; color: var(--ink-3); white-space: nowrap;
-}
-.usospp-tt-days { display: flex; gap: 6px; flex: 1; min-width: 0; }
-.usospp-tt-daycol { flex: 1; min-width: 130px; }
-.usospp-tt-daylabel { font-size: 11px; font-weight: 700; color: var(--ink-2); text-align: center; margin-bottom: 6px; }
-.usospp-tt-daybody {
-  position: relative; border-radius: 8px; background-color: var(--bg-subtle);
-  background-image: repeating-linear-gradient(to bottom, var(--border-soft) 0, var(--border-soft) 1px, transparent 1px, transparent 100%);
-  background-position: top;
-}
-.usospp-tt-entry {
-  position: absolute; left: 3px; right: 3px; border-radius: 6px; overflow: hidden;
-  background: oklch(85% 0.07 45); padding: 4px 6px; box-sizing: border-box;
-  display: flex; flex-direction: column; gap: 1px;
-}
-.usospp-root[data-theme="dark"] .usospp-tt-entry { background: oklch(38% 0.08 45); }
-.usospp-tt-entry-time { font-size: 9.5px; font-weight: 700; color: oklch(40% 0.1 45); }
-.usospp-root[data-theme="dark"] .usospp-tt-entry-time { color: oklch(78% 0.06 45); }
-.usospp-tt-entry-label {
-  font-size: 10.5px; font-weight: 700; color: oklch(32% 0.13 45); line-height: 1.25;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.usospp-root[data-theme="dark"] .usospp-tt-entry-label { color: oklch(90% 0.05 45); }
-.usospp-tt-entry-meta {
-  font-size: 9.5px; color: oklch(38% 0.1 45); line-height: 1.25;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.usospp-root[data-theme="dark"] .usospp-tt-entry-meta { color: oklch(75% 0.06 45); }
-
-/* ---- schedule planner ---- */
-.usospp-planner-layout { display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start; }
-@media (max-width: 1000px) { .usospp-planner-layout { grid-template-columns: 1fr; } }
-
-.usospp-planner-subject + .usospp-planner-subject { border-top: 1px solid var(--border-soft); }
-
-.usospp-radio-row {
-  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 9px;
-  border: 1px solid var(--border-soft); margin-bottom: 6px; cursor: pointer;
-}
-.usospp-radio-row:hover { background: var(--bg-subtle); }
-.usospp-radio-row.selected { border-color: oklch(60% 0.15 45); background: oklch(96% 0.02 45); }
-.usospp-root[data-theme="dark"] .usospp-radio-row.selected { background: oklch(28% 0.03 45); }
-.usospp-radio-dot {
-  width: 14px; height: 14px; border-radius: 999px; border: 2px solid var(--border);
-  flex-shrink: 0; margin-top: 2px;
-}
-.usospp-radio-row.selected .usospp-radio-dot { border-color: oklch(60% 0.15 45); background: oklch(60% 0.15 45); }
-
-.usospp-tt-entry--conflict { box-shadow: inset 0 0 0 2px oklch(55% 0.19 25); }

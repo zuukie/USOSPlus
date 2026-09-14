@@ -289,7 +289,7 @@
 
   // UNVERIFIED: same caveat as adapter.getPlan — the shape of a populated
   // event has never been observed live, so this reports only a count, never
-  // per-event details (same restraint content/app.js's renderPlan takes).
+  // per-event details (same restraint usos/app.js's renderPlan takes).
   function injectPlanWidget() {
     const adapter = selectAdapter();
     const wrapper = document.querySelector('.timetable-wrapper');

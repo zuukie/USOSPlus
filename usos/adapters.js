@@ -64,38 +64,11 @@
 
   // Announcement bodies come from the university's own page, but we still
   // don't trust raw innerHTML from a fetched document enough to inject it
-  // straight into the extension's own DOM — this walks the parsed (inert,
-  // DOMParser-produced, non-executing) content and rebuilds it using only an
-  // allowlist of safe formatting tags, dropping everything else down to its
-  // text. Unknown wrapper tags (span/div/font from the CMS) are unwrapped
-  // rather than dropped, so their text/links still come through.
-  const NEWS_ALLOWED_TAGS = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'UL', 'OL', 'LI', 'A']);
-  function sanitizeNewsNode(node, targetDoc) {
-    if (node.nodeType === Node.TEXT_NODE) return targetDoc.createTextNode(node.textContent);
-    if (node.nodeType !== Node.ELEMENT_NODE) return null;
-    const isAllowed = NEWS_ALLOWED_TAGS.has(node.tagName);
-    const container = isAllowed ? targetDoc.createElement(node.tagName.toLowerCase()) : targetDoc.createDocumentFragment();
-    if (isAllowed && node.tagName === 'A') {
-      const href = node.getAttribute('href') || '';
-      if (/^https?:\/\//i.test(href)) {
-        container.setAttribute('href', href);
-        container.setAttribute('target', '_blank');
-        container.setAttribute('rel', 'noopener noreferrer');
-      }
-    }
-    node.childNodes.forEach((child) => {
-      const clean = sanitizeNewsNode(child, targetDoc);
-      if (clean) container.appendChild(clean);
-    });
-    return container;
-  }
+  // straight into the extension's own DOM — sanitizeHtml (core/sanitize-html.js,
+  // shared with irk/adapters.js's own Aktualności) rebuilds it using only an
+  // allowlist of safe formatting tags instead.
   function sanitizeNewsHtml(nodes, doc) {
-    const wrap = doc.createElement('div');
-    nodes.forEach((node) => {
-      const clean = sanitizeNewsNode(node, doc);
-      if (clean) wrap.appendChild(clean);
-    });
-    return wrap.innerHTML;
+    return window.USOSPP_CORE_SANITIZE.sanitizeHtml(nodes, doc);
   }
 
   function hasModernShell() {
@@ -1013,5 +986,14 @@
     return null;
   }
 
-  window.USOSPP_ADAPTERS = { selectAdapter, looksLikeUsos, detectFooterVersion };
+  // Same condition selectAdapter() itself uses to give up (see its two
+  // .matches() checks) — exposed separately so core/detect.js's platform
+  // registry can ask "is this USOSweb at all" without pulling in an actual
+  // adapter instance.
+  function isUsosPage(doc = document) {
+    return hasModernShell() || looksLikeUsos();
+  }
+
+  window.USOSPP_ADAPTERS = { selectAdapter, looksLikeUsos, isUsosPage, detectFooterVersion };
+  if (window.USOSPP_CORE) window.USOSPP_CORE.registerDetector('usos', isUsosPage);
 })();

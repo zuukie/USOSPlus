@@ -1,10 +1,11 @@
 // Persisted extension settings, shared by the popup and the background worker.
 // Content scripts run in an isolated world without ES module import support,
-// so they use the small duplicate in content/state-bridge.js with the same
+// so they use the small duplicate in core/state-bridge.js with the same
 // storage keys and defaults instead of importing this file.
 
 export const DEFAULT_STATE = {
   enabled: false,
+  irkEnabled: false,
   darkMode: false,
   features: {
     quickbar: true,
@@ -25,7 +26,7 @@ export async function getState() {
 }
 
 // `partial` may be a plain object or an updater `(current) => partialObject`,
-// mirroring content/state-bridge.js's setState.
+// mirroring core/state-bridge.js's setState.
 export async function setState(partial) {
   const current = await getState();
   const resolved = typeof partial === 'function' ? partial(current) : partial;

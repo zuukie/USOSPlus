@@ -1,0 +1,92 @@
+/* USOS-specific view styles. Shared tokens/components (Card, Modal,
+   Dropdown, hub tiles, buttons, ...) live in core/ui/design-system.css,
+   loaded before this file — see ARCHITECTURE.md. Only classes that are
+   genuinely tied to a USOS view/feature belong here. */
+
+/* The planner's own subtree is patched independently of the outer .usospp-view
+   (see setPlannerState in app.js — avoids replaying the fade-in on every
+   click), so it needs the same column/gap layout applied directly, without
+   the animation that comes bundled on .usospp-view itself. */
+[data-planner-root] { display: flex; flex-direction: column; gap: 20px; }
+
+/* ---- Classic USOSweb widgets — injected straight into native USOS pages
+   when the full redesign is off (see inject.js's applyClassicWidgets).
+   Deliberately NOT scoped under .usospp-root: these live inside the native
+   page, not our own shell, so they use their own standalone tokens. ---- */
+.usospp-classic-widget {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 12px 16px; margin: 0 0 14px 0; border-radius: 10px;
+  font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 1.4;
+}
+.usospp-classic-widget strong { font-size: 18px; font-weight: 700; }
+.usospp-classic-widget-tag { font-size: 11px; opacity: 0.6; margin-left: auto; white-space: nowrap; }
+.usospp-classic-widget--info { background: oklch(94% 0.03 45); color: oklch(30% 0.02 45); }
+.usospp-classic-widget--warning { background: oklch(93% 0.06 95); color: oklch(35% 0.05 90); }
+
+.usospp-classic-home-summary {
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+  font-family: Roboto, system-ui, sans-serif; font-size: 13.5px; color: oklch(30% 0.02 45);
+}
+.usospp-classic-home-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.usospp-classic-home-row strong { font-weight: 700; }
+.usospp-classic-home-row a { color: #d9773a; text-decoration: none; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.usospp-classic-home-row a:hover { color: oklch(48% 0.16 45); }
+
+.usospp-calc-grid { display: grid; grid-template-columns: 1fr 1fr auto; gap: 16px; align-items: end; }
+@media (max-width: 700px) { .usospp-calc-grid { grid-template-columns: 1fr; } }
+.usospp-calc-result { background: var(--bg-subtle); border-radius: 9px; padding: 10px 18px; text-align: center; }
+
+/* ---- weekly timetable grid ---- */
+.usospp-timetable { display: flex; gap: 8px; overflow-x: auto; }
+.usospp-tt-hours { position: relative; width: 40px; flex-shrink: 0; margin-top: 26px; }
+.usospp-tt-hour {
+  position: absolute; right: 4px; transform: translateY(-50%);
+  font-size: 10.5px; color: var(--ink-3); white-space: nowrap;
+}
+.usospp-tt-days { display: flex; gap: 6px; flex: 1; min-width: 0; }
+.usospp-tt-daycol { flex: 1; min-width: 130px; }
+.usospp-tt-daylabel { font-size: 11px; font-weight: 700; color: var(--ink-2); text-align: center; margin-bottom: 6px; }
+.usospp-tt-daybody {
+  position: relative; border-radius: 8px; background-color: var(--bg-subtle);
+  background-image: repeating-linear-gradient(to bottom, var(--border-soft) 0, var(--border-soft) 1px, transparent 1px, transparent 100%);
+  background-position: top;
+}
+.usospp-tt-entry {
+  position: absolute; left: 3px; right: 3px; border-radius: 6px; overflow: hidden;
+  background: oklch(85% 0.07 45); padding: 4px 6px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.usospp-root[data-theme="dark"] .usospp-tt-entry { background: oklch(38% 0.08 45); }
+.usospp-tt-entry-time { font-size: 9.5px; font-weight: 700; color: oklch(40% 0.1 45); }
+.usospp-root[data-theme="dark"] .usospp-tt-entry-time { color: oklch(78% 0.06 45); }
+.usospp-tt-entry-label {
+  font-size: 10.5px; font-weight: 700; color: oklch(32% 0.13 45); line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.usospp-root[data-theme="dark"] .usospp-tt-entry-label { color: oklch(90% 0.05 45); }
+.usospp-tt-entry-meta {
+  font-size: 9.5px; color: oklch(38% 0.1 45); line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.usospp-root[data-theme="dark"] .usospp-tt-entry-meta { color: oklch(75% 0.06 45); }
+
+/* ---- schedule planner ---- */
+.usospp-planner-layout { display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start; }
+@media (max-width: 1000px) { .usospp-planner-layout { grid-template-columns: 1fr; } }
+
+.usospp-planner-subject + .usospp-planner-subject { border-top: 1px solid var(--border-soft); }
+
+.usospp-radio-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 9px;
+  border: 1px solid var(--border-soft); margin-bottom: 6px; cursor: pointer;
+}
+.usospp-radio-row:hover { background: var(--bg-subtle); }
+.usospp-radio-row.selected { border-color: oklch(60% 0.15 45); background: oklch(96% 0.02 45); }
+.usospp-root[data-theme="dark"] .usospp-radio-row.selected { background: oklch(28% 0.03 45); }
+.usospp-radio-dot {
+  width: 14px; height: 14px; border-radius: 999px; border: 2px solid var(--border);
+  flex-shrink: 0; margin-top: 2px;
+}
+.usospp-radio-row.selected .usospp-radio-dot { border-color: oklch(60% 0.15 45); background: oklch(60% 0.15 45); }
+
+.usospp-tt-entry--conflict { box-shadow: inset 0 0 0 2px oklch(55% 0.19 25); }

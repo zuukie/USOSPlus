@@ -28,14 +28,16 @@
   "content_scripts": [
     {
       "matches": ["*://web.usos.pwr.edu.pl/*"],
-      "css": ["fonts/fonts.css", "content/redesign.css"],
+      "css": ["fonts/fonts.css", "core/ui/design-system.css", "usos/usos.css"],
       "js": [
-        "content/state-bridge.js",
-        "content/planner-store.js",
-        "content/adapters.js",
-        "content/scraping.js",
-        "content/app.js",
-        "content/inject.js"
+        "core/state-bridge.js",
+        "core/detect.js",
+        "core/sanitize-html.js",
+        "usos/planner-store.js",
+        "usos/adapters.js",
+        "usos/scraping.js",
+        "usos/app.js",
+        "usos/inject.js"
       ],
       "run_at": "document_end"
     }
