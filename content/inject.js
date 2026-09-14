@@ -66,6 +66,10 @@
       currentSettings = next;
       if (app) app.updateSettings({ darkMode: next.darkMode, features: next.features });
       applyIndependentFeatures(next);
+      // Reflect a gradeBadge toggle immediately rather than waiting for the
+      // next mount/refresh — maybeUpdateBadge() itself clears the icon text
+      // when the feature is now off.
+      if (toggleFeature === 'gradeBadge' && app) maybeUpdateBadge(app.data);
     }
     if (rescrape) refreshData();
   }
@@ -80,8 +84,15 @@
     maybeUpdateBadge(data);
   }
 
+  function clearBadge() {
+    chrome.runtime.sendMessage({ type: 'usospp:setBadge', text: '' }).catch(() => {});
+  }
+
   function maybeUpdateBadge(data) {
-    if (!currentSettings || !currentSettings.features.gradeBadge) return;
+    if (!currentSettings || !currentSettings.features.gradeBadge) {
+      clearBadge();
+      return;
+    }
     const grades = Array.isArray(data.gradesResult && data.gradesResult.rows) ? data.gradesResult.rows : [];
     const nums = grades
       .map((row) => {
@@ -119,6 +130,7 @@
   }
 
   function unmountRedesign() {
+    clearBadge();
     if (app) {
       app.destroy();
       app = null;
@@ -162,10 +174,193 @@
     }
   }
 
+  // ---- classic-page widgets: small native-styled hints injected straight
+  // into classic USOSweb pages (Oceny/Płatności/Plan/Mój USOSweb) when the
+  // full redesign is off. Same "independent" spirit as the quickbar above,
+  // just page-specific — each function reads whatever the current page
+  // already renders (via the adapter's `doc = document` default) instead of
+  // fetching anything, except the home summary, which needs two other pages'
+  // data and is the only one that fetches.
+
+  let classicWidgetEl = null;
+  let homeSummaryPending = false;
+
+  function removeClassicWidgets() {
+    if (classicWidgetEl) {
+      classicWidgetEl.remove();
+      classicWidgetEl = null;
+    }
+  }
+
+  function widgetTag() {
+    const tag = document.createElement('span');
+    tag.className = 'usospp-classic-widget-tag';
+    tag.textContent = 'USOS++';
+    return tag;
+  }
+
+  function averageFromGradeRows(rows) {
+    const nums = (Array.isArray(rows) ? rows : [])
+      .map((row) => {
+        const cells = Array.isArray(row) ? row : [row.text];
+        for (let i = cells.length - 1; i >= 0; i--) {
+          const m = String(cells[i]).replace(',', '.').match(/[0-9]([.][0-9])?/);
+          if (m) return m[0];
+        }
+        return null;
+      })
+      .filter(Boolean);
+    return nums.length ? { avg: (nums.reduce((a, b) => a + parseFloat(b), 0) / nums.length).toFixed(2), count: nums.length } : null;
+  }
+
+  function countUnpaidRows(paymentGroups) {
+    return (paymentGroups.groups || []).reduce((n, g) => n + (g.rows ? g.rows.length : 0), 0);
+  }
+
+  // UNVERIFIED: same caveat as adapter.getGrades — only the empty state has
+  // ever been observed live, so this only renders once real rows show up.
+  function injectOcenyWidget() {
+    const adapter = selectAdapter();
+    const frame = document.querySelector('usos-frame#oceny, usos-frame.oceny');
+    if (!adapter || !frame) return;
+    const avg = averageFromGradeRows(adapter.getGrades().rows);
+    if (!avg) return;
+    const el = document.createElement('div');
+    el.className = 'usospp-classic-widget usospp-classic-widget--info';
+    const strong = document.createElement('strong');
+    strong.textContent = avg.avg;
+    const desc = document.createElement('span');
+    desc.textContent = `średnia z ${avg.count} widocznych ocen`;
+    el.append(strong, desc, widgetTag());
+    frame.before(el);
+    classicWidgetEl = el;
+  }
+
+  function injectPlatnosciWidget() {
+    const adapter = selectAdapter();
+    const main = document.querySelector('#layout-main-content');
+    if (!adapter || !main) return;
+    const result = adapter.getPaymentGroups();
+    const totalRows = countUnpaidRows(result);
+    if (!totalRows) return;
+    const anchor = main.querySelector('usos-frame, info-box');
+    const el = document.createElement('div');
+    el.className = 'usospp-classic-widget usospp-classic-widget--warning';
+    const strong = document.createElement('strong');
+    strong.textContent = result.grandTotal || `${totalRows} ${totalRows === 1 ? 'pozycja' : 'pozycje'} do zapłaty`;
+    const desc = document.createElement('span');
+    desc.textContent = 'masz nierozliczone należności';
+    el.append(strong, desc, widgetTag());
+    if (anchor) anchor.before(el);
+    else main.prepend(el);
+    classicWidgetEl = el;
+  }
+
+  // UNVERIFIED: same caveat as adapter.getPlan — the shape of a populated
+  // event has never been observed live, so this reports only a count, never
+  // per-event details (same restraint content/app.js's renderPlan takes).
+  function injectPlanWidget() {
+    const adapter = selectAdapter();
+    const wrapper = document.querySelector('.timetable-wrapper');
+    if (!adapter || !wrapper) return;
+    const events = adapter.getPlan().raw;
+    if (!Array.isArray(events) || !events.length) return;
+    const el = document.createElement('div');
+    el.className = 'usospp-classic-widget usospp-classic-widget--info';
+    const strong = document.createElement('strong');
+    strong.textContent = String(events.length);
+    const desc = document.createElement('span');
+    desc.textContent = events.length === 1 ? 'zajęcia w tym tygodniu' : 'zajęć w tym tygodniu';
+    el.append(strong, desc, widgetTag());
+    wrapper.prepend(el);
+    classicWidgetEl = el;
+  }
+
+  // Cross-page card for "Mój USOSweb" (home/index) — the only classic widget
+  // that needs data from other pages (średnia lives on Oceny, zaległości on
+  // Płatności). Deliberately fetches just those two instead of the full
+  // collectAll() the redesign uses, to keep this lightweight.
+  async function injectHomeSummary() {
+    if (homeSummaryPending) return;
+    const table = document.querySelector('.local-home-table');
+    const adapter = selectAdapter();
+    if (!table || !adapter) return;
+    homeSummaryPending = true;
+    try {
+      const { fetchDoc, PATHS } = window.USOSPP_SCRAPE;
+      const [ocenyDoc, platnosciDoc] = await Promise.all([
+        fetchDoc(PATHS.oceny),
+        fetchDoc(PATHS.platnosciNierozliczone),
+      ]);
+      // The toggle may have flipped, or the page navigated away, while
+      // those fetches were in flight.
+      if (!currentSettings || !currentSettings.features.classicWidgets || currentSettings.enabled) return;
+      if (!document.body.contains(table) || classicWidgetEl) return;
+
+      const avg = ocenyDoc ? averageFromGradeRows(adapter.getGrades(ocenyDoc).rows) : null;
+      const paymentsResult = platnosciDoc ? adapter.getPaymentGroups(platnosciDoc) : { groups: [] };
+      const totalRows = countUnpaidRows(paymentsResult);
+      if (!avg && !totalRows) return;
+
+      const frame = document.createElement('usos-frame');
+      const h2 = document.createElement('h2');
+      h2.setAttribute('slot', 'title');
+      h2.textContent = 'USOS++ — podsumowanie';
+      frame.appendChild(h2);
+
+      const body = document.createElement('div');
+      body.className = 'usospp-classic-home-summary';
+
+      if (avg) {
+        const row = document.createElement('div');
+        row.className = 'usospp-classic-home-row';
+        const label = document.createElement('span');
+        label.append('Średnia ocen: ');
+        const strong = document.createElement('strong');
+        strong.textContent = avg.avg;
+        label.appendChild(strong);
+        const link = document.createElement('a');
+        link.href = `${location.origin}/kontroler.php?_action=dla_stud/studia/oceny/index`;
+        link.textContent = 'oceny →';
+        row.append(label, link);
+        body.appendChild(row);
+      }
+      if (totalRows) {
+        const row = document.createElement('div');
+        row.className = 'usospp-classic-home-row';
+        const label = document.createElement('span');
+        label.textContent = paymentsResult.grandTotal || `${totalRows} nierozliczonych należności`;
+        const link = document.createElement('a');
+        link.href = `${location.origin}/kontroler.php?_action=dodatki/platnosci/naleznosciNierozliczone`;
+        link.textContent = 'płatności →';
+        row.append(label, link);
+        body.appendChild(row);
+      }
+      frame.appendChild(body);
+      table.prepend(frame);
+      classicWidgetEl = frame;
+    } finally {
+      homeSummaryPending = false;
+    }
+  }
+
+  function applyClassicWidgets(settings) {
+    if (!settings.features.classicWidgets || settings.enabled) {
+      removeClassicWidgets();
+      return;
+    }
+    if (classicWidgetEl) return; // already injected for this page load
+    const action = new URLSearchParams(location.search).get('_action');
+    if (action === 'dla_stud/studia/oceny/index') injectOcenyWidget();
+    else if (action === 'dodatki/platnosci/naleznosciNierozliczone') injectPlatnosciWidget();
+    else if (action === 'home/plan') injectPlanWidget();
+    else if (action === 'home/index') injectHomeSummary();
+  }
+
   function onKeydown(e) {
     if (!app) return;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement && document.activeElement.tagName)) return;
-    const map = { '1': 'dashboard', '2': 'aktualnosci', '3': 'plan', '4': 'oceny', '5': 'przedmioty', '6': 'egzaminy', '7': 'ects', '8': 'ustawienia' };
+    const map = { '1': 'dashboard', '2': 'aktualnosci', '3': 'plan', '4': 'oceny', '5': 'przedmioty', '6': 'egzaminy', '7': 'ects', '8': 'platnosci', '9': 'ustawienia' };
     if (map[e.key]) app.navigate(map[e.key]);
   }
 
@@ -193,6 +388,7 @@
       unmountRedesign();
     }
     applyIndependentFeatures(settings);
+    applyClassicWidgets(settings);
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

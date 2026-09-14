@@ -70,7 +70,10 @@
 }
 .usospp-nav-item:hover { background: oklch(24% 0.016 55); }
 .usospp-nav-item.active { font-weight: 600; color: #fff; background: oklch(30% 0.02 45); }
+.usospp-nav-item.sub { padding-left: 34px; font-size: 13px; }
 .usospp-nav-dot { width: 7px; height: 7px; border-radius: 50%; background: #d9773a; margin-left: auto; flex-shrink: 0; }
+.usospp-nav-chevron { display: flex; flex-shrink: 0; transition: transform 0.15s ease; }
+.usospp-nav-chevron.open { transform: rotate(90deg); }
 .usospp-spacer { flex: 1; }
 .usospp-user-card { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 12px; background: oklch(24% 0.016 55); cursor: pointer; }
 .usospp-user-card:hover { background: oklch(28% 0.018 55); }
@@ -94,6 +97,29 @@
 .usospp-title { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
 .usospp-subtitle { font-size: 12.5px; color: var(--ink-3); margin-top: 1px; }
 .usospp-topbar-actions { display: flex; align-items: center; gap: 16px; }
+
+/* ---- topbar search (Katalog: przedmioty / jednostki / programy) ---- */
+.usospp-search-wrap { position: relative; width: 300px; }
+.usospp-search-input {
+  width: 100%; height: 38px; padding: 0 14px; border-radius: 9px; border: 1px solid var(--border);
+  font-size: 13px; font-family: 'General Sans', system-ui, -apple-system, sans-serif; line-height: normal;
+  background: var(--bg-subtle); color: var(--ink); box-sizing: border-box;
+}
+.usospp-search-input:focus { background: var(--bg-card); border-color: #d9773a; outline: none; }
+.usospp-search-input::placeholder { font-family: inherit; }
+.usospp-search-dropdown {
+  /* Anchored to the input's right edge, not its left — the search box now
+     sits near the topbar's right end (next to the bell), so a dropdown
+     growing rightward from "left:0" would run off the viewport. */
+  position: absolute; top: 44px; right: 0; width: 340px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 12px 32px rgba(20,15,10,0.14);
+  padding: 8px; max-height: 60vh; overflow-y: auto; z-index: 30;
+}
+.usospp-search-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-3); padding: 8px 10px 4px 10px; }
+.usospp-search-item { padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.usospp-search-item:hover { background: var(--bg-subtle); }
+.usospp-search-item-title { font-size: 13px; font-weight: 600; }
+.usospp-search-item-sub { font-size: 11.5px; color: var(--ink-3); margin-top: 1px; }
 .usospp-divider { width: 1px; height: 24px; background: var(--border); }
 .usospp-menu-wrap { position: relative; }
 .usospp-icon-btn {
@@ -114,6 +140,20 @@
 .usospp-dropdown-sub { color: var(--ink-3); font-size: 12px; margin-top: 2px; }
 .usospp-dropdown-item { padding: 8px 10px; border-radius: 8px; font-size: 13px; cursor: pointer; }
 .usospp-dropdown-item:hover { background: var(--bg-subtle); }
+
+/* ---- payment details modal (see App.renderPaymentDetailsModal) ---- */
+.usospp-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(15, 10, 5, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  z-index: 100; animation: usospp-fade-in 0.15s ease;
+}
+.usospp-modal {
+  background: var(--bg-card); border-radius: 16px; padding: 22px 24px;
+  width: 100%; max-width: 520px; max-height: 80vh; overflow-y: auto;
+  box-shadow: 0 24px 64px rgba(20,15,10,0.28);
+}
+.usospp-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.usospp-modal-wide { max-width: 760px; }
 
 .usospp-content { flex: 1; padding: 32px; max-width: 1360px; width: 100%; margin: 0 auto; box-sizing: border-box; }
 .usospp-view { display: flex; flex-direction: column; gap: 20px; animation: usospp-fade-in 0.2s ease; }
@@ -161,6 +201,51 @@
 .usospp-badge { font-size: 12px; font-weight: 700; padding: 3px 12px; border-radius: 999px; white-space: nowrap; }
 
 .usospp-empty-hint { font-size: 13.5px; color: var(--ink-3); padding: 20px 0; }
+.usospp-notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  background: oklch(92% 0.03 45); color: oklch(30% 0.02 45); border-radius: 10px;
+  padding: 10px 14px; font-size: 12.5px; margin-bottom: 14px;
+}
+.usospp-root[data-theme="dark"] .usospp-notice { background: oklch(30% 0.03 45); color: oklch(88% 0.02 45); }
+.usospp-notice a { font-weight: 600; color: #d9773a; white-space: nowrap; }
+
+.usospp-beta-notice {
+  display: flex; align-items: center; gap: 10px;
+  background: oklch(93% 0.06 95); color: oklch(35% 0.05 90); border-radius: 10px;
+  padding: 10px 14px; font-size: 12.5px; margin-bottom: 14px;
+}
+.usospp-root[data-theme="dark"] .usospp-beta-notice { background: oklch(32% 0.05 90); color: oklch(90% 0.04 95); }
+.usospp-beta-notice-icon { flex-shrink: 0; font-size: 15px; }
+.usospp-beta-notice > div { flex: 1; line-height: 1.4; }
+.usospp-beta-notice-close {
+  flex-shrink: 0; width: 22px; height: 22px; border: none; background: transparent;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: inherit; opacity: 0.65; border-radius: 6px;
+}
+.usospp-beta-notice-close:hover { opacity: 1; background: oklch(0% 0 0 / 0.06); }
+
+/* ---- Classic USOSweb widgets — injected straight into native USOS pages
+   when the full redesign is off (see inject.js's applyClassicWidgets).
+   Deliberately NOT scoped under .usospp-root: these live inside the native
+   page, not our own shell, so they use their own standalone tokens. ---- */
+.usospp-classic-widget {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 12px 16px; margin: 0 0 14px 0; border-radius: 10px;
+  font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 1.4;
+}
+.usospp-classic-widget strong { font-size: 18px; font-weight: 700; }
+.usospp-classic-widget-tag { font-size: 11px; opacity: 0.6; margin-left: auto; white-space: nowrap; }
+.usospp-classic-widget--info { background: oklch(94% 0.03 45); color: oklch(30% 0.02 45); }
+.usospp-classic-widget--warning { background: oklch(93% 0.06 95); color: oklch(35% 0.05 90); }
+
+.usospp-classic-home-summary {
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+  font-family: Roboto, system-ui, sans-serif; font-size: 13.5px; color: oklch(30% 0.02 45);
+}
+.usospp-classic-home-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.usospp-classic-home-row strong { font-weight: 700; }
+.usospp-classic-home-row a { color: #d9773a; text-decoration: none; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.usospp-classic-home-row a:hover { color: oklch(48% 0.16 45); }
 
 /* ---- Aktualności (sanitized announcement body — see adapter.getNews) ---- */
 .usospp-news-body { font-size: 13.5px; color: var(--ink-2); line-height: 1.6; }

@@ -157,8 +157,26 @@
     { id: 'plan', label: 'Plan zajęć', icon: 'calendar' },
     { id: 'oceny', label: 'Oceny', icon: 'bars' },
     { id: 'przedmioty', label: 'Przedmioty', icon: 'book' },
+    // USOSmail's own UI is 100% client-rendered against an internal,
+    // CSRF-walled endpoint whose own error message says not to use it as an
+    // API — and every USOSweb page sends X-Frame-Options: deny, so it can't
+    // even be embedded in an iframe. No legitimate way to show it in our own
+    // UI, so this is a pure link-out (see renderSidebar) rather than a real
+    // nav view: it never becomes the active view and isn't in VALID_VIEWS.
+    { id: 'wiadomosci', label: 'Wiadomości', icon: 'mail', external: 'kontroler.php?_action=home/usos_mail/nowaWiadomosc&usospp_off=1' },
     { id: 'egzaminy', label: 'Egzaminy', icon: 'check' },
+    { id: 'sprawdziany', label: 'Sprawdziany', icon: 'clipboard' },
     { id: 'ects', label: 'ECTS / Postęp', icon: 'ring' },
+  ];
+
+  // Lower-traffic sections tucked behind the collapsible "Więcej" row in the
+  // sidebar (see renderSidebar) instead of each getting a permanent
+  // top-level slot.
+  const MORE_NAV_ITEMS = [
+    { id: 'platnosci', label: 'Płatności', icon: 'card' },
+    { id: 'stypendia', label: 'Stypendia', icon: 'coins' },
+    { id: 'podania', label: 'Podania', icon: 'send' },
+    { id: 'ankiety', label: 'Ankiety', icon: 'star' },
   ];
 
   // "przedmioty" is a hub tile screen — Przegląd/Zapisy/Generator planu live
@@ -166,7 +184,28 @@
   // item should still read as "active" while the user is anywhere inside its
   // group (including a subject-detail page opened from within it), even
   // though only the hub id itself appears in NAV_ITEMS.
-  const NAV_GROUPS = { przedmioty: ['przedmioty', 'przedmiotyLista', 'zapisy', 'planer'] };
+  const NAV_GROUPS = {
+    przedmioty: ['przedmioty', 'przedmiotyLista', 'zapisy', 'planer'],
+  };
+
+  // Per-view list of `this.data` result keys whose *shape* — not just
+  // whether the fetch itself succeeded — hasn't been confirmed against real
+  // populated USOS markup yet (see the "UNVERIFIED" comments on
+  // adapter.getPlan/getGrades/getExams and adapter.genericInfoTable). Drives
+  // renderBetaNotice: a view shows the banner whenever one of its sources
+  // actually has data (`supported`) that we're not yet sure we parsed
+  // correctly (`!verified`), rather than every reviewer having to remember
+  // to wire up a warning by hand on each new unverified page.
+  const UNVERIFIED_SOURCES = {
+    dashboard: ['gradesResult', 'planResult', 'examsResult'],
+    plan: ['planResult'],
+    oceny: ['gradesResult'],
+    egzaminy: ['examsResult'],
+    stypendia: ['scholarshipsResult'],
+    sprawdziany: ['testsResult'],
+    podania: ['petitionsResult'],
+    ankiety: ['surveysResult'],
+  };
 
   // A plain document reload (classic USOSweb navigation, not an SPA route
   // change) tears down and re-mounts the whole App, which used to always
@@ -176,8 +215,9 @@
   // section a *different* tab last looked at (chrome.storage would do that).
   const VIEW_STORAGE_KEY = 'usospp_lastView';
   const VALID_VIEWS = new Set([
-    ...NAV_ITEMS.map((item) => item.id),
-    'przedmiotyLista', 'zapisy', 'planer', 'ustawienia', 'subjectPage',
+    ...NAV_ITEMS.filter((item) => !item.external).map((item) => item.id),
+    ...MORE_NAV_ITEMS.map((item) => item.id),
+    'przedmiotyLista', 'zapisy', 'planer', 'ustawienia', 'subjectPage', 'catalogPage',
   ]);
 
   // "Is there a new announcement since I last opened Aktualności" — chrome
@@ -214,7 +254,16 @@
     layers: '<path d="M10 3l7 3.6-7 3.6-7-3.6L10 3z"></path><path d="M3 10.4l7 3.6 7-3.6"></path><path d="M3 14l7 3.6 7-3.6"></path>',
     ring: '<circle cx="10" cy="10" r="7.2" stroke-opacity="0.35"></circle><path d="M10 2.8a7.2 7.2 0 0 1 5.1 12.3"></path>',
     bell: '<path d="M5 8.2a5 5 0 0 1 10 0c0 3.6 1.3 4.8 1.3 4.8H3.7S5 11.8 5 8.2z"></path><path d="M8.2 15.6a1.9 1.9 0 0 0 3.6 0"></path>',
+    card: '<rect x="2" y="4.5" width="16" height="11" rx="2"></rect><line x1="2" y1="8" x2="18" y2="8"></line><line x1="5" y1="12.5" x2="9" y2="12.5"></line>',
+    mail: '<rect x="2" y="4" width="16" height="12" rx="2"></rect><path d="M3 5.5l7 5.5 7-5.5"></path>',
     settings: '<line x1="3" y1="5" x2="17" y2="5"></line><circle cx="12" cy="5" r="1.8" fill="var(--bg-page)"></circle><line x1="3" y1="10" x2="17" y2="10"></line><circle cx="7" cy="10" r="1.8" fill="var(--bg-page)"></circle><line x1="3" y1="15" x2="17" y2="15"></line><circle cx="14" cy="15" r="1.8" fill="var(--bg-page)"></circle>',
+    close: '<line x1="5" y1="5" x2="15" y2="15"></line><line x1="15" y1="5" x2="5" y2="15"></line>',
+    coins: '<circle cx="7.5" cy="8" r="4.3"></circle><circle cx="12.5" cy="12" r="4.3"></circle>',
+    clipboard: '<rect x="4" y="3.5" width="12" height="14" rx="1.5"></rect><rect x="7" y="2" width="6" height="3" rx="1"></rect><line x1="6.5" y1="9" x2="13.5" y2="9"></line><line x1="6.5" y1="12.5" x2="13.5" y2="12.5"></line>',
+    send: '<path d="M3 10l14-6.5-5.5 14-2.3-6.2L3 10z"></path>',
+    star: '<path d="M10 2.8l2.2 4.6 5 .7-3.6 3.6.9 5-4.5-2.4-4.5 2.4.9-5-3.6-3.6 5-.7L10 2.8z"></path>',
+    more: '<circle cx="5" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="15" cy="10" r="1.3" fill="currentColor" stroke="none"></circle>',
+    chevron: '<path d="M7.5 5l5.5 5-5.5 5" stroke-width="2"></path>',
   };
 
   function icon(name, size = 19) {
@@ -227,6 +276,82 @@
   // back up a level.
   function backLink(viewId, label = '← Wróć') {
     return `<a data-action="nav" data-view="${esc(viewId)}" class="usospp-back-link">${esc(label)}</a>`;
+  }
+
+  // Every "open in classic USOS" link needs ?usospp_off=1 or the redesign
+  // (still globally enabled for the domain) just mounts right back on top
+  // of whatever page it opens, hiding the real content again — easy to
+  // forget on a URL that came straight from a scraped href rather than one
+  // built here with the param already on it, so the click handler adds it
+  // centrally instead of relying on every call site to remember.
+  function withUsospOff(url) {
+    if (!url || /(?:^|[?&])usospp_off=/.test(url)) return url;
+    return url + (url.includes('?') ? '&' : '?') + 'usospp_off=1';
+  }
+
+  // One row from adapter.getPaymentGroups — its `fields` are whatever
+  // columns that particular USOS page happened to render (label -> text),
+  // not a fixed shape, so this picks a sensible "title" (the free-text
+  // description if there is one, else the fee category) and an "amount"
+  // badge out of whatever's there instead of assuming column positions.
+  function renderPaymentRow(row) {
+    const entries = Object.entries(row.fields || {}).filter(([, v]) => v);
+    if (!entries.length) return '';
+    const amountEntry = entries.find(([label]) => /kwota|pozosta|należn/i.test(label));
+    const titleEntry = entries.find(([label]) => /opis/i.test(label))
+      || entries.find(([label]) => /rodzaj/i.test(label))
+      || entries[0];
+    const metaEntries = entries.filter(([label]) => label !== titleEntry[0] && (!amountEntry || label !== amountEntry[0]));
+    return `
+      <div class="usospp-list-row" style="align-items:flex-start;">
+        <div>
+          <div style="font-size:13.5px;font-weight:600;">${esc(titleEntry[1])}</div>
+          ${metaEntries.length ? `<div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${metaEntries.map(([label, value]) => `${esc(label)}: ${esc(value)}`).join(' · ')}</div>` : ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          ${amountEntry ? `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${esc(amountEntry[1])}</div>` : ''}
+          ${row.detailsUrl ? `<div style="margin-top:6px;"><a data-action="openPaymentDetails" data-url="${esc(row.detailsUrl)}" style="font-size:12px;font-weight:600;color:#d9773a;cursor:pointer;">szczegóły →</a></div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  // One row from adapter.genericInfoTable (stypendia/sprawdziany/podania/
+  // ankiety) — same "unknown columns, pick a sensible title/status out of
+  // whatever's there" approach as renderPaymentRow, just without a payments-
+  // details modal to open: we haven't built dedicated detail-page scraping
+  // for these four, so "szczegóły" simply links out to classic USOS.
+  function renderInfoTableRow(row) {
+    const entries = Object.entries(row.fields || {}).filter(([, v]) => v);
+    if (!entries.length) return '';
+    const statusEntry = entries.find(([label]) => /status|rozpatrzeni|stan/i.test(label));
+    const titleEntry = entries.find(([label]) => /nazwa|rodzaj|opis|przedmiot|tytuł/i.test(label)) || entries[0];
+    const metaEntries = entries.filter(([label]) => label !== titleEntry[0] && (!statusEntry || label !== statusEntry[0]));
+    return `
+      <div class="usospp-list-row" style="align-items:flex-start;">
+        <div>
+          <div style="font-size:13.5px;font-weight:600;">${esc(titleEntry[1])}</div>
+          ${metaEntries.length ? `<div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${metaEntries.map(([label, value]) => `${esc(label)}: ${esc(value)}`).join(' · ')}</div>` : ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          ${statusEntry ? `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${esc(statusEntry[1])}</div>` : ''}
+          ${row.detailsUrl ? `<div style="margin-top:6px;"><a data-action="openUsos" data-url="${esc(row.detailsUrl)}" style="font-size:12px;font-weight:600;color:#d9773a;cursor:pointer;">szczegóły →</a></div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  // One organizational unit's dues/payments (see adapter.getPaymentGroups) —
+  // USOS bills/pays through several units (dziekanat, akademik, …), each
+  // getting its own little labeled block with its own subtotal.
+  function renderPaymentGroup(group) {
+    return `
+      <div style="margin-bottom:16px;">
+        ${group.unitLabel ? `<div style="font-size:12px;font-weight:600;color:var(--ink-3);margin-bottom:6px;">${esc(group.unitLabel)}</div>` : ''}
+        ${group.rows.map(renderPaymentRow).join('')}
+        ${group.total ? `<div style="font-size:12px;color:var(--ink-3);text-align:right;margin-top:6px;">${esc(group.total)}</div>` : ''}
+      </div>
+    `;
   }
 
   // USOS++ mark per the brand system: a rounded orange tile (23% radius) with
@@ -250,8 +375,14 @@
     planer: ['Generator planu', 'Podgląd — niczego tu nie zapisujemy w USOS'],
     egzaminy: ['Egzaminy', 'Zapisy i wyniki sesji'],
     ects: ['ECTS / Postęp', 'Realizacja programu studiów'],
+    platnosci: ['Płatności', 'Należności, wpłaty i konta bankowe'],
+    stypendia: ['Stypendia', 'Wypłaty i decyzje stypendialne'],
+    sprawdziany: ['Sprawdziany', 'Zasady rozliczania przedmiotów'],
+    podania: ['Podania', 'Złożone wnioski i ich rozpatrzenie'],
+    ankiety: ['Ankiety', 'Ankiety do wypełnienia'],
     ustawienia: ['Ustawienia', 'Profil, wygląd i powiadomienia'],
     subjectPage: ['Przedmiot', 'Szczegóły z katalogu USOS'],
+    catalogPage: ['Katalog', 'Szczegóły z katalogu USOS'],
   };
 
   class App {
@@ -264,6 +395,10 @@
       let initialView = 'dashboard';
       let initialSubjectUrl = null;
       let initialSubjectBackView = 'przedmiotyLista';
+      let initialCatalogKind = null;
+      let initialCatalogKod = null;
+      let initialCatalogEtpKod = null;
+      let initialCatalogBackView = 'dashboard';
       if (saved && VALID_VIEWS.has(saved.view)) {
         if (saved.view === 'subjectPage') {
           if (saved.subjectUrl) {
@@ -272,6 +407,18 @@
             initialSubjectBackView = (saved.subjectBackView && VALID_VIEWS.has(saved.subjectBackView) && saved.subjectBackView !== 'subjectPage')
               ? saved.subjectBackView
               : 'przedmiotyLista';
+          }
+        } else if (saved.view === 'catalogPage') {
+          const validKind = saved.catalogKind === 'unit' || saved.catalogKind === 'program'
+            || (saved.catalogKind === 'stage' && !!saved.catalogEtpKod);
+          if (saved.catalogKod && validKind) {
+            initialView = 'catalogPage';
+            initialCatalogKind = saved.catalogKind;
+            initialCatalogKod = saved.catalogKod;
+            initialCatalogEtpKod = saved.catalogKind === 'stage' ? saved.catalogEtpKod : null;
+            initialCatalogBackView = (saved.catalogBackView && VALID_VIEWS.has(saved.catalogBackView) && saved.catalogBackView !== 'catalogPage')
+              ? saved.catalogBackView
+              : 'dashboard';
           }
         } else {
           initialView = saved.view;
@@ -282,9 +429,21 @@
         view: initialView,
         notifPanelOpen: false,
         avatarMenuOpen: false,
+        moreExpanded: false,
+        dismissedBetaViews: [],
         newsHasUpdate: false,
-        examModalOpen: false,
-        semesterInfoOpen: false,
+        paymentDetailsOpen: false,
+        paymentDetailsLoading: false,
+        paymentDetailsError: false,
+        paymentDetailsData: null,
+        groupsModalOpen: false,
+        groupsModalLoading: false,
+        groupsModalError: false,
+        groupsModalData: null,
+        groupsModalTitle: '',
+        linksModalOpen: false,
+        linksModalTitle: '',
+        linksModalLinks: [],
         calcAvg: '',
         calcEcts: '',
         calcGrade: '5.0',
@@ -296,6 +455,16 @@
         subjectLoading: initialView === 'subjectPage',
         subjectError: false,
         subjectData: null,
+        catalogKind: initialCatalogKind,
+        catalogKod: initialCatalogKod,
+        catalogEtpKod: initialCatalogEtpKod,
+        catalogBackView: initialCatalogBackView,
+        catalogLoading: initialView === 'catalogPage',
+        catalogError: false,
+        catalogData: null,
+        searchQuery: '',
+        searchLoading: false,
+        searchResults: null,
         plannerExpandedUrl: null,
         plannerSubjectCache: {},
         plannerSubjectLoading: null,
@@ -307,22 +476,38 @@
       };
       this._onClick = this.handleClick.bind(this);
       this._onChange = this.handleChange.bind(this);
+      this._onInput = this.handleInput.bind(this);
+      this._onKeydown = this.handleKeydown.bind(this);
       this.root.addEventListener('click', this._onClick);
       // Only `change` (fires on blur/select, not per keystroke) — a full
       // re-render on every keystroke would replace the focused <input> node
-      // and drop the cursor mid-typing.
+      // and drop the cursor mid-typing. The topbar search box needs actual
+      // per-keystroke input, but never goes through a full render either
+      // (see setSearchState) — it only ever patches the results dropdown
+      // below the input, so the input itself is never touched.
       this.root.addEventListener('change', this._onChange);
+      this.root.addEventListener('input', this._onInput);
+      this.root.addEventListener('keydown', this._onKeydown);
       this.setupTitleGuard();
       this.loadPlannerPicks();
       this.checkNewsUpdate();
       if (initialView === 'subjectPage' && initialSubjectUrl) {
         this.fetchSubjectData(initialSubjectUrl);
       }
+      if (initialView === 'catalogPage' && initialCatalogKod) {
+        if (initialCatalogKind === 'stage') {
+          this.fetchStagePage(initialCatalogKod, initialCatalogEtpKod, null);
+        } else {
+          this.fetchCatalogPage(initialCatalogKind, initialCatalogKod);
+        }
+      }
     }
 
     destroy() {
       this.root.removeEventListener('click', this._onClick);
       this.root.removeEventListener('change', this._onChange);
+      this.root.removeEventListener('input', this._onInput);
+      this.root.removeEventListener('keydown', this._onKeydown);
       if (this._titleObserver) this._titleObserver.disconnect();
     }
 
@@ -349,6 +534,9 @@
       if (this.state.view === 'subjectPage' && this.state.subjectData) {
         title = this.state.subjectData.subjectName || title;
       }
+      if (this.state.view === 'catalogPage' && this.state.catalogData) {
+        title = this.state.catalogData.name || this.state.catalogData.label || title;
+      }
       const full = title ? `${title} – USOS++` : 'USOS++';
       this._lastTitle = full;
       if (document.title !== full) document.title = full;
@@ -359,6 +547,10 @@
         view: this.state.view,
         subjectUrl: this.state.view === 'subjectPage' ? this.state.subjectUrl : null,
         subjectBackView: this.state.view === 'subjectPage' ? this.state.subjectBackView : null,
+        catalogKind: this.state.view === 'catalogPage' ? this.state.catalogKind : null,
+        catalogKod: this.state.view === 'catalogPage' ? this.state.catalogKod : null,
+        catalogEtpKod: this.state.view === 'catalogPage' && this.state.catalogKind === 'stage' ? this.state.catalogEtpKod : null,
+        catalogBackView: this.state.view === 'catalogPage' ? this.state.catalogBackView : null,
       });
     }
 
@@ -394,6 +586,41 @@
       el.outerHTML = this.renderTopbar();
     }
 
+    // Dismissing the beta notice (see renderBetaNotice) only ever needs to
+    // repaint the main content area, same reasoning as setTopbarState.
+    setContentState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      const el = this.root.querySelector('[data-content-root]');
+      if (!el) { this.render(); return; }
+      el.innerHTML = `${this.renderBetaNotice()}${this.renderView()}`;
+    }
+
+    // A view "has unverified data" when a source it actually displays came
+    // back with real content (`supported`) whose shape we haven't confirmed
+    // against a live populated page yet (`!verified`) — see
+    // UNVERIFIED_SOURCES. Fetch failures alone (`supported: false`) don't
+    // trigger this: those already show their own "couldn't read ..." hint,
+    // which is a different, unrelated kind of problem.
+    hasUnverifiedData() {
+      const keys = UNVERIFIED_SOURCES[this.state.view] || [];
+      return keys.some((key) => {
+        const r = this.data[key];
+        return r && r.supported && !r.verified;
+      });
+    }
+
+    renderBetaNotice() {
+      if (this.state.dismissedBetaViews.includes(this.state.view)) return '';
+      if (!this.hasUnverifiedData()) return '';
+      return `
+        <div class="usospp-beta-notice">
+          <span class="usospp-beta-notice-icon">⚠</span>
+          <div>USOS++ jest jeszcze w wersji beta — ta strona nie została w pełni zweryfikowana i dane mogą wyświetlać się niepoprawnie.</div>
+          <button class="usospp-beta-notice-close" data-action="dismissBetaNotice" title="Zamknij">${icon('close', 12)}</button>
+        </div>
+      `;
+    }
+
     // checkNewsUpdate() resolves well after the initial render, completely
     // outside any click — going through setState would flash the fade-in
     // across the whole page just to light up one small dot in the sidebar.
@@ -402,6 +629,39 @@
       const el = this.root.querySelector('[data-sidebar-root]');
       if (!el) { this.render(); return; }
       el.outerHTML = this.renderSidebar();
+    }
+
+    // Any modal (payment details, class groups, …) overlays whatever view
+    // is underneath it — opening/closing it (or its loading -> loaded
+    // transition) has nothing to do with the page content, so it gets the
+    // same scoped-patch treatment as the topbar/sidebar/planner instead of
+    // a full setState.
+    setModalState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      const el = this.root.querySelector('[data-modal-root]');
+      if (!el) { this.render(); return; }
+      el.innerHTML = this.renderModals();
+    }
+
+    // At most one of these is ever open at once, but data-modal-root holds
+    // whichever it is — each renderer returns '' when it isn't the open one.
+    renderModals() {
+      return this.renderPaymentDetailsModal() + this.renderGroupsModal() + this.renderLinksModal();
+    }
+
+    closeAnyModal() {
+      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false });
+    }
+
+    // The search dropdown patches on every keystroke (after a debounce) —
+    // going through setTopbarState here would replace the topbar's
+    // outerHTML, including the <input> the user is actively typing into,
+    // dropping focus and cursor position. This only ever touches the
+    // results panel below the input.
+    setSearchState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      const el = this.root.querySelector('[data-search-results-root]');
+      if (el) el.innerHTML = this.renderSearchResults();
     }
 
     updateSettings(settings) {
@@ -464,6 +724,12 @@
         case 'nav':
           this.navigate(el.dataset.view);
           break;
+        case 'toggleMore':
+          this.setSidebarState((s) => ({ moreExpanded: !s.moreExpanded }));
+          break;
+        case 'dismissBetaNotice':
+          this.setContentState((s) => ({ dismissedBetaViews: [...s.dismissedBetaViews, s.view] }));
+          break;
         case 'toggleNotifPanel':
           this.setTopbarState((s) => ({ notifPanelOpen: !s.notifPanelOpen, avatarMenuOpen: false }));
           break;
@@ -492,7 +758,7 @@
           this.emitSettings({ disable: true });
           break;
         case 'openUsos':
-          window.open(el.dataset.url || location.origin + '/kontroler.php', '_blank', 'noopener');
+          window.open(withUsospOff(el.dataset.url || location.origin + '/kontroler.php'), '_blank', 'noopener');
           break;
         case 'rescrape':
           this.emitSettings({ rescrape: true });
@@ -502,6 +768,50 @@
           break;
         case 'openSubjectPage':
           this.openSubjectPage(el.dataset.url);
+          break;
+        case 'searchOpenSubject':
+          this.state.searchQuery = '';
+          this.state.searchResults = null;
+          this.openSubjectPage(el.dataset.url);
+          break;
+        case 'searchOpenUnit':
+          this.state.searchQuery = '';
+          this.state.searchResults = null;
+          this.openCatalogPage('unit', el.dataset.kod);
+          break;
+        case 'searchOpenProgram':
+          this.state.searchQuery = '';
+          this.state.searchResults = null;
+          this.openCatalogPage('program', el.dataset.kod);
+          break;
+        case 'openStage':
+          this.openStagePage(el.dataset.prgKod, el.dataset.etpKod, el.dataset.label);
+          break;
+        case 'openPaymentDetails':
+          this.openPaymentDetails(el.dataset.url);
+          break;
+        case 'closePaymentDetails':
+          this.closePaymentDetails();
+          break;
+        case 'openGroupsModal':
+          this.openGroupsModal(el.dataset.url, el.dataset.title);
+          break;
+        case 'closeGroupsModal':
+          this.closeGroupsModal();
+          break;
+        case 'openLinksModal': {
+          let links = [];
+          try { links = JSON.parse(el.dataset.links || '[]'); } catch (err) { links = []; }
+          this.openLinksModal(links, el.dataset.title);
+          break;
+        }
+        case 'closeLinksModal':
+          this.closeLinksModal();
+          break;
+        case 'closeModalBackdrop':
+          // Only when the backdrop itself was clicked, not something
+          // inside the modal card that happens to bubble up to it.
+          if (e.target === el) this.closeAnyModal();
           break;
         case 'plannerToggleSubject':
           this.plannerToggleSubject(el.dataset.url);
@@ -536,6 +846,193 @@
         default:
           break;
       }
+    }
+
+    // The "szczegóły" link on a payment/due row points at a page classic
+    // USOS renders itself — opening it in a new tab used to just mount
+    // USOS++ there too and hide the real content, so instead we fetch and
+    // parse that same URL ourselves and show it in our own modal.
+    openPaymentDetails(url) {
+      if (!url) return;
+      this.setModalState({ paymentDetailsOpen: true, paymentDetailsLoading: true, paymentDetailsError: false, paymentDetailsData: null });
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setModalState({ paymentDetailsLoading: false, paymentDetailsError: true });
+        return;
+      }
+      scrape.fetchDoc(url)
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const details = doc && adapter ? adapter.getPaymentDetails(doc) : null;
+          if (!details || !details.supported) {
+            this.setModalState({ paymentDetailsLoading: false, paymentDetailsError: true });
+          } else {
+            this.setModalState({ paymentDetailsLoading: false, paymentDetailsData: details });
+          }
+        })
+        .catch(() => {
+          this.setModalState({ paymentDetailsLoading: false, paymentDetailsError: true });
+        });
+    }
+
+    closePaymentDetails() {
+      this.setModalState({ paymentDetailsOpen: false });
+    }
+
+    renderPaymentDetailsModal() {
+      if (!this.state.paymentDetailsOpen) return '';
+      const s = this.state;
+      return `
+        <div class="usospp-modal-backdrop" data-action="closeModalBackdrop">
+          <div class="usospp-modal">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">Szczegóły</div>
+              <button class="usospp-icon-btn" data-action="closePaymentDetails" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            ${s.paymentDetailsLoading ? `
+              <div class="usospp-empty-hint">Wczytywanie…</div>
+            ` : s.paymentDetailsError ? `
+              <div class="usospp-empty-hint">Nie udało się wczytać szczegółów z USOS.</div>
+            ` : `
+              ${(s.paymentDetailsData.generalInfo || []).length ? `
+                <div class="usospp-field-stack" style="margin-bottom:16px;">
+                  ${s.paymentDetailsData.generalInfo.map((f) => `
+                    <div class="usospp-list-row">
+                      <div style="color:var(--ink-3);font-size:13px;">${esc(f.label)}</div>
+                      <div style="font-weight:600;font-size:13px;text-align:right;">${esc(f.value || '—')}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : ''}
+              ${(s.paymentDetailsData.tables || []).map((t) => `
+                <div style="margin-bottom:10px;">
+                  ${t.title ? `<div style="font-size:12px;font-weight:600;color:var(--ink-3);margin-bottom:6px;">${esc(t.title)}</div>` : ''}
+                  <table class="usospp-table">
+                    ${t.headers.length ? `<thead><tr>${t.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>` : ''}
+                    <tbody>
+                      ${t.rows.map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}
+                    </tbody>
+                  </table>
+                  ${t.footer ? `<div style="font-size:12.5px;font-weight:600;text-align:right;margin-top:6px;">${esc(t.footer)}</div>` : ''}
+                </div>
+              `).join('')}
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    // The "grupy →" link on a subject's class type used to bounce out to
+    // classic USOS (and, like the payment "szczegóły" link before it, would
+    // just mount USOS++ there too and hide what it actually opened). Same
+    // fetch+parse-ourselves fix, reusing the getClassGroups adapter method
+    // the planner already relies on — just shown in a modal instead of
+    // expanded inline, since a subject page isn't already mid-selection the
+    // way the planner is.
+    openGroupsModal(url, title) {
+      if (!url) return;
+      this.setModalState({
+        groupsModalOpen: true,
+        groupsModalLoading: true,
+        groupsModalError: false,
+        groupsModalData: null,
+        groupsModalTitle: title || 'Grupy zajęciowe',
+      });
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setModalState({ groupsModalLoading: false, groupsModalError: true });
+        return;
+      }
+      scrape.fetchDoc(url)
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const data = doc && adapter ? adapter.getClassGroups(doc) : null;
+          if (!data || !data.supported) {
+            this.setModalState({ groupsModalLoading: false, groupsModalError: true });
+          } else {
+            this.setModalState({ groupsModalLoading: false, groupsModalData: data });
+          }
+        })
+        .catch(() => {
+          this.setModalState({ groupsModalLoading: false, groupsModalError: true });
+        });
+    }
+
+    closeGroupsModal() {
+      this.setModalState({ groupsModalOpen: false });
+    }
+
+    renderGroupsModal() {
+      if (!this.state.groupsModalOpen) return '';
+      const s = this.state;
+      const data = s.groupsModalData;
+      return `
+        <div class="usospp-modal-backdrop" data-action="closeModalBackdrop">
+          <div class="usospp-modal usospp-modal-wide">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">${esc(s.groupsModalTitle)}</div>
+              <button class="usospp-icon-btn" data-action="closeGroupsModal" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            ${s.groupsModalLoading ? `
+              <div class="usospp-empty-hint">Wczytywanie…</div>
+            ` : s.groupsModalError || !data ? `
+              <div class="usospp-empty-hint">Nie udało się wczytać grup.</div>
+            ` : data.groups.length === 0 ? `
+              <div class="usospp-empty-hint">Brak zdefiniowanych grup.</div>
+            ` : `
+              <table class="usospp-table">
+                <thead><tr><th>Grupa</th><th>Terminy</th><th>Nauczyciel</th><th>Miejsca</th></tr></thead>
+                <tbody>
+                  ${data.groups.map((g) => `
+                    <tr>
+                      <td>${esc(g.nr)}</td>
+                      <td>${g.sessions.map((sess) => `${esc(sess.day)} ${esc(sess.start)}–${esc(sess.end)}${sess.place ? `, ${esc(sess.place)}` : ''}`).join('<br>') || '—'}</td>
+                      <td>${esc(g.teacher || '—')}</td>
+                      <td>${esc(g.occupancy || '—')}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    // A field like "Grupy:" can hold several links squashed into one table
+    // cell (see adapter.fieldsFromTable's `links` array) — rather than
+    // guessing which one the user wants, this lets them pick. The chosen
+    // link still just opens in classic USOS: that destination page's own
+    // HTML is malformed (mismatched <table> tags, verified live), so it's
+    // not something worth writing our own parser against.
+    openLinksModal(links, title) {
+      this.setModalState({ linksModalOpen: true, linksModalLinks: links || [], linksModalTitle: title || '' });
+    }
+
+    closeLinksModal() {
+      this.setModalState({ linksModalOpen: false });
+    }
+
+    renderLinksModal() {
+      if (!this.state.linksModalOpen) return '';
+      const s = this.state;
+      return `
+        <div class="usospp-modal-backdrop" data-action="closeModalBackdrop">
+          <div class="usospp-modal">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">${esc(s.linksModalTitle)}</div>
+              <button class="usospp-icon-btn" data-action="closeLinksModal" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            ${s.linksModalLinks.length === 0 ? `
+              <div class="usospp-empty-hint">Brak opcji.</div>
+            ` : s.linksModalLinks.map((l) => `
+              <div class="usospp-dropdown-item" data-action="openUsos" data-url="${esc(l.href)}">${esc(l.label)}</div>
+            `).join('')}
+          </div>
+        </div>
+      `;
     }
 
     // Fetches and parses the subject's full catalog page on demand (see
@@ -581,6 +1078,96 @@
         })
         .catch(() => {
           this.setState({ subjectLoading: false, subjectError: true });
+        });
+    }
+
+    // Opens a "jednostka" or "program" search result in our own page —
+    // same shape as openSubjectPage/fetchSubjectData, just generalized over
+    // `kind` since both are otherwise identical (fetch, parse, show, with a
+    // back-link to wherever the user actually came from).
+    openCatalogPage(kind, kod) {
+      if (!kod) return;
+      this.setState((s) => ({
+        view: 'catalogPage',
+        catalogBackView: s.view === 'catalogPage' ? s.catalogBackView : s.view,
+        catalogKind: kind,
+        catalogKod: kod,
+        catalogLoading: true,
+        catalogError: false,
+        catalogData: null,
+      }));
+      this.persistViewState();
+      this.fetchCatalogPage(kind, kod);
+    }
+
+    fetchCatalogPage(kind, kod) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setState({ catalogLoading: false, catalogError: true });
+        return;
+      }
+      const url = kind === 'unit' ? scrape.PATHS.unitDetail(kod) : scrape.PATHS.programDetail(kod);
+      scrape.fetchDoc(url)
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const details = doc && adapter
+            ? (kind === 'unit' ? adapter.getUnitDetail(doc) : adapter.getProgramDetail(doc))
+            : null;
+          if (!details || !details.supported) {
+            this.setState({ catalogLoading: false, catalogError: true });
+          } else {
+            this.setState({ catalogLoading: false, catalogData: details });
+          }
+        })
+        .catch(() => {
+          this.setState({ catalogLoading: false, catalogError: true });
+        });
+    }
+
+    // A stage ("semestr") link from a program's "Główne toki nauczania" —
+    // reuses the exact same PATHS.stageSubjects/getStageSubjects pipeline
+    // getOwnProgrammes already feeds for the logged-in user's own programme
+    // (see renderPrzedmiotyLista), just for an arbitrary browsed program
+    // instead. `catalogKod` doubles as this stage's prg_kod (it's the same
+    // code the program page itself was opened with), so "back" can reopen
+    // that exact program rather than the generic catalogBackView, which
+    // points further back to wherever the user was before the program page.
+    openStagePage(prgKod, etpKod, label) {
+      if (!prgKod || !etpKod) return;
+      this.setState((s) => ({
+        view: 'catalogPage',
+        catalogBackView: s.view === 'catalogPage' ? s.catalogBackView : s.view,
+        catalogKind: 'stage',
+        catalogKod: prgKod,
+        catalogEtpKod: etpKod,
+        catalogLoading: true,
+        catalogError: false,
+        catalogData: null,
+      }));
+      this.persistViewState();
+      this.fetchStagePage(prgKod, etpKod, label);
+    }
+
+    fetchStagePage(prgKod, etpKod, label) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setState({ catalogLoading: false, catalogError: true });
+        return;
+      }
+      scrape.fetchDoc(scrape.PATHS.stageSubjects(prgKod, etpKod))
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const details = doc && adapter ? adapter.getStageSubjects(doc) : null;
+          if (!details) {
+            this.setState({ catalogLoading: false, catalogError: true });
+          } else {
+            this.setState({ catalogLoading: false, catalogData: { prgKod, etpKod, label, ...details } });
+          }
+        })
+        .catch(() => {
+          this.setState({ catalogLoading: false, catalogError: true });
         });
     }
 
@@ -917,6 +1504,51 @@
       this.setState({ [el.dataset.bind]: el.value });
     }
 
+    handleInput(e) {
+      if (e.target.dataset.action === 'searchInput') this.onSearchInput(e.target.value);
+    }
+
+    handleKeydown(e) {
+      if (e.target.dataset.action === 'searchInput' && e.key === 'Escape') {
+        this.clearSearch();
+        e.target.blur();
+      }
+    }
+
+    // Debounced so we're not firing three requests per keystroke — 3 chars
+    // minimum matches the classic <usos-selector> autocomplete's own
+    // min-search-length, so we're never querying anything USOS itself
+    // wouldn't bother searching for either.
+    onSearchInput(value) {
+      this.state.searchQuery = value; // the <input> already shows this — no DOM patch needed just for that
+      clearTimeout(this._searchDebounce);
+      const q = value.trim();
+      if (q.length < 3) {
+        this.setSearchState({ searchResults: null, searchLoading: false });
+        return;
+      }
+      this.setSearchState({ searchLoading: true });
+      this._searchDebounce = setTimeout(() => this.runSearch(q), 300);
+    }
+
+    async runSearch(query) {
+      const scrape = window.USOSPP_SCRAPE;
+      if (!scrape) { this.setSearchState({ searchLoading: false }); return; }
+      const results = await scrape.searchCatalog(query);
+      // The query may have changed (or been cleared) while this was in
+      // flight — a stale, slower response landing after a newer one (or
+      // after the box was cleared) shouldn't clobber what's now on screen.
+      if (this.state.searchQuery.trim() !== query) return;
+      this.setSearchState({ searchLoading: false, searchResults: results });
+    }
+
+    clearSearch() {
+      this.state.searchQuery = '';
+      this.setSearchState({ searchResults: null, searchLoading: false });
+      const input = this.root.querySelector('[data-search-input]');
+      if (input) input.value = '';
+    }
+
     emitSettings(payload) {
       this.root.dispatchEvent(new CustomEvent('usospp:settings', { detail: payload, bubbles: true }));
     }
@@ -928,18 +1560,64 @@
           ${this.renderSidebar()}
           <div class="usospp-main">
             ${this.renderTopbar()}
-            <main class="usospp-content" data-action="closeMenus">
+            <main class="usospp-content" data-action="closeMenus" data-content-root>
+              ${this.renderBetaNotice()}
               ${this.renderView()}
             </main>
           </div>
+          <div data-modal-root>${this.renderModals()}</div>
         </div>
       `;
       this.updateDocumentTitle();
     }
 
+    // Unlike the Aktualności dot, this has no "seen" state to persist — it's
+    // just a live reflection of whether any due is currently outstanding, so
+    // it disappears on its own once everything is paid off. Always on, not a
+    // toggle in Ustawienia.
+    hasUnpaidPayments() {
+      const unpaid = this.data.paymentsResult && this.data.paymentsResult.unpaid;
+      return !!(unpaid && unpaid.groups && unpaid.groups.some((g) => g.rows && g.rows.length > 0));
+    }
+
+    // Small "needs attention" dot per nav item id — factored out so both the
+    // top-level rows and the collapsed "Więcej" summary row (see
+    // renderSidebar) can ask the same question.
+    navItemDot(id) {
+      if (id === 'aktualnosci') return this.state.newsHasUpdate;
+      if (id === 'platnosci') return this.hasUnpaidPayments();
+      if (id === 'ankiety') return this.pendingSurveys.length > 0;
+      return false;
+    }
+
     renderSidebar() {
       const u = this.data.user || {};
       const initials = (u.name || '? ?').split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
+      const renderNavItem = (item, sub) => item.external ? `
+        <div class="usospp-nav-item${sub ? ' sub' : ''}" data-action="openUsos" data-url="${esc(location.origin)}/${item.external}" title="Otwiera klasyczny USOS w nowej karcie">
+          ${icon(item.icon)}<span>${esc(item.label)}</span>
+        </div>
+      ` : `
+        <div class="usospp-nav-item${sub ? ' sub' : ''}${this.isNavActive(item.id) ? ' active' : ''}" data-action="nav" data-view="${item.id}">
+          ${icon(item.icon)}<span>${esc(item.label)}</span>
+          ${this.navItemDot(item.id) ? '<span class="usospp-nav-dot"></span>' : ''}
+        </div>
+      `;
+      // Three states, independent of each other: fully expanded shows every
+      // item (moreExpanded); collapsed-but-something-inside-is-active shows
+      // just that one row, so you never lose track of where you are; fully
+      // collapsed (not expanded, nothing active inside) shows nothing.
+      // moreOpen only ever means "fully expanded" — it does NOT auto-force
+      // itself open just because the active view happens to live in here,
+      // otherwise there'd be no way to collapse it back while still on one
+      // of its pages.
+      const moreOpen = this.state.moreExpanded;
+      const activeMoreItem = MORE_NAV_ITEMS.find((item) => item.id === this.state.view);
+      const moreActive = !!activeMoreItem;
+      const moreHasDot = !moreOpen && !activeMoreItem && MORE_NAV_ITEMS.some((item) => this.navItemDot(item.id));
+      const moreChildren = moreOpen
+        ? MORE_NAV_ITEMS.map((item) => renderNavItem(item, true)).join('')
+        : (activeMoreItem ? renderNavItem(activeMoreItem, true) : '');
       return `
         <aside class="usospp-sidebar" data-sidebar-root>
           <div class="usospp-brand">
@@ -947,12 +1625,15 @@
             <div class="usospp-brand-text">USOS<span>++</span></div>
           </div>
           <nav class="usospp-nav">
-            ${NAV_ITEMS.map((item) => `
-              <div class="usospp-nav-item${this.isNavActive(item.id) ? ' active' : ''}" data-action="nav" data-view="${item.id}">
-                ${icon(item.icon)}<span>${esc(item.label)}</span>
-                ${item.id === 'aktualnosci' && this.state.newsHasUpdate ? '<span class="usospp-nav-dot"></span>' : ''}
+            ${NAV_ITEMS.map((item) => renderNavItem(item, false)).join('')}
+            <div class="usospp-nav-item${moreActive ? ' active' : ''}" data-action="toggleMore">
+              ${icon('more')}<span>Więcej</span>
+              <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                ${moreHasDot ? '<span style="width:7px;height:7px;border-radius:50%;background:#d9773a;flex-shrink:0;"></span>' : ''}
+                <span class="usospp-nav-chevron${moreOpen ? ' open' : ''}">${icon('chevron', 12)}</span>
               </div>
-            `).join('')}
+            </div>
+            ${moreChildren}
           </nav>
           <div class="usospp-spacer"></div>
           <div class="usospp-user-card" data-action="nav" data-view="ustawienia" title="Ustawienia">
@@ -980,6 +1661,9 @@
       if (this.state.view === 'subjectPage' && this.state.subjectData) {
         title = this.state.subjectData.subjectName || title;
       }
+      if (this.state.view === 'catalogPage' && this.state.catalogData) {
+        title = this.state.catalogData.name || this.state.catalogData.label || title;
+      }
       const u = this.data.user || {};
       const initials = (u.name || '? ?').split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
       return `
@@ -989,6 +1673,17 @@
             <div class="usospp-subtitle">${esc(subtitle)}</div>
           </div>
           <div class="usospp-topbar-actions">
+            <div class="usospp-search-wrap">
+              <input
+                class="usospp-search-input"
+                data-action="searchInput"
+                data-search-input
+                type="text"
+                placeholder="Szukaj przedmiotu, jednostki, programu studiów…"
+                value="${esc(this.state.searchQuery)}"
+              >
+              <div data-search-results-root>${this.renderSearchResults()}</div>
+            </div>
             <div class="usospp-menu-wrap">
               <button class="usospp-icon-btn" data-action="toggleNotifPanel" title="Powiadomienia">${icon('bell', 17)}</button>
               ${this.state.notifPanelOpen ? `
@@ -1039,6 +1734,58 @@
       `;
     }
 
+    // Topbar search dropdown — see scraping.js's searchCatalog. Osoby
+    // (people) search isn't included here: it's the one Katalog search that
+    // goes through USOSmail's same CSRF-walled internal proxy, so it stays
+    // out of scope the same way USOSmail itself did.
+    renderSearchResults() {
+      const q = this.state.searchQuery.trim();
+      if (q.length < 3) return '';
+      if (this.state.searchLoading) {
+        return `<div class="usospp-search-dropdown"><div class="usospp-empty-hint" style="padding:16px;">Szukanie…</div></div>`;
+      }
+      const r = this.state.searchResults;
+      if (!r) return '';
+      const total = r.subjects.length + r.units.length + r.programs.length;
+      if (total === 0) {
+        return `
+          <div class="usospp-search-dropdown">
+            <div class="usospp-empty-hint" style="padding:16px 16px 4px 16px;">Brak wyników dla „${esc(q)}”.</div>
+            <div class="usospp-empty-hint" style="padding:0 16px 16px 16px;">
+              Szukasz osoby? Wyszukiwanie osób nie jest tu dostępne —
+              <a data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=katalog2/osoby/index&usospp_off=1" style="font-weight:600;color:#d9773a;">sprawdź w klasycznym USOS →</a>
+            </div>
+          </div>
+        `;
+      }
+      const section = (title, items, render) => (items.length ? `
+        <div class="usospp-search-section-title">${esc(title)}</div>
+        ${items.map(render).join('')}
+      ` : '');
+      return `
+        <div class="usospp-search-dropdown">
+          ${section('Przedmioty', r.subjects.slice(0, 6), (subj) => `
+            <div class="usospp-search-item" data-action="searchOpenSubject" data-url="${esc(location.origin)}/kontroler.php?_action=katalog2/przedmioty/pokazPrzedmiot&prz_kod=${esc(subj.kod)}">
+              <div class="usospp-search-item-title">${esc(subj.nazwa)}</div>
+              <div class="usospp-search-item-sub">${esc(subj.jedn || '')}${subj.jedn ? ' · ' : ''}${esc(subj.kod)}</div>
+            </div>
+          `)}
+          ${section('Jednostki', r.units.slice(0, 6), (unit) => `
+            <div class="usospp-search-item" data-action="searchOpenUnit" data-kod="${esc(unit.kod)}">
+              <div class="usospp-search-item-title">${esc(unit.nazwa)}</div>
+              <div class="usospp-search-item-sub">${esc(unit.kod)}</div>
+            </div>
+          `)}
+          ${section('Programy studiów', r.programs.slice(0, 6), (prog) => `
+            <div class="usospp-search-item" data-action="searchOpenProgram" data-kod="${esc(prog.kod)}">
+              <div class="usospp-search-item-title">${esc(prog.desc)}</div>
+              <div class="usospp-search-item-sub">${esc(prog.kod)}</div>
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
     renderView() {
       switch (this.state.view) {
         case 'dashboard': return this.renderDashboard();
@@ -1051,8 +1798,18 @@
         case 'planer': return this.renderPlanner();
         case 'egzaminy': return this.renderEgzaminy();
         case 'ects': return this.renderEcts();
+        case 'platnosci': return this.renderPlatnosci();
+        case 'stypendia': return this.renderStypendia();
+        case 'sprawdziany': return this.renderSprawdziany();
+        case 'podania': return this.renderPodania();
+        case 'ankiety': return this.renderAnkiety();
         case 'ustawienia': return this.renderUstawienia();
         case 'subjectPage': return this.renderSubjectPage();
+        case 'catalogPage': {
+          if (this.state.catalogKind === 'unit') return this.renderUnitPage();
+          if (this.state.catalogKind === 'stage') return this.renderStagePage();
+          return this.renderProgramPage();
+        }
         default: return '';
       }
     }
@@ -1113,6 +1870,11 @@
     get stageSubjects() {
       const s = this.data.stageSubjectsResult || {};
       return Array.isArray(s.stages) ? s.stages : [];
+    }
+
+    get pendingSurveys() {
+      const s = this.data.surveysResult || {};
+      return Array.isArray(s.rows) ? s.rows : [];
     }
 
     // ---- views ---------------------------------------------------------
@@ -1369,11 +2131,156 @@
       `;
     }
 
+    // "Jednostki" search result — see adapter.getUnitDetail. Only the
+    // ancestor chain and direct children of the org hierarchy are shown
+    // (not the whole tree); staff/subject/programme listings for the unit
+    // stay a link-out for now rather than replicating those full pages too.
+    renderUnitPage() {
+      const s = this.state;
+      const header = backLink(s.catalogBackView || 'dashboard');
+      if (s.catalogLoading) {
+        return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie…</div></div></div>`;
+      }
+      if (s.catalogError || !s.catalogData) {
+        return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać danych jednostki.</div></div></div>`;
+      }
+      const d = s.catalogData;
+      return `
+        <div class="usospp-view">
+          ${header}
+          <div class="usospp-card">
+            ${d.ancestors.length ? `
+              <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:10px;">
+                ${d.ancestors.map((a) => `<span data-action="searchOpenUnit" data-kod="${esc(a.kod)}" style="text-decoration:underline;cursor:pointer;">${esc(a.name)}</span>`).join(' / ')}
+              </div>
+            ` : ''}
+            <div class="usospp-card-title" style="margin-bottom:14px;">${esc(d.name)}</div>
+            ${d.fields.length ? `
+              <div class="usospp-field-stack">
+                ${d.fields.map((f) => `
+                  <div class="usospp-list-row"><div style="color:var(--ink-3);font-size:13px;">${esc(f.label)}</div><div style="font-weight:600;font-size:13px;text-align:right;">${esc(f.value)}</div></div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+          ${d.children.length ? `
+            <div class="usospp-card">
+              <div class="usospp-card-title" style="margin-bottom:14px;">Jednostki podległe</div>
+              ${d.children.map((c) => `
+                <div class="usospp-list-row" data-action="searchOpenUnit" data-kod="${esc(c.kod)}" style="cursor:pointer;">
+                  <div style="font-size:13.5px;font-weight:500;">${esc(c.name)}</div>
+                  <div style="color:var(--ink-3);">→</div>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    // "Programy studiów" search result — see adapter.getProgramDetail.
+    // "Główne toki nauczania" stage links open our own stage subpage (see
+    // openStagePage/renderStagePage) instead of bouncing out to USOS.
+    renderProgramPage() {
+      const s = this.state;
+      const header = backLink(s.catalogBackView || 'dashboard');
+      if (s.catalogLoading) {
+        return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie…</div></div></div>`;
+      }
+      if (s.catalogError || !s.catalogData) {
+        return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać danych programu.</div></div></div>`;
+      }
+      const d = s.catalogData;
+      return `
+        <div class="usospp-view">
+          ${header}
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:14px;">${esc(d.name)}</div>
+            ${d.kierunki.length ? `
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;">
+                ${d.kierunki.map((k) => `<span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${esc(k)}</span>`).join('')}
+              </div>
+            ` : ''}
+            <div class="usospp-field-stack">
+              ${d.fields.map((f) => `
+                <div class="usospp-list-row"><div style="color:var(--ink-3);font-size:13px;">${esc(f.label)}</div><div style="font-weight:600;font-size:13px;text-align:right;">${esc(f.value)}</div></div>
+              `).join('')}
+            </div>
+          </div>
+          ${d.units.length ? `
+            <div class="usospp-card">
+              <div class="usospp-card-title" style="margin-bottom:14px;">Jednostki oferujące ten program</div>
+              ${d.units.map((u) => `
+                <div class="usospp-list-row" data-action="searchOpenUnit" data-kod="${esc(u.kod)}" style="cursor:pointer;">
+                  <div style="font-size:13.5px;font-weight:500;">${esc(u.name)}</div>
+                  <div style="color:var(--ink-3);">→</div>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${d.stages.length ? `
+            <div class="usospp-card">
+              <div class="usospp-card-title" style="margin-bottom:14px;">Główne toki nauczania</div>
+              ${d.stages.map((st) => `
+                <div class="usospp-list-row">
+                  <div style="font-size:13px;">${esc(st.label)}</div>
+                  <a data-action="openStage" data-prg-kod="${esc(st.prgKod)}" data-etp-kod="${esc(st.etpKod)}" data-label="${esc(st.label)}" style="font-size:12px;font-weight:600;color:#d9773a;cursor:pointer;">szczegóły →</a>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    // A single "semestr" opened from a program's "Główne toki nauczania" —
+    // reuses renderStageSubjectsCard verbatim (see the same card in
+    // renderPrzedmiotyLista, for the user's own programme). "Back" reopens
+    // the specific program this stage belongs to (catalogKod doubles as its
+    // prg_kod) rather than the generic catalogBackView, which points
+    // further back to wherever the program page itself was opened from.
+    renderStagePage() {
+      const s = this.state;
+      const header = `<a data-action="searchOpenProgram" data-kod="${esc(s.catalogKod)}" class="usospp-back-link">← Wróć</a>`;
+      if (s.catalogLoading) {
+        return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie…</div></div></div>`;
+      }
+      if (s.catalogError || !s.catalogData) {
+        return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać przedmiotów etapu.</div></div></div>`;
+      }
+      return `
+        <div class="usospp-view">
+          ${header}
+          ${this.renderStageSubjectsCard(s.catalogData)}
+        </div>
+      `;
+    }
+
+    // A field's link is usually just "open this in classic USOS" — except a
+    // link to a jednostka page, which we already have our own page for (see
+    // renderUnitPage), so that one gets routed there instead.
     renderSubjectField(f) {
+      // "Grupy:" and anything shaped like it can hold several links in one
+      // cell — showing them squashed together as unclickable text loses
+      // them, so this offers a pick-one modal instead.
+      if (f.links && f.links.length > 1) {
+        return `
+          <div class="usospp-list-row">
+            <div style="font-size:12.5px;color:var(--ink-2);">${esc(f.label)}</div>
+            <a data-action="openLinksModal" data-links='${esc(JSON.stringify(f.links))}' data-title="${esc(f.label)}" style="font-size:12.5px;font-weight:600;cursor:pointer;">${f.links.length} opcje →</a>
+          </div>
+        `;
+      }
+      let actionAttrs = `data-action="openUsos" data-url="${esc(f.link)}"`;
+      if (f.link && /pokazJednostke/.test(f.link)) {
+        let kod = null;
+        try { kod = new URL(f.link).searchParams.get('kod'); } catch (e) { /* fall back to openUsos */ }
+        if (kod) actionAttrs = `data-action="searchOpenUnit" data-kod="${esc(kod)}"`;
+      }
       return `
         <div class="usospp-list-row">
           <div style="font-size:12.5px;color:var(--ink-2);">${esc(f.label)}</div>
-          <div style="font-size:12.5px;font-weight:600;text-align:right;max-width:60%;">${f.link ? `<a data-action="openUsos" data-url="${esc(f.link)}">${esc(f.value)}</a>` : esc(f.value)}</div>
+          <div style="font-size:12.5px;font-weight:600;text-align:right;max-width:60%;">${f.link ? `<a ${actionAttrs} style="cursor:pointer;">${esc(f.value)}</a>` : esc(f.value)}</div>
         </div>
       `;
     }
@@ -1401,7 +2308,7 @@
             ${c.classTypes.map((ct) => `
               <div class="usospp-list-row">
                 <div style="font-size:13px;">${esc(ct.label)}</div>
-                ${ct.groupsUrl ? `<a data-action="openUsos" data-url="${esc(ct.groupsUrl)}" style="font-size:12px;font-weight:600;">grupy →</a>` : ''}
+                ${ct.groupsUrl ? `<a data-action="openGroupsModal" data-url="${esc(ct.groupsUrl)}" data-title="${esc(ct.label)}" style="font-size:12px;font-weight:600;cursor:pointer;">grupy →</a>` : ''}
               </div>
             `).join('')}
           ` : ''}
@@ -2006,6 +2913,99 @@
       `;
     }
 
+    // USOS spreads this across a hub + 5 sub-pages (należności nierozliczone
+    // / rozliczone, plany ratalne, wpłaty wszystkie / nierozliczone) plus a
+    // separate "konta bankowe" page under a different module entirely — see
+    // scraping.js's PATHS.platnosci* comment for why "rozliczone" specifically
+    // is folded away rather than shown as its own section here.
+    renderPlatnosci() {
+      const p = this.data.paymentsResult || {};
+      const unpaid = p.unpaid || { groups: [] };
+      const installments = p.installments || { groups: [] };
+      const payments = p.payments || { groups: [] };
+      const unsettled = p.unsettledPayments || { groups: [] };
+      const accounts = (p.bankAccounts && p.bankAccounts.accounts) || [];
+
+      return `
+        <div class="usospp-view">
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:14px;">Do zapłaty</div>
+            ${installments.groups.length ? `
+              <div class="usospp-notice">
+                <span>Masz należności czekające na wybór planu ratalnego.</span>
+                <a data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dodatki/platnosci/planyRatalne&usospp_off=1">Wybierz w USOS →</a>
+              </div>
+            ` : ''}
+            ${unpaid.groups.length === 0 ? `
+              <div class="usospp-empty-hint">Brak nierozliczonych należności — wszystko opłacone</div>
+            ` : unpaid.groups.map(renderPaymentGroup).join('')}
+            ${unpaid.grandTotal ? `<div style="font-size:12.5px;font-weight:600;text-align:right;">${esc(unpaid.grandTotal)}</div>` : ''}
+          </div>
+
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:14px;">Historia wpłat</div>
+            ${unsettled.groups.length ? `
+              <div class="usospp-notice">
+                <span>Część wpłat nie została jeszcze w pełni rozliczona z należnościami.</span>
+                <a data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dodatki/platnosci/wplatyNierozliczone&usospp_off=1">Otwórz w USOS →</a>
+              </div>
+            ` : ''}
+            ${payments.groups.length === 0 ? `
+              <div class="usospp-empty-hint">Brak zarejestrowanych wpłat.</div>
+            ` : payments.groups.map(renderPaymentGroup).join('')}
+            ${payments.grandTotal ? `<div style="font-size:12.5px;font-weight:600;text-align:right;">${esc(payments.grandTotal)}</div>` : ''}
+          </div>
+
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:14px;">Konta bankowe do wpłat</div>
+            ${accounts.length === 0 ? `
+              <div class="usospp-empty-hint">Nie udało się odczytać numerów kont z USOS.</div>
+            ` : accounts.map((a) => `
+              <div class="usospp-list-row" style="align-items:flex-start;">
+                <div>
+                  <div style="font-size:13.5px;font-weight:600;">${esc(a.label)}</div>
+                  <div style="font-size:13px;font-family:ui-monospace,monospace;margin-top:4px;">${esc(a.number)}</div>
+                  <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(a.bankName || '—')}${a.currency ? ` · ${esc(a.currency)}` : ''}</div>
+                </div>
+                ${a.blankietUrl ? `<a href="${esc(a.blankietUrl)}" target="_blank" rel="noopener" style="font-size:12.5px;font-weight:600;color:#d9773a;white-space:nowrap;flex-shrink:0;">blankiet →</a>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Shared shell for the four small "Moje studia" list pages — each is
+    // just adapter.genericInfoTable's rows in one card, or an empty hint.
+    renderInfoTableView(result, emptyText) {
+      const rows = (result && Array.isArray(result.rows)) ? result.rows : [];
+      return `
+        <div class="usospp-view">
+          <div class="usospp-card">
+            ${rows.length === 0
+              ? `<div class="usospp-empty-hint">${esc(emptyText)}</div>`
+              : rows.map(renderInfoTableRow).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    renderStypendia() {
+      return this.renderInfoTableView(this.data.scholarshipsResult, 'Brak informacji o otrzymywanych stypendiach.');
+    }
+
+    renderSprawdziany() {
+      return this.renderInfoTableView(this.data.testsResult, 'Nie jesteś zapisany na żadne zajęcia lub żaden z prowadzących nie zdefiniował elektronicznych zasad rozliczania swojego przedmiotu.');
+    }
+
+    renderPodania() {
+      return this.renderInfoTableView(this.data.petitionsResult, 'Brak złożonych podań.');
+    }
+
+    renderAnkiety() {
+      return this.renderInfoTableView(this.data.surveysResult, 'Brak ankiet do wypełnienia.');
+    }
+
     renderUstawienia() {
       const u = this.data.user || {};
       const f = this.settings.features || {};
@@ -2016,8 +3016,8 @@
         {
           label: 'Wymagają włączonego USOS++',
           keys: {
-            keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–8 do przełączania sekcji w USOS++'],
-            autorefresh: ['Automatyczne odświeżanie danych', 'Dane redesignu odświeżają się bez przeładowania strony'],
+            keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–9 do przełączania sekcji w USOS++'],
+            autorefresh: ['Automatyczne odświeżanie danych', 'Dane odświeżają się bez przeładowania strony'],
             gradeBadge: ['Odznaka średniej na ikonie', 'Aktualizuje się, gdy USOS++ jest włączony'],
           },
         },
@@ -2065,18 +3065,6 @@
             </div>
 
             <div style="display:flex;flex-direction:column;gap:20px;">
-              <div class="usospp-card">
-                <div class="usospp-card-title">Powiadomienia</div>
-                <p class="usospp-muted-text">Odczytywanie ogłoszeń i komunikatów z USOS jest w przygotowaniu. Poniżej możesz włączyć sprawdzanie nowych ocen w tle — powiadomimy Cię systemowym powiadomieniem Chrome, gdy pojawi się nowa ocena.</p>
-                <div class="usospp-list-row">
-                  <div>
-                    <div style="font-size:13.5px;font-weight:500;">Sprawdzanie nowych ocen w tle</div>
-                    <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">Co 15 minut, w oparciu o stronę „oceny”</div>
-                  </div>
-                  <div class="usospp-switch ${f.notif ? 'on' : ''}" data-action="toggleFeature" data-key="notif"><div class="usospp-switch-knob"></div></div>
-                </div>
-              </div>
-
               ${featureGroups.map((group) => `
                 <div class="usospp-card">
                   <div class="usospp-card-title" style="margin-bottom:16px;">${esc(group.label)}</div>

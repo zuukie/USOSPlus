@@ -30,6 +30,31 @@
     return box ? textOf(box) : null;
   }
 
+  // UNVERIFIED shared shape for four small "Moje studia" pages (stypendia,
+  // sprawdziany, podania, ankiety): each one is either an empty <info-box>
+  // ("brak ...") or — presumably, once there's something to show — a plain
+  // <table> with a header row. Confirmed live only against the *empty*
+  // state on all four (this account's semester just started, so there was
+  // nothing to check the populated markup against) — this generalizes the
+  // same thead-th / tbody-td row shape getPaymentGroups already uses
+  // elsewhere in this file, on the assumption USOSweb reuses its own table
+  // conventions here too. Re-verify against real rows once any of these
+  // pages actually has data.
+  function genericInfoTable(doc) {
+    const rows = [];
+    doc.querySelectorAll('table').forEach((table) => {
+      const headers = [...table.querySelectorAll('thead th')].map((th) => textOf(th) || '');
+      table.querySelectorAll('tbody tr').forEach((tr) => {
+        const cells = [...tr.querySelectorAll('td')];
+        const fields = {};
+        headers.forEach((label, i) => { if (label && cells[i]) fields[label] = textOf(cells[i]); });
+        const link = tr.querySelector('a[href]');
+        rows.push({ fields, detailsUrl: link ? link.href : null });
+      });
+    });
+    return { supported: true, verified: false, rows };
+  }
+
   function detectFooterVersion() {
     const row = document.querySelector('footer-row[icon="outlined.privacy_tip"]');
     const text = textOf(row) || '';
@@ -297,6 +322,276 @@
       return { supported: programmes.length > 0, verified: true, programmes };
     },
 
+    // Shared by every "Płatności" sub-page (naleznosciNierozliczone,
+    // naleznosciRozliczone, planyRatalne, wplatyWszystkie,
+    // wplatyNierozliczone — see scraping.js) — verified against real
+    // markup+data on naleznosciRozliczone and wplatyWszystkie: dues/payments
+    // are grouped per organizational unit, each group a <usos-frame> with a
+    // [slot="title"] ("Należności dla: X" / "Wpłaty dla: X") and a plain
+    // pre-JS-rendered <table> (DataTables only decorates it client-side —
+    // fetch()+DOMParser sees the table before that runs: thead labels, tbody
+    // rows, tfoot per-unit total). The other pages share this exact shape
+    // but only their empty state (a bare <success-box>, no frames at all)
+    // was actually observed on this account — reading column names straight
+    // from whatever <thead th> the page renders (instead of hardcoding
+    // positions) means this should still hold up once one of them has real
+    // rows, rather than being a guess at their layout.
+    getPaymentGroups(doc = document) {
+      const groups = [];
+      doc.querySelectorAll('usos-frame').forEach((frame) => {
+        const table = frame.querySelector('table');
+        if (!table) return;
+        const unitLabel = textOf(frame.querySelector('[slot="title"]'));
+        const headers = [...table.querySelectorAll('thead th')].map((th) => textOf(th) || '');
+        const rows = [...table.querySelectorAll('tbody tr')].map((tr) => {
+          const cells = [...tr.querySelectorAll('td')];
+          const fields = {};
+          headers.forEach((label, i) => {
+            if (label && cells[i]) fields[label] = textOf(cells[i]);
+          });
+          const link = tr.querySelector('a[href]');
+          return { fields, detailsUrl: link ? link.href : null };
+        });
+        const footRow = table.querySelector('tfoot tr');
+        groups.push({ unitLabel, rows, total: footRow ? textOf(footRow) : null });
+      });
+      // The page-wide grand total ("Wszystkie należności: X PLN" / "Wszystkie
+      // wpłaty: X PLN") sits as its own <info-box> after the last frame —
+      // distinguished from the page's INTRO info-box (which comes before any
+      // frame and doesn't start with "Wszystkie") by content, not position.
+      const grandTotalBox = [...doc.querySelectorAll('info-box')].find((box) => /^Wszystkie/i.test(textOf(box) || ''));
+      return { supported: true, verified: true, groups, grandTotal: grandTotalBox ? textOf(grandTotalBox) : null };
+    },
+
+    // Verified live (2026-09-14): empty account renders a single <info-box>
+    // "Brak informacji o otrzymywanych stypendiach." and no table at all —
+    // see genericInfoTable's comment for why the populated-row shape below
+    // is a best guess, not confirmed.
+    getScholarships(doc = document) {
+      return genericInfoTable(doc);
+    },
+
+    // Verified live (2026-09-14): empty account (no lecturer has published
+    // electronic grading rules yet) renders a single <info-box> and no
+    // table. See genericInfoTable's comment.
+    getTests(doc = document) {
+      return genericInfoTable(doc);
+    },
+
+    // Verified live (2026-09-14): with zero submitted petitions, the page
+    // renders no table AND no "brak" message at all — just the three static
+    // instruction paragraphs. genericInfoTable naturally returns an empty
+    // rows array in that case, same as it would for an empty <info-box>
+    // page, so no special-casing needed here.
+    getPetitions(doc = document) {
+      return genericInfoTable(doc);
+    },
+
+    // Verified live (2026-09-14): empty account renders a single <info-box>
+    // "Brak ankiet do wypełnienia" and no table. See genericInfoTable's
+    // comment.
+    getSurveys(doc = document) {
+      return genericInfoTable(doc);
+    },
+
+    // Verified against real markup+data at .../dodatki/platnosci_fk/kontaBankowe
+    // — a single <table class="grey"> with a bold "headnote" row ("Twoje
+    // konta wirtualne"), a header row, then one row per virtual account
+    // (Opis / Waluta / Numer konta / link to a downloadable "blankiet
+    // wpłaty" PDF). The account-number cell bundles the bank name in a
+    // trailing "(...)" — split off here so the number renders cleanly on
+    // its own.
+    getBankAccounts(doc = document) {
+      const table = doc.querySelector('table.grey');
+      if (!table) return { supported: false, verified: false, accounts: [] };
+      const rows = [...table.querySelectorAll('tr')].filter((tr) => !tr.classList.contains('headnote') && tr.querySelector('td'));
+      const accounts = rows.map((tr) => {
+        const cells = [...tr.querySelectorAll('td')];
+        if (cells.length < 3) return null;
+        const label = textOf(cells[0]);
+        const currency = textOf(cells[1]);
+        const raw = textOf(cells[2]) || '';
+        const m = raw.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+        const link = cells[3] ? cells[3].querySelector('a') : null;
+        return {
+          label,
+          currency,
+          number: m ? m[1] : raw,
+          bankName: m ? m[2] : null,
+          blankietUrl: link ? link.href : null,
+        };
+      }).filter(Boolean);
+      return { supported: accounts.length > 0, verified: true, accounts };
+    },
+
+    // Verified against real markup+data at .../dodatki/platnosci/szczegoly
+    // ?id=<...>&typ=<rata|wplata> — the "szczegóły" link on every row from
+    // getPaymentGroups. Two kinds of <usos-frame> here: "Informacje ogólne"
+    // holds a label/value CSS-grid (children alternate label div, value div
+    // — not a table), the rest ("Szczegóły rozliczenia" for a wpłata; a due
+    // presumably has an equivalent) hold a plain table. Only the "typ=wplata"
+    // shape was actually observed (this account has no unpaid "typ=rata"
+    // dues to click into) — read generically off whichever shape each frame
+    // actually has rather than assuming a fixed set of frames, so it isn't a
+    // guess specific to one type.
+    getPaymentDetails(doc = document) {
+      const generalInfo = [];
+      const tables = [];
+      doc.querySelectorAll('usos-frame').forEach((frame) => {
+        const titleEl = frame.querySelector('[slot="title"]');
+        let title = null;
+        if (titleEl) {
+          const clone = titleEl.cloneNode(true);
+          clone.querySelectorAll('usos-tooltip').forEach((t) => t.remove());
+          title = textOf(clone);
+        }
+
+        const grid = frame.querySelector(':scope > div');
+        const table = frame.querySelector('table');
+        if (grid && !table) {
+          const cells = [...grid.children];
+          for (let i = 0; i + 1 < cells.length; i += 2) {
+            const label = (textOf(cells[i]) || '').replace(/:$/, '');
+            const value = textOf(cells[i + 1]);
+            if (label) generalInfo.push({ label, value });
+          }
+          return;
+        }
+        if (table) {
+          const headers = [...table.querySelectorAll('thead th')].map((th) => (textOf(th) || '').replace(/:$/, ''));
+          const rows = [...table.querySelectorAll('tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => textOf(td) || ''));
+          const footRow = table.querySelector('tfoot tr');
+          tables.push({ title, headers, rows, footer: footRow ? textOf(footRow) : null });
+        }
+      });
+      return { supported: generalInfo.length > 0 || tables.length > 0, verified: true, generalInfo, tables };
+    },
+
+    // Verified against real markup+data at .../katalog2/jednostki/pokazJednostke
+    // ?kod=<...> — the organizational-unit page a "Jednostki" search result
+    // opens. The hierarchy renders as one big, fully nested <ul>/<li> tree
+    // (every ancestor AND every descendant at every level, each row a
+    // <table class="local-treeitem">) with the CURRENT node the only one
+    // rendered as plain <b> text instead of a link. Walking the *whole* tree
+    // isn't useful for a single unit page, so this only pulls out the
+    // ancestor chain (breadcrumb) and the current node's direct children.
+    getUnitDetail(doc = document) {
+      const name = textOf(doc.querySelector('main h1, .uwb-imgcover-title h1'));
+
+      // Basic info ("Kod jednostki", "Nazwa w języku angielskim"…) isn't a
+      // table here — it's label/value <div> pairs inside .uwb-side-defs.
+      const fields = [];
+      doc.querySelectorAll('.uwb-side-defs > .uwb-clearfix').forEach((row) => {
+        const cells = row.children;
+        if (cells.length < 2) return;
+        const label = textOf(cells[0]);
+        const value = textOf(cells[1]);
+        if (label && value) fields.push({ label, value });
+      });
+
+      function kodFromHref(href) {
+        try { return new URL(href).searchParams.get('kod'); } catch (e) { return null; }
+      }
+      // Each .local-treeitem row actually has TWO <a> tags to the same
+      // target — one wrapping just a decorative <img> (empty text), one
+      // wrapping the real name — so picking the first link would silently
+      // grab the empty one.
+      function textLink(table) {
+        const links = [...table.querySelectorAll('a')];
+        return links.find((a) => textOf(a)) || links[0] || null;
+      }
+
+      const currentBold = doc.querySelector('.local-factree .local-treeitem b');
+      const ancestors = [];
+      const children = [];
+      if (currentBold) {
+        const currentLi = currentBold.closest('li');
+        let ancestorLi = currentLi ? currentLi.parentElement.closest('li') : null;
+        while (ancestorLi) {
+          const table = ancestorLi.querySelector(':scope > table.local-treeitem');
+          const link = table ? textLink(table) : null;
+          const kod = link ? kodFromHref(link.href) : null;
+          if (kod) ancestors.unshift({ kod, name: textOf(link) });
+          ancestorLi = ancestorLi.parentElement.closest('li');
+        }
+
+        const childList = currentLi ? currentLi.querySelector(':scope > ul') : null;
+        if (childList) {
+          childList.querySelectorAll(':scope > li > table.local-treeitem').forEach((table) => {
+            const link = textLink(table);
+            const kod = link ? kodFromHref(link.href) : null;
+            if (kod) children.push({ kod, name: textOf(link) });
+          });
+        }
+      }
+
+      return { supported: !!name, verified: true, name, fields, ancestors, children };
+    },
+
+    // Verified against real markup+data at .../katalog2/programy/pokazProgram
+    // ?kod=<...> — the program-instance page a "Programy studiów" search
+    // result opens (distinct from a "kierunek" page, which groups several
+    // programs together and isn't scraped here). The "Główne toki nauczania"
+    // flowchart links straight to pokazEtapProgramu — the exact page
+    // PATHS.stageSubjects/getStageSubjects already handle for the logged-in
+    // user's own programmes — so this just harvests the same {prg_kod,
+    // etp_kod} pairs from this page's own flowchart instead.
+    getProgramDetail(doc = document) {
+      const name = textOf(doc.querySelector('main h1'));
+
+      function cellText(cell) {
+        const clone = cell.cloneNode(true);
+        clone.querySelectorAll('usos-tooltip, script').forEach((t) => t.remove());
+        return textOf(clone);
+      }
+
+      const infoFrame = [...doc.querySelectorAll('usos-frame')].find((f) => {
+        const h = f.querySelector('[slot="title"]');
+        return h && /Informacje o programie/i.test(textOf(h) || '');
+      });
+
+      const fields = [];
+      const kierunki = [];
+      const units = [];
+      if (infoFrame) {
+        infoFrame.querySelectorAll('tbody > tr').forEach((tr) => {
+          const cells = tr.querySelectorAll('td');
+          if (cells.length < 2) return;
+          const label = (cellText(cells[0]) || '').replace(/:$/, '');
+          if (/^Kierunki do/i.test(label)) return; // "kierunki do wyboru" — usually empty, not worth a field
+          if (/^Kierunki$/i.test(label)) {
+            cells[1].querySelectorAll('a').forEach((a) => {
+              const text = textOf(a);
+              if (text && !kierunki.includes(text)) kierunki.push(text);
+            });
+            return;
+          }
+          if (/^Jednostki$/i.test(label)) {
+            cells[1].querySelectorAll('a[href*="pokazJednostke"]').forEach((a) => {
+              let kod = null;
+              try { kod = new URL(a.href).searchParams.get('kod'); } catch (e) { /* skip */ }
+              if (kod) units.push({ kod, name: textOf(a) });
+            });
+            return;
+          }
+          const value = cellText(cells[1]);
+          if (label && value) fields.push({ label, value });
+        });
+      }
+
+      const stages = [];
+      doc.querySelectorAll('a[href*="pokazEtapProgramu"]').forEach((a) => {
+        let url;
+        try { url = new URL(a.href); } catch (e) { return; }
+        const prgKod = url.searchParams.get('prg_kod');
+        const etpKod = url.searchParams.get('etp_kod');
+        if (!prgKod || !etpKod) return;
+        stages.push({ prgKod, etpKod, label: textOf(a) });
+      });
+
+      return { supported: !!name, verified: true, name, fields, kierunki, units, stages };
+    },
+
     // Verified against real markup at .../news/default (also the site's own
     // landing page once logged in). Announcements render as a flat sequence
     // of siblings inside a <div class="wrtext">: each one's heading is a
@@ -435,8 +730,15 @@
           if (!label) return;
           const value = cellText(cells[1]);
           if (!value) return;
-          const links = cells[1].querySelectorAll('a');
-          fields.push({ label, value, link: links.length === 1 ? links[0].href : null });
+          // Most fields have zero or one link (e.g. "Jednostka:"), kept as
+          // `link` for existing callers. "Grupy:" is the one field that can
+          // hold several <br>-separated links to different curriculum
+          // groups — those all land in `links` too, so a caller that wants
+          // them doesn't have to fall back to `value`'s squashed, separator-
+          // less concatenation of every link's text run together.
+          const anchors = [...cells[1].querySelectorAll('a')];
+          const links = anchors.map((a) => ({ label: textOf(a), href: a.href })).filter((l) => l.label);
+          fields.push({ label, value, link: anchors.length === 1 ? anchors[0].href : null, links });
         });
         return fields;
       }
@@ -690,6 +992,15 @@
     getRegistrationRounds() { return { supported: false, verified: false, groups: [] }; },
     getOwnProgrammes() { return { supported: false, verified: false, programmes: [] }; },
     getNews() { return { supported: false, verified: false, items: [] }; },
+    getPaymentGroups() { return { supported: false, verified: false, groups: [], grandTotal: null }; },
+    getBankAccounts() { return { supported: false, verified: false, accounts: [] }; },
+    getPaymentDetails() { return { supported: false, verified: false, generalInfo: [], tables: [] }; },
+    getScholarships() { return { supported: false, verified: false, rows: [] }; },
+    getTests() { return { supported: false, verified: false, rows: [] }; },
+    getPetitions() { return { supported: false, verified: false, rows: [] }; },
+    getSurveys() { return { supported: false, verified: false, rows: [] }; },
+    getUnitDetail() { return { supported: false, verified: false, name: null, fields: [], ancestors: [], children: [] }; },
+    getProgramDetail() { return { supported: false, verified: false, name: null, fields: [], kierunki: [], units: [], stages: [] }; },
     getStageSubjects() { return { supported: false, verified: false, sections: [] }; },
     getSubjectPage() { return { supported: false, verified: false, generalInfo: [], cycles: [] }; },
     getSubjectTimetable() { return { supported: false, verified: false, hourStart: null, hourEnd: null, days: [] }; },

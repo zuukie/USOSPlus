@@ -6,8 +6,8 @@ const FEATURE_GROUPS = [
   {
     label: 'Wymagają włączonego USOS++',
     keys: {
-      keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–8 do przełączania sekcji w USOS++'],
-      autorefresh: ['Automatyczne odświeżanie danych', 'Dane redesignu odświeżają się bez przeładowania strony'],
+      keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–9 do przełączania sekcji w USOS++'],
+      autorefresh: ['Automatyczne odświeżanie danych', 'Dane odświeżają się bez przeładowania strony'],
       gradeBadge: ['Odznaka średniej na ikonie', 'Aktualizuje się, gdy USOS++ jest włączony'],
     },
   },
@@ -15,7 +15,7 @@ const FEATURE_GROUPS = [
     label: 'Działają niezależnie od USOS++',
     keys: {
       quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, gdy USOS++ jest wyłączony'],
-      notif: ['Sprawdzanie nowych ocen w tle', 'Działa zawsze, co 15 minut, niezależnie od trybu'],
+      classicWidgets: ['Widżety na stronach klasycznych', 'Średnia w Ocenach, zaległości w Płatnościach, licznik zajęć w Planie i podsumowanie w Mój USOSweb'],
     },
   },
 ];

@@ -8,10 +8,10 @@ export const DEFAULT_STATE = {
   darkMode: false,
   features: {
     quickbar: true,
-    notif: true,
     autorefresh: false,
     gradeBadge: true,
     keyboardNav: false,
+    classicWidgets: true,
   },
 };
 
@@ -24,12 +24,15 @@ export async function getState() {
   };
 }
 
+// `partial` may be a plain object or an updater `(current) => partialObject`,
+// mirroring content/state-bridge.js's setState.
 export async function setState(partial) {
   const current = await getState();
+  const resolved = typeof partial === 'function' ? partial(current) : partial;
   const next = {
     ...current,
-    ...partial,
-    features: { ...current.features, ...(partial.features || {}) },
+    ...resolved,
+    features: { ...current.features, ...(resolved.features || {}) },
   };
   await chrome.storage.sync.set(next);
   return next;

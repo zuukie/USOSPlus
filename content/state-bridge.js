@@ -7,10 +7,10 @@
     darkMode: false,
     features: {
       quickbar: true,
-      notif: true,
       autorefresh: false,
       gradeBadge: true,
       keyboardNav: false,
+      classicWidgets: true,
     },
   };
 
@@ -23,12 +23,16 @@
     };
   }
 
+  // `partial` may be a plain object or an updater `(current) => partialObject`
+  // — inject.js's toggleFeature handler needs the updater form to flip a
+  // flag off the freshly-read state instead of a stale closed-over value.
   async function setState(partial) {
     const current = await getState();
+    const resolved = typeof partial === 'function' ? partial(current) : partial;
     const next = {
       ...current,
-      ...partial,
-      features: { ...current.features, ...(partial.features || {}) },
+      ...resolved,
+      features: { ...current.features, ...(resolved.features || {}) },
     };
     await chrome.storage.sync.set(next);
     return next;

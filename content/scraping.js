@@ -22,6 +22,18 @@
     // sibling .title-wrapper-section / plain content divs inside .wrtext
     // (see adapter.getNews).
     news: 'kontroler.php?_action=news/default',
+    // Płatności — one nav view merges what USOS spreads across five
+    // sub-pages plus a hub. "należności rozliczone" (settled dues) is
+    // deliberately left out: for a student, "was this paid" is already
+    // answered by the payments list below, so keeping both would just be
+    // the same 22 PLN shown twice from two sides of the same transaction.
+    platnosciNierozliczone: 'kontroler.php?_action=dodatki/platnosci/naleznosciNierozliczone',
+    platnosciPlanyRatalne: 'kontroler.php?_action=dodatki/platnosci/planyRatalne',
+    platnosciWplaty: 'kontroler.php?_action=dodatki/platnosci/wplatyWszystkie',
+    platnosciWplatyNierozliczone: 'kontroler.php?_action=dodatki/platnosci/wplatyNierozliczone',
+    // Different module prefix (platnosci_fk, not platnosci) — verified live,
+    // this isn't a guessable sibling path.
+    platnosciKontaBankowe: 'kontroler.php?_action=dodatki/platnosci_fk/kontaBankowe',
     // Personalized hub listing the student's own programme stage(s) (see
     // adapter.getOwnProgrammes) — used to filter the faculty-wide
     // registration calendar down to just this student's kierunek.
@@ -39,7 +51,85 @@
     stageSubjects(prgKod, etpKod) {
       return `kontroler.php?_action=katalog2/programy/pokazEtapProgramu&prg_kod=${encodeURIComponent(prgKod)}&etp_kod=${encodeURIComponent(etpKod)}`;
     },
+    // Topbar search (see searchCatalog below). These are the SAME plain,
+    // session-cookie-authenticated JSON endpoints the classic Katalog
+    // autocomplete boxes call directly from the browser (verified live) —
+    // unlike USOSmail's history/compose widgets, there's no CSRF wall and no
+    // "don't use this as an API" notice here, so this is fair game under the
+    // same "read what the logged-in user can already see" rule as
+    // everything else in this file, just JSON instead of HTML.
+    // The classic UI actually has two separate boxes for this — one search-
+    // param per field, both hitting the same endpoint (verified live:
+    // _pattern matches on name and returns nothing for an exact code;
+    // _prz_kod_pattern is the other way around) — searchCatalog below fires
+    // both and merges them so one search box covers what USOS itself splits
+    // into "po nazwie" / "po kodzie".
+    searchSubjects(pattern) {
+      return `kontroler.php?_action=jsonQueries/jsonSzukajPrzedmiotu&_pattern=${encodeURIComponent(pattern)}`;
+    },
+    searchSubjectsByCode(pattern) {
+      return `kontroler.php?_action=jsonQueries/jsonSzukajPrzedmiotu&_prz_kod_pattern=${encodeURIComponent(pattern)}`;
+    },
+    searchUnits(pattern) {
+      return `kontroler.php?_action=jsonQueries/jsonSzukajJednostki&_pattern=${encodeURIComponent(pattern)}`;
+    },
+    searchPrograms(pattern) {
+      return `kontroler.php?_action=jsonQueries/jsonSzukajProgramu&_pattern=${encodeURIComponent(pattern)}`;
+    },
+    // Detail pages for a search result — see adapter.getUnitDetail /
+    // getProgramDetail.
+    unitDetail(kod) {
+      return `kontroler.php?_action=katalog2/jednostki/pokazJednostke&kod=${encodeURIComponent(kod)}`;
+    },
+    programDetail(kod) {
+      return `kontroler.php?_action=katalog2/programy/pokazProgram&kod=${encodeURIComponent(kod)}`;
+    },
+    // Four small "Moje studia" pages, all verified live against an empty
+    // account (semester just started — no scholarship decisions, checkpoint
+    // rules, petitions or open surveys yet): each one renders either a plain
+    // <info-box> "brak ..." message or (podania) nothing at all when there's
+    // nothing to show. None of them had real rows to check the "has data"
+    // markup against — see adapter.genericInfoTable's comment.
+    stypendia: 'kontroler.php?_action=dla_stud/studia/stypendia/stypendia',
+    sprawdziany: 'kontroler.php?_action=dla_stud/studia/sprawdziany/index',
+    podania: 'kontroler.php?_action=dla_stud/studia/podania/listaZlozonych',
+    ankiety: 'kontroler.php?_action=dla_stud/studia/ankiety/index',
   };
+
+  async function fetchJson(path) {
+    try {
+      const res = await fetch(path, { credentials: 'same-origin' });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Same min-search-length (3) the classic <usos-selector> autocomplete
+  // widgets use — querying shorter patterns is just noise USOS itself
+  // wouldn't bother sending either.
+  async function searchCatalog(query) {
+    const pattern = (query || '').trim();
+    if (pattern.length < 3) return { subjects: [], units: [], programs: [] };
+    const [subjectsByName, subjectsByCode, unitsJson, programsJson] = await Promise.all([
+      fetchJson(PATHS.searchSubjects(pattern)),
+      fetchJson(PATHS.searchSubjectsByCode(pattern)),
+      fetchJson(PATHS.searchUnits(pattern)),
+      fetchJson(PATHS.searchPrograms(pattern)),
+    ]);
+    // Merge by kod — a code query can occasionally also turn up in the
+    // name results (or vice versa), and the two sets shouldn't show the
+    // same subject twice.
+    const subjectsByKod = new Map();
+    (subjectsByName && subjectsByName.wyniki ? Object.values(subjectsByName.wyniki) : []).forEach((s) => subjectsByKod.set(s.kod, s));
+    (subjectsByCode && subjectsByCode.wyniki ? Object.values(subjectsByCode.wyniki) : []).forEach((s) => subjectsByKod.set(s.kod, s));
+    return {
+      subjects: [...subjectsByKod.values()],
+      units: unitsJson && unitsJson.wyniki ? Object.values(unitsJson.wyniki) : [],
+      programs: programsJson && programsJson.wyniki ? Object.values(programsJson.wyniki) : [],
+    };
+  }
 
   async function fetchDoc(path) {
     try {
@@ -91,13 +181,26 @@
   }
 
   async function collectAll(adapter) {
-    const [homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc] = await Promise.all([
+    const [
+      homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc,
+      platnosciNierozDoc, planyRatalneDoc, wplatyDoc, wplatyNierozDoc, kontaBankoweDoc,
+      stypendiaDoc, sprawdzianyDoc, podaniaDoc, ankietyDoc,
+    ] = await Promise.all([
       fetchDoc(PATHS.home),
       fetchDoc(PATHS.zaliczenia),
       fetchDoc(PATHS.oceny),
       fetchDoc(PATHS.plan),
       fetchDoc(PATHS.zapisyHub),
       fetchDoc(PATHS.news),
+      fetchDoc(PATHS.platnosciNierozliczone),
+      fetchDoc(PATHS.platnosciPlanyRatalne),
+      fetchDoc(PATHS.platnosciWplaty),
+      fetchDoc(PATHS.platnosciWplatyNierozliczone),
+      fetchDoc(PATHS.platnosciKontaBankowe),
+      fetchDoc(PATHS.stypendia),
+      fetchDoc(PATHS.sprawdziany),
+      fetchDoc(PATHS.podania),
+      fetchDoc(PATHS.ankiety),
     ]);
 
     // Prefer the fetched home page (has the album/faculty info panel); fall
@@ -119,6 +222,17 @@
     const newsResult = newsDoc
       ? adapter.getNews(newsDoc)
       : { supported: false, verified: false, items: [] };
+
+    const EMPTY_GROUPS = { supported: false, verified: false, groups: [], grandTotal: null };
+    const paymentsResult = {
+      supported: !!(platnosciNierozDoc || wplatyDoc),
+      verified: true,
+      unpaid: platnosciNierozDoc ? adapter.getPaymentGroups(platnosciNierozDoc) : EMPTY_GROUPS,
+      installments: planyRatalneDoc ? adapter.getPaymentGroups(planyRatalneDoc) : EMPTY_GROUPS,
+      payments: wplatyDoc ? adapter.getPaymentGroups(wplatyDoc) : EMPTY_GROUPS,
+      unsettledPayments: wplatyNierozDoc ? adapter.getPaymentGroups(wplatyNierozDoc) : EMPTY_GROUPS,
+      bankAccounts: kontaBankoweDoc ? adapter.getBankAccounts(kontaBankoweDoc) : { supported: false, verified: false, accounts: [] },
+    };
 
     let examsResult = { supported: false, verified: false, exams: [] };
     try {
@@ -157,8 +271,25 @@
       }
     }
 
-    return { user, etapyResult, gradesResult, planResult, examsResult, registrationsResult, ownProgrammesResult, stageSubjectsResult, newsResult };
+    const scholarshipsResult = stypendiaDoc
+      ? adapter.getScholarships(stypendiaDoc)
+      : { supported: false, verified: false, rows: [] };
+    const testsResult = sprawdzianyDoc
+      ? adapter.getTests(sprawdzianyDoc)
+      : { supported: false, verified: false, rows: [] };
+    const petitionsResult = podaniaDoc
+      ? adapter.getPetitions(podaniaDoc)
+      : { supported: false, verified: false, rows: [] };
+    const surveysResult = ankietyDoc
+      ? adapter.getSurveys(ankietyDoc)
+      : { supported: false, verified: false, rows: [] };
+
+    return {
+      user, etapyResult, gradesResult, planResult, examsResult, registrationsResult,
+      ownProgrammesResult, stageSubjectsResult, newsResult, paymentsResult,
+      scholarshipsResult, testsResult, petitionsResult, surveysResult,
+    };
   }
 
-  window.USOSPP_SCRAPE = { collectAll, fetchDoc, PATHS };
+  window.USOSPP_SCRAPE = { collectAll, fetchDoc, PATHS, searchCatalog };
 })();
