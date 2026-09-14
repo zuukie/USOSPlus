@@ -30,6 +30,18 @@
     return box ? textOf(box) : null;
   }
 
+  // Biweekly ("co drugi tydzień") classes render their parity as plain text
+  // right next to the day/time — e.g. "co drugi czwartek (nieparzyste),
+  // 11:15 - 13:00" on a groups list, or "co drugi wtorek (parzyste), 7:30 -
+  // 9:00" in a subject's own full plan (both verified live, 2026-09-14, on
+  // a real biweekly subject: 08IZZ0-25S101O00121G). A weekly class's text
+  // has no such parenthetical at all ("każdy poniedziałek, ...") — absence
+  // of a match here is exactly "every week", not "unknown".
+  function parseWeeksParity(text) {
+    const m = (text || '').match(/\((nie)?parzyste\)/i);
+    return m ? (m[1] ? 'odd' : 'even') : 'every';
+  }
+
   // UNVERIFIED shared shape for four small "Moje studia" pages (stypendia,
   // sprawdziany, podania, ankiety): each one is either an empty <info-box>
   // ("brak ...") or — presumably, once there's something to show — a plain
@@ -716,6 +728,13 @@
         return fields;
       }
 
+      // Unlike getSubjectTimetable's full per-subject plan (a separate page,
+      // see below), this mini widget's entries carry no parity/frequency
+      // text at all — verified live: a real <timetable-entry> here has only
+      // `style` (rounded grid position) and a one-letter [slot="info"], no
+      // dialog-event or equivalent. A biweekly class can't be distinguished
+      // from a weekly one here; that only shows up once you follow "Przejdź
+      // do planu" into the full timetable below.
       function parseTimetable(tt) {
         const hourStart = parseInt(tt.getAttribute('start'), 10);
         const hourEnd = parseInt(tt.getAttribute('end'), 10);
@@ -870,7 +889,8 @@
           const place = (textOf(entry.querySelector('[slot="dialog-place"]')) || '')
             .replace(/\bbudynek:\s*/i, '')
             .replace(/\[([^\]]+)\]\s*\[\1\]/, '[$1]') || null;
-          return { label, teacher, place, start, end };
+          const weeks = parseWeeksParity(eventText);
+          return { label, teacher, place, start, end, weeks };
         });
         if (entries.length) days.push({ day: textOf(dayLabelEl), entries });
       });
@@ -928,6 +948,7 @@
               start: `${m[2].padStart(2, '0')}:${m[3]}`,
               end: `${m[4].padStart(2, '0')}:${m[5]}`,
               place: place || null,
+              weeks: parseWeeksParity(text),
             };
           })
           .filter(Boolean);

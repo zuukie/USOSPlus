@@ -30,6 +30,7 @@ const MODULE_FILES = {
       'usos/planner-store.js',
       'usos/adapters.js',
       'usos/scraping.js',
+      'usos/generator.js',
       'usos/app.js',
       'usos/inject.js',
     ],

@@ -79,9 +79,14 @@
     showNative();
   }
 
+  // Same whole-extension kill switch as usos/inject.js's applyState — see
+  // its comment. `irkEnabled` in storage is left untouched when the plugin
+  // is off, so re-enabling it restores whatever was on before.
   async function applyState(settings) {
     currentSettings = settings;
-    if (settings.irkEnabled) {
+    const active = settings.pluginEnabled !== false;
+    const irkOn = active && settings.irkEnabled;
+    if (irkOn) {
       if (!app) await mountDashboard();
       else app.updateSettings({ darkMode: settings.darkMode });
     } else if (app || container) {

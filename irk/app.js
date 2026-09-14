@@ -169,6 +169,7 @@
       this._onClick = this.handleClick.bind(this);
       this._onInput = this.handleInput.bind(this);
       this._onChange = this.handleChange.bind(this);
+      this._onPopState = this.handlePopState.bind(this);
       this.root.addEventListener('click', this._onClick);
       // Only `input`/`change` on the two Oferta filter controls — see
       // setOfertaResults/setOfertaUnitSelect, which patch just their own
@@ -178,6 +179,12 @@
       // usos/app.js's setSearchState).
       this.root.addEventListener('input', this._onInput);
       this.root.addEventListener('change', this._onChange);
+      window.addEventListener('popstate', this._onPopState);
+      // Same reasoning as usos/app.js's matching replaceState call — anchors
+      // the bottom of the browser's back/forward stack to whatever we're
+      // about to show, so pressing back steps through in-app views (via
+      // persistViewState's pushState) instead of leaving the page.
+      try { history.replaceState(this.viewStatePayload(), '', location.href); } catch (e) { /* ignore */ }
       if (initialView === 'programme' && initialProgrammeUrl) this.fetchProgramme(initialProgrammeUrl);
       if (initialView === 'oferta') this.ensureOfertaEnriched();
     }
@@ -186,6 +193,7 @@
       this.root.removeEventListener('click', this._onClick);
       this.root.removeEventListener('input', this._onInput);
       this.root.removeEventListener('change', this._onChange);
+      window.removeEventListener('popstate', this._onPopState);
     }
 
     setState(patch) {
@@ -405,11 +413,37 @@
       else this.render();
     }
 
-    persistViewState() {
-      saveViewState({
+    viewStatePayload() {
+      return {
         view: this.state.view,
         programmeUrl: this.state.view === 'programme' ? this.state.programmeUrl : null,
-      });
+      };
+    }
+
+    // See usos/app.js's persistViewState/handlePopState for the full
+    // rationale — pushes a same-URL history entry per in-app "page" so the
+    // browser's own back/forward buttons step through them instead of
+    // leaving the redesign.
+    persistViewState() {
+      const payload = this.viewStatePayload();
+      saveViewState(payload);
+      try { history.pushState(payload, '', location.href); } catch (e) { /* ignore */ }
+    }
+
+    handlePopState(e) {
+      this.closeRecruitmentPicker();
+      const p = e.state || {};
+      let view = VALID_VIEWS.has(p.view) ? p.view : 'dashboard';
+      if (view === 'programme' && !p.programmeUrl) view = 'dashboard';
+
+      if (view === 'programme') {
+        this.setState({ view: 'programme', programmeUrl: p.programmeUrl, programmeLoading: true, programmeError: false, programmeData: null, fieldData: null });
+        this.fetchProgramme(p.programmeUrl);
+      } else {
+        this.setState({ view });
+        if (view === 'oferta') this.ensureOfertaEnriched();
+      }
+      saveViewState(this.viewStatePayload());
     }
 
     openProgramme(url) {
@@ -531,7 +565,7 @@
       `;
     }
 
-    // Sits right above "Wyłącz USOS++" — a quick, always-visible answer to
+    // Sits right above "Wyłącz panel USOS++" — a quick, always-visible answer to
     // "am I logged into IRK right now" without needing to open a protected
     // view first to find out. Clicking it while logged in jumps straight to
     // the in-app "Moje konto" view (see renderKonto); while logged out it
@@ -584,7 +618,7 @@
             ${this.renderAccountCard()}
             <div class="usospp-nav-item" data-action="disableUsospp">
               ${icon('close', 17)}
-              <span>Wyłącz USOS++ (IRK)</span>
+              <span>Wyłącz panel USOS++ (IRK)</span>
             </div>
           </aside>
           <div class="usospp-main">
@@ -652,6 +686,25 @@
       `;
     }
 
+    // A Dashboard hub tile — `locked` swaps its usual icon for a lock icon,
+    // dims the whole tile, and replaces its description with a "Zaloguj
+    // się, aby odblokować" pill instead of spelling the requirement out in
+    // the description text (previously every locked tile's desc ended with
+    // "— wymaga zalogowania na konto kandydata"). Still clickable either
+    // way — clicking a locked tile navigates into that section, which shows
+    // its own renderLoginRequired() screen (see renderView's gate).
+    renderHubTile(view, iconName, title, desc, locked) {
+      return `
+        <div class="usospp-hub-tile ${locked ? 'usospp-hub-tile-locked' : ''}" data-action="nav" data-view="${view}">
+          <div class="usospp-hub-tile-icon">${icon(locked ? 'lock' : iconName)}</div>
+          <div class="usospp-hub-tile-title">${esc(title)}</div>
+          ${locked
+            ? `<div class="usospp-lock-hint">${icon('lock', 12)} Zaloguj się, aby odblokować</div>`
+            : `<div class="usospp-hub-tile-desc">${esc(desc)}</div>`}
+        </div>
+      `;
+    }
+
     renderDashboard() {
       const offer = this.data.offerResult || { groups: [] };
       const totalCount = offer.groups.reduce((sum, g) => sum + g.items.length, 0);
@@ -677,46 +730,14 @@
           </div>
         </div>
         <div class="usospp-hub-grid">
-          <div class="usospp-hub-tile" data-action="nav" data-view="oferta">
-            <div class="usospp-hub-tile-icon">${icon('book')}</div>
-            <div class="usospp-hub-tile-title">Oferta — kierunki</div>
-            <div class="usospp-hub-tile-desc">Lista kierunków z tej rekrutacji, z podziałem na wydziały i limitami miejsc.</div>
-          </div>
-          <div class="usospp-hub-tile" data-action="nav" data-view="aktualnosci">
-            <div class="usospp-hub-tile-icon">${icon('bell')}</div>
-            <div class="usospp-hub-tile-title">Aktualności</div>
-            <div class="usospp-hub-tile-desc">Ogłoszenia i komunikaty publikowane w tej rekrutacji.</div>
-          </div>
-          <div class="usospp-hub-tile" data-action="nav" data-view="jednostki">
-            <div class="usospp-hub-tile-icon">${icon('layers')}</div>
-            <div class="usospp-hub-tile-title">Jednostki</div>
-            <div class="usospp-hub-tile-desc">Wydziały prowadzące tę rekrutację, z liczbą kierunków i linkiem do USOSweb.</div>
-          </div>
-          <div class="usospp-hub-tile" data-action="nav" data-view="zgloszenia">
-            <div class="usospp-hub-tile-icon">${icon(this.data.loggedIn ? 'check' : 'lock')}</div>
-            <div class="usospp-hub-tile-title">Zgłoszenia rekrutacyjne</div>
-            <div class="usospp-hub-tile-desc">Status kwalifikacji, decyzje i wymagane dokumenty — wymaga zalogowania na konto kandydata.</div>
-          </div>
-          <div class="usospp-hub-tile" data-action="nav" data-view="formularze">
-            <div class="usospp-hub-tile-icon">${icon(this.data.loggedIn ? 'edit' : 'lock')}</div>
-            <div class="usospp-hub-tile-title">Formularze osobowe</div>
-            <div class="usospp-hub-tile-desc">Podgląd danych zgłoszonych do rekrutacji (dane podstawowe, adres, zdjęcie, wykształcenie) — wymaga zalogowania na konto kandydata.</div>
-          </div>
-          <div class="usospp-hub-tile" data-action="nav" data-view="platnosci">
-            <div class="usospp-hub-tile-icon">${icon(this.data.loggedIn ? 'cash' : 'lock')}</div>
-            <div class="usospp-hub-tile-title">Płatności</div>
-            <div class="usospp-hub-tile-desc">Historia opłat rekrutacyjnych i wpłat na koncie IRK — wymaga zalogowania na konto kandydata.</div>
-          </div>
-          <div class="usospp-hub-tile" data-action="nav" data-view="wiadomosci">
-            <div class="usospp-hub-tile-icon">${icon(this.data.loggedIn ? 'mail' : 'lock')}</div>
-            <div class="usospp-hub-tile-title">Wiadomości</div>
-            <div class="usospp-hub-tile-desc">Korespondencja z uczelnią — wymaga zalogowania na konto kandydata.</div>
-          </div>
-          <div class="usospp-hub-tile" data-action="nav" data-view="konto">
-            <div class="usospp-hub-tile-icon">${icon(this.data.loggedIn ? 'user' : 'lock')}</div>
-            <div class="usospp-hub-tile-title">Moje konto</div>
-            <div class="usospp-hub-tile-desc">Dane konta, zdjęcie, metoda logowania i ustawienia powiadomień — wymaga zalogowania na konto kandydata.</div>
-          </div>
+          ${this.renderHubTile('oferta', 'book', 'Oferta — kierunki', 'Lista kierunków z tej rekrutacji, z podziałem na wydziały i limitami miejsc.', false)}
+          ${this.renderHubTile('aktualnosci', 'bell', 'Aktualności', 'Ogłoszenia i komunikaty publikowane w tej rekrutacji.', false)}
+          ${this.renderHubTile('jednostki', 'layers', 'Jednostki', 'Wydziały prowadzące tę rekrutację, z liczbą kierunków i linkiem do USOSweb.', false)}
+          ${this.renderHubTile('zgloszenia', 'check', 'Zgłoszenia rekrutacyjne', 'Status kwalifikacji, decyzje i wymagane dokumenty.', !this.data.loggedIn)}
+          ${this.renderHubTile('formularze', 'edit', 'Formularze osobowe', 'Podgląd danych zgłoszonych do rekrutacji (dane podstawowe, adres, zdjęcie, wykształcenie).', !this.data.loggedIn)}
+          ${this.renderHubTile('platnosci', 'cash', 'Płatności', 'Historia opłat rekrutacyjnych i wpłat na koncie IRK.', !this.data.loggedIn)}
+          ${this.renderHubTile('wiadomosci', 'mail', 'Wiadomości', 'Korespondencja z uczelnią.', !this.data.loggedIn)}
+          ${this.renderHubTile('konto', 'user', 'Moje konto', 'Dane konta, zdjęcie, metoda logowania i ustawienia powiadomień.', !this.data.loggedIn)}
         </div>
       `;
     }

@@ -20,14 +20,33 @@
   // or a programme sub-page /pl/offer/<SLUG>/programme/<CODE>/. This only
   // relies on that URL SHAPE, never a hardcoded slug — the slug format is
   // whatever this university's IRK installation assigned to this campaign.
+  //
+  // Verified live bug fix (2026-09-14): account-wide pages (/pl/profile/...
+  // — Wiadomości, Formularze osobowe, Płatności, ...) don't carry the slug
+  // in THEIR OWN url at all, even while the session has a recruitment
+  // actively selected. Landing on one of these as the very first page of a
+  // session (a bookmark, an e-mail link straight into Wiadomości, ...) made
+  // this return null — showing "Nie wybrano rekrutacji" even though a
+  // recruitment WAS already picked — and picking one from that screen's own
+  // picker only fixed things after a page reload, matching a reported bug
+  // ("wybiera rekrutację z listy, ale nie ładuje z niej danych" — fixed only
+  // by disabling USOS++, picking natively, re-enabling). The fix: when the
+  // URL itself has no slug, fall back to the same shared-header
+  // "REKRUTACJA ..." link recruitmentLabel() already reads the display text
+  // off of — its href is "/pl/home/<slug>/" on every IRK page as long as a
+  // recruitment is session-selected, account-wide pages included.
   function recruitmentSlug(url = location.href) {
     try {
       const path = new URL(url, location.origin).pathname;
       const m = path.match(/^\/pl\/(?:home|offer|news)\/([^/]+)\//);
-      return m ? m[1] : null;
+      if (m) return m[1];
     } catch (e) {
-      return null;
+      // Malformed url — fall through to the header-link fallback below.
     }
+    const homeLink = document.querySelector('a[href^="/pl/home/"]');
+    if (!homeLink) return null;
+    const m2 = homeLink.getAttribute('href').match(/^\/pl\/home\/([^/]+)\//);
+    return m2 ? m2[1] : null;
   }
 
   // The current recruitment campaign's display name, from the header link

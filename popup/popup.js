@@ -4,7 +4,7 @@ import { getState, setState } from '../core/state.js';
 // applyIndependentFeatures for the code these hints describe.
 const FEATURE_GROUPS = [
   {
-    label: 'Wymagają włączonego USOS++',
+    label: 'Wymagają włączonego panelu USOS++',
     keys: {
       keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–9 do przełączania sekcji w USOS++'],
       autorefresh: ['Automatyczne odświeżanie danych', 'Dane odświeżają się bez przeładowania strony'],
@@ -12,7 +12,7 @@ const FEATURE_GROUPS = [
     },
   },
   {
-    label: 'Działają niezależnie od USOS++',
+    label: 'Działają niezależnie od panelu USOS++',
     keys: {
       quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, gdy USOS++ jest wyłączony'],
       classicWidgets: ['Widżety na stronach klasycznych', 'Średnia w Ocenach, zaległości w Płatnościach, licznik zajęć w Planie i podsumowanie w Mój USOSweb'],
@@ -261,7 +261,7 @@ function renderMainBody() {
         <span style="display:flex;">
           <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 3v6"></path><path d="M5.5 5.8a6.5 6.5 0 1 0 9 0"></path></svg>
         </span>
-        ${enabled ? 'Wyłącz USOS++' : 'Włącz USOS++'}
+        ${enabled ? 'Wyłącz panel USOS++' : 'Włącz panel USOS++'}
       </button>
       <div class="pp-main-hint">${enabled ? 'Klasyczny USOSweb jest zastąpiony nowym interfejsem' : 'Przełącz aktualną stronę USOSweb na nowy interfejs'}</div>
 
@@ -314,7 +314,7 @@ function renderIrkBody() {
         <span style="display:flex;">
           <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 3v6"></path><path d="M5.5 5.8a6.5 6.5 0 1 0 9 0"></path></svg>
         </span>
-        ${enabled ? 'Wyłącz USOS++ (IRK)' : 'Włącz USOS++ (IRK)'}
+        ${enabled ? 'Wyłącz panel USOS++ (IRK)' : 'Włącz panel USOS++ (IRK)'}
       </button>
       <div class="pp-main-hint">${enabled ? 'Klasyczny IRK jest zastąpiony dashboardem — oferta i aktualności tej rekrutacji' : 'Przełącz aktualną kartę IRK na dashboard USOS++'}</div>
       <div class="pp-empty">Status zgłoszenia, terminy i opłaty wymagają zalogowanego konta kandydata do zweryfikowania — na razie tylko oferta i aktualności.</div>
@@ -326,6 +326,18 @@ function renderFeaturesBody() {
   const f = state.features;
   return `
     <div class="pp-body">
+      <div>
+        <div class="pp-section-heading">Rozszerzenie</div>
+        <div class="pp-features-list">
+          <div class="pp-feature-row">
+            <div>
+              <div class="pp-feature-label">Wyłącz wtyczkę</div>
+              <div class="pp-feature-hint">Wyłącza panel USOS++, IRK i wszystkie funkcje niezależne (pasek szybkich akcji, widżety, odświeżanie) na wszystkich stronach</div>
+            </div>
+            ${switchHtml(state.pluginEnabled, '__plugin')}
+          </div>
+        </div>
+      </div>
       ${FEATURE_GROUPS.map((group) => `
         <div>
           <div class="pp-section-heading">${esc(group.label)}</div>
@@ -368,6 +380,8 @@ function bindEvents() {
       const key = el.dataset.toggleFeature;
       if (key === '__dark') {
         state = await setState({ darkMode: !state.darkMode });
+      } else if (key === '__plugin') {
+        state = await setState({ pluginEnabled: !state.pluginEnabled });
       } else {
         state = await setState({ features: { ...state.features, [key]: !state.features[key] } });
       }

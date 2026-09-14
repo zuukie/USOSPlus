@@ -6,6 +6,7 @@
 export const DEFAULT_STATE = {
   enabled: false,
   irkEnabled: false,
+  pluginEnabled: true,
   darkMode: false,
   features: {
     quickbar: true,

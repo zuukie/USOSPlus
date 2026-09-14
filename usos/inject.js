@@ -410,16 +410,29 @@
     }
   }
 
+  // A whole-extension kill switch, distinct from `enabled` (which only
+  // toggles the full-page panel) — see popup.js's "Wyłącz wtyczkę". When
+  // off, nothing below (panel, quickbar, keyboard nav, autorefresh, classic
+  // widgets) is allowed to run, regardless of what's individually toggled
+  // on. Gated only here, at runtime — `enabled`/`features` in storage are
+  // left untouched, so turning the plugin back on restores exactly what was
+  // on before, with no separate "off" state to reconcile.
   async function applyState(settings) {
     currentSettings = settings;
-    if (settings.enabled) {
+    const active = settings.pluginEnabled !== false;
+    const effective = active ? settings : {
+      ...settings,
+      enabled: false,
+      features: Object.fromEntries(Object.keys(settings.features).map((k) => [k, false])),
+    };
+    if (effective.enabled) {
       if (!app) await mountRedesign();
-      else app.updateSettings({ darkMode: settings.darkMode, features: settings.features });
+      else app.updateSettings({ darkMode: effective.darkMode, features: effective.features });
     } else if (app || container) {
       unmountRedesign();
     }
-    applyIndependentFeatures(settings);
-    applyClassicWidgets(settings);
+    applyIndependentFeatures(effective);
+    applyClassicWidgets(effective);
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

@@ -56,6 +56,27 @@
     return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
   }
 
+  // "P"/"N" per USOS's own convention (see the legend text on a full plan
+  // page: "tydzień parzysty (P)" / "tydzień nieparzysty (N)") — not
+  // something we invented. `null` for a weekly class (`weeks === 'every'`
+  // or missing, e.g. from the subject page's mini timetable, which never
+  // carries this — see adapters.js's parseTimetable comment).
+  function weeksLabel(weeks) {
+    if (weeks === 'even') return 'P';
+    if (weeks === 'odd') return 'N';
+    return null;
+  }
+
+  // Two sessions overlapping in time only conflict if they could actually
+  // land on the same real week — opposite, KNOWN parity (one odd, one
+  // even) never does. Anything else (same parity, or either side unknown/
+  // weekly) is treated as a real possible conflict, since we'd rather flag
+  // a false positive than silently hide a true one.
+  function sessionsOverlap(a, b) {
+    if ((a.weeks === 'odd' && b.weeks === 'even') || (a.weeks === 'even' && b.weeks === 'odd')) return false;
+    return toMin(a.start) < toMin(b.end) && toMin(b.start) < toMin(a.end);
+  }
+
   // Assigns each subject in the planner a distinct hue, one per integer
   // index (see plannerColorSeed) rather than picking from a short fixed
   // list — a small palette runs out and starts repeating colours on
@@ -110,6 +131,28 @@
   // duplicating it.
   function classTypeKey(subjectUrl, cycleName, classTypeLabel) {
     return `${subjectId(subjectUrl)}::${cycleName}::${classTypeLabel}`;
+  }
+
+  // Converts one {variable, group} entry from a generated candidate
+  // (window.USOSPP_GENERATOR's output) into the exact same pick shape
+  // plannerAddSubject builds for a manually-configured subject — so a
+  // generated-then-saved plan is byte-for-byte indistinguishable from one
+  // built by hand, and every existing planner function (plannerPicksBySubject,
+  // renderPlannerGrid, plannerRemovePick…) handles it with zero special-casing.
+  function pickFromAssignment({ variable, group }) {
+    return {
+      key: classTypeKey(variable.subjectUrl, variable.cycleName, variable.classTypeLabel),
+      subjectUrl: variable.subjectUrl,
+      subjectName: variable.subjectName,
+      cycleName: variable.cycleName,
+      classTypeLabel: variable.classTypeLabel,
+      classTypeShort: variable.classTypeShort,
+      nr: group.nr,
+      sessions: group.sessions,
+      teacher: group.teacher,
+      occupancy: group.occupancy,
+      detailsUrl: group.detailsUrl,
+    };
   }
 
   // Extracts the short building code (e.g. "D-1") out of a place string
@@ -473,11 +516,32 @@
         plannerPicks: [],
         plannerPlans: [],
         plannerActivePlanId: null,
+        plannerCustomSearchOpen: false,
+        plannerCustomSearchQuery: '',
+        plannerCustomSearchLoading: false,
+        plannerCustomSearchResults: null,
+        // ---- automatic generator ("Automatyczny" mode) ----
+        plannerMode: 'manual',
+        plannerAutoSelected: {}, // subjectId -> {subjectUrl, subjectName}
+        plannerAutoEarliestStart: '',
+        plannerAutoLatestEnd: '',
+        plannerAutoBlockedWindows: [], // [{day, start, end}]
+        plannerAutoBlockDraftDay: 'poniedziałek',
+        plannerAutoBlockDraftStart: '',
+        plannerAutoBlockDraftEnd: '',
+        plannerAutoMaxPerDay: '',
+        plannerAutoPreferredDays: '',
+        plannerAutoMinimizeGaps: true,
+        plannerAutoStatus: 'idle', // idle | fetching | generating | done | failed
+        plannerAutoCandidates: [],
+        plannerAutoActiveCandidateIndex: 0,
+        plannerAutoFailure: null,
       };
       this._onClick = this.handleClick.bind(this);
       this._onChange = this.handleChange.bind(this);
       this._onInput = this.handleInput.bind(this);
       this._onKeydown = this.handleKeydown.bind(this);
+      this._onPopState = this.handlePopState.bind(this);
       this.root.addEventListener('click', this._onClick);
       // Only `change` (fires on blur/select, not per keystroke) — a full
       // re-render on every keystroke would replace the focused <input> node
@@ -488,6 +552,14 @@
       this.root.addEventListener('change', this._onChange);
       this.root.addEventListener('input', this._onInput);
       this.root.addEventListener('keydown', this._onKeydown);
+      window.addEventListener('popstate', this._onPopState);
+      // Anchors the bottom of the back/forward stack to whatever we're
+      // about to show (dashboard, or a subjectPage/catalogPage restored
+      // from sessionStorage above) — same URL, just carrying our own state
+      // object, so a same-document popstate fires instead of the browser
+      // falling through to whatever real entry preceded this page load. See
+      // persistViewState()/handlePopState() for the rest of the mechanism.
+      try { history.replaceState(this.viewStatePayload(), '', location.href); } catch (e) { /* ignore */ }
       this.setupTitleGuard();
       this.loadPlannerPicks();
       this.checkNewsUpdate();
@@ -508,6 +580,7 @@
       this.root.removeEventListener('change', this._onChange);
       this.root.removeEventListener('input', this._onInput);
       this.root.removeEventListener('keydown', this._onKeydown);
+      window.removeEventListener('popstate', this._onPopState);
       if (this._titleObserver) this._titleObserver.disconnect();
     }
 
@@ -542,8 +615,13 @@
       if (document.title !== full) document.title = full;
     }
 
-    persistViewState() {
-      saveViewState({
+    // Same shape used to survive a real page reload (sessionStorage, see
+    // saveViewState/loadViewState) and to survive a browser back/forward
+    // click within the same document (history.pushState/popstate, see
+    // persistViewState/handlePopState) — both just need to know which
+    // "page" of the app is showing and enough to re-fetch it.
+    viewStatePayload() {
+      return {
         view: this.state.view,
         subjectUrl: this.state.view === 'subjectPage' ? this.state.subjectUrl : null,
         subjectBackView: this.state.view === 'subjectPage' ? this.state.subjectBackView : null,
@@ -551,7 +629,78 @@
         catalogKod: this.state.view === 'catalogPage' ? this.state.catalogKod : null,
         catalogEtpKod: this.state.view === 'catalogPage' && this.state.catalogKind === 'stage' ? this.state.catalogEtpKod : null,
         catalogBackView: this.state.view === 'catalogPage' ? this.state.catalogBackView : null,
-      });
+      };
+    }
+
+    // Called right after every real "page change" inside the app (see the 4
+    // call sites: navigate(), openSubjectPage(), openCatalogPage(),
+    // openStagePage()) — never from handlePopState() itself, or every
+    // browser-back click would also push a brand new forward entry and the
+    // stack could never shrink. Pushing with the *same* URL is deliberate:
+    // it keeps the tab on this exact document (a same-document navigation,
+    // just a popstate event, no reload) while still giving the browser's
+    // own back/forward buttons something to step through.
+    persistViewState() {
+      const payload = this.viewStatePayload();
+      saveViewState(payload);
+      try { history.pushState(payload, '', location.href); } catch (e) { /* ignore */ }
+    }
+
+    // Browser back/forward landed on one of our own history entries (pushed
+    // by persistViewState above, or the base one from the constructor).
+    // `event.state` is null when the user has gone further back than any
+    // in-app navigation ever pushed — before this content script started
+    // managing history at all — in which case there's nothing of ours to
+    // restore and the browser is about to leave the page for real, so we
+    // just fall back to the dashboard rather than guessing.
+    handlePopState(e) {
+      this.closeAnyModal();
+      const p = e.state || {};
+      let view = VALID_VIEWS.has(p.view) ? p.view : 'dashboard';
+      if (view === 'subjectPage' && !p.subjectUrl) view = 'przedmiotyLista';
+      if (view === 'catalogPage') {
+        const validKind = p.catalogKind === 'unit' || p.catalogKind === 'program'
+          || (p.catalogKind === 'stage' && !!p.catalogEtpKod);
+        if (!p.catalogKod || !validKind) view = 'dashboard';
+      }
+
+      if (view === 'subjectPage') {
+        const backView = (p.subjectBackView && VALID_VIEWS.has(p.subjectBackView) && p.subjectBackView !== 'subjectPage')
+          ? p.subjectBackView
+          : 'przedmiotyLista';
+        this.setState({
+          view: 'subjectPage',
+          notifPanelOpen: false,
+          avatarMenuOpen: false,
+          subjectBackView: backView,
+          subjectUrl: p.subjectUrl,
+          subjectLoading: true,
+          subjectError: false,
+          subjectData: null,
+        });
+        this.fetchSubjectData(p.subjectUrl);
+      } else if (view === 'catalogPage') {
+        const backView = (p.catalogBackView && VALID_VIEWS.has(p.catalogBackView) && p.catalogBackView !== 'catalogPage')
+          ? p.catalogBackView
+          : 'dashboard';
+        this.setState({
+          view: 'catalogPage',
+          notifPanelOpen: false,
+          avatarMenuOpen: false,
+          catalogBackView: backView,
+          catalogKind: p.catalogKind,
+          catalogKod: p.catalogKod,
+          catalogEtpKod: p.catalogKind === 'stage' ? p.catalogEtpKod : null,
+          catalogLoading: true,
+          catalogError: false,
+          catalogData: null,
+        });
+        if (p.catalogKind === 'stage') this.fetchStagePage(p.catalogKod, p.catalogEtpKod, null);
+        else this.fetchCatalogPage(p.catalogKind, p.catalogKod);
+      } else {
+        this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
+      }
+      saveViewState(this.viewStatePayload());
     }
 
     setState(patch) {
@@ -584,6 +733,20 @@
       const el = this.root.querySelector('[data-topbar-root]');
       if (!el) { this.render(); return; }
       el.outerHTML = this.renderTopbar();
+    }
+
+    // Same reasoning as setTopbarState/setPlannerSearchState — the
+    // automatic generator's preferences card is its own isolated subtree
+    // (unlike setPlannerState, which patches the whole planner body,
+    // visibly flashing the subject list and results next to it on every
+    // field edit). Only rendered while the "planer" view is showing its
+    // "auto" mode, matching setPlannerState's own guard rather than
+    // setTopbarState's always-visible one.
+    setPlannerPrefsState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'planer' || this.state.plannerMode !== 'auto') return;
+      const el = this.root.querySelector('[data-planner-prefs-root]');
+      if (el) el.outerHTML = this.renderPlannerAutoPrefsForm();
     }
 
     // Dismissing the beta notice (see renderBetaNotice) only ever needs to
@@ -662,6 +825,17 @@
       Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
       const el = this.root.querySelector('[data-search-results-root]');
       if (el) el.innerHTML = this.renderSearchResults();
+    }
+
+    // Same reasoning as setSearchState above, for the planner's own "Dodaj
+    // przedmiot spoza listy" search box — going through setPlannerState
+    // would rebuild the whole planner body (it patches [data-planner-root]),
+    // including the <input> being typed into.
+    setPlannerSearchState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'planer') return;
+      const el = this.root.querySelector('[data-planner-search-results-root]');
+      if (el) el.innerHTML = this.renderPlannerCustomSearchResults();
     }
 
     updateSettings(settings) {
@@ -843,6 +1017,36 @@
         case 'plannerDeletePlan':
           this.plannerDeletePlan();
           break;
+        case 'plannerToggleCustomSearch':
+          this.plannerToggleCustomSearch();
+          break;
+        case 'plannerSelectSearchSubject':
+          this.plannerSelectSearchSubject(el.dataset.url, el.dataset.name);
+          break;
+        case 'plannerSetMode':
+          this.plannerSetMode(el.dataset.mode);
+          break;
+        case 'plannerAutoToggleSubject':
+          this.plannerAutoToggleSubject(el.dataset.url, el.dataset.name);
+          break;
+        case 'plannerAutoAddBlock':
+          this.plannerAutoAddBlock();
+          break;
+        case 'plannerAutoRemoveBlock':
+          this.plannerAutoRemoveBlock(parseInt(el.dataset.index, 10));
+          break;
+        case 'plannerAutoToggleMinimizeGaps':
+          this.setPlannerPrefsState((s) => ({ plannerAutoMinimizeGaps: !s.plannerAutoMinimizeGaps }));
+          break;
+        case 'plannerAutoGenerate':
+          this.plannerAutoGenerate();
+          break;
+        case 'plannerUseGeneratedCandidate':
+          this.plannerUseGeneratedCandidate(parseInt(el.dataset.index, 10));
+          break;
+        case 'plannerAutoSelectCandidate':
+          this.setPlannerState({ plannerAutoActiveCandidateIndex: parseInt(el.dataset.index, 10) });
+          break;
         default:
           break;
       }
@@ -988,7 +1192,7 @@
                   ${data.groups.map((g) => `
                     <tr>
                       <td>${esc(g.nr)}</td>
-                      <td>${g.sessions.map((sess) => `${esc(sess.day)} ${esc(sess.start)}–${esc(sess.end)}${sess.place ? `, ${esc(sess.place)}` : ''}`).join('<br>') || '—'}</td>
+                      <td>${g.sessions.map((sess) => `${esc(sess.day)} ${esc(sess.start)}–${esc(sess.end)}${weeksLabel(sess.weeks) ? ` (${weeksLabel(sess.weeks)})` : ''}${sess.place ? `, ${esc(sess.place)}` : ''}`).join('<br>') || '—'}</td>
                       <td>${esc(g.teacher || '—')}</td>
                       <td>${esc(g.occupancy || '—')}</td>
                     </tr>
@@ -1330,6 +1534,214 @@
       });
     }
 
+    // "Dodaj przedmiot spoza listy" — lets a student search the full USOS
+    // catalog for a subject their programme stage didn't surface (e.g. WF,
+    // a language, an elective from another kierunek) instead of being
+    // limited to stageSubjects. Toggling the box closed also drops any
+    // in-progress search text/results, same as clearSearch() does for the
+    // topbar search.
+    plannerToggleCustomSearch() {
+      this.setPlannerState((s) => {
+        const next = !s.plannerCustomSearchOpen;
+        return next
+          ? { plannerCustomSearchOpen: true }
+          : { plannerCustomSearchOpen: false, plannerCustomSearchQuery: '', plannerCustomSearchResults: null, plannerCustomSearchLoading: false };
+      });
+    }
+
+    // Picking a search result behaves differently depending on which mode
+    // the search box was opened from (the box itself — plannerCustomSearch*
+    // state — is shared, see renderPlannerCustomSearch). In manual mode it
+    // hands the URL to plannerToggleSubject, which is fully generic over
+    // `url` and doesn't care whether it came from stageSubjects or a catalog
+    // search. In automatic mode there's no per-subject configurator to open
+    // — the algorithm picks the group — so it's just added straight into
+    // plannerAutoSelected, same as ticking an existing checkbox. Either way
+    // the search box's own query/results are cleared so the dropdown
+    // collapses, but stays open (plannerCustomSearchOpen) in case the
+    // student wants to add a second subject that wasn't on the list either.
+    plannerSelectSearchSubject(url, name) {
+      if (!url) return;
+      this.setPlannerState({ plannerCustomSearchQuery: '', plannerCustomSearchResults: null, plannerCustomSearchLoading: false });
+      if (this.state.plannerMode === 'auto') {
+        this.plannerAutoToggleSubject(url, name);
+        return;
+      }
+      this.plannerToggleSubject(url);
+    }
+
+    // ---- automatic generator ------------------------------------------
+
+    plannerSetMode(mode) {
+      if (mode !== 'manual' && mode !== 'auto') return;
+      this.setPlannerState({ plannerMode: mode });
+    }
+
+    plannerAutoToggleSubject(url, name) {
+      if (!url) return;
+      const id = subjectId(url);
+      this.setPlannerState((s) => {
+        const next = { ...s.plannerAutoSelected };
+        if (next[id]) delete next[id];
+        else next[id] = { subjectUrl: url, subjectName: name };
+        return { plannerAutoSelected: next };
+      });
+    }
+
+    plannerAutoAddBlock() {
+      const { plannerAutoBlockDraftDay: day, plannerAutoBlockDraftStart: start, plannerAutoBlockDraftEnd: end } = this.state;
+      if (!day || !start || !end) return;
+      this.setPlannerPrefsState((s) => ({
+        plannerAutoBlockedWindows: [...s.plannerAutoBlockedWindows, { day, start, end }],
+        plannerAutoBlockDraftStart: '',
+        plannerAutoBlockDraftEnd: '',
+      }));
+    }
+
+    plannerAutoRemoveBlock(index) {
+      this.setPlannerPrefsState((s) => ({ plannerAutoBlockedWindows: s.plannerAutoBlockedWindows.filter((_, i) => i !== index) }));
+    }
+
+    // Ensures every selected subject's page AND every one of its class
+    // types' groups are cached (reusing the SAME plannerSubjectCache/
+    // plannerGroupsCache the manual flow already lazily fills — see
+    // plannerToggleSubject/plannerLoadGroups — so nothing already loaded
+    // manually gets re-fetched), then builds one CSP variable per (subject,
+    // class type) with its domain attached. Picks the same "first cycle
+    // that isn't finished" a student would see expanding the subject
+    // manually (renderPlannerSubjectPanel), for consistency.
+    async plannerAutoFetchAll() {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) return { ok: false };
+      const adapter = adapters.selectAdapter();
+      if (!adapter) return { ok: false };
+      const selected = Object.values(this.state.plannerAutoSelected);
+      if (!selected.length) return { ok: false };
+
+      const missingSubjects = selected.filter((s) => !this.state.plannerSubjectCache[s.subjectUrl]);
+      if (missingSubjects.length) {
+        const docs = await Promise.all(missingSubjects.map((s) => scrape.fetchDoc(s.subjectUrl)));
+        const patch = {};
+        missingSubjects.forEach((s, i) => {
+          const doc = docs[i];
+          const details = doc ? adapter.getSubjectPage(doc) : null;
+          patch[s.subjectUrl] = (details && details.supported) ? details : { supported: false };
+        });
+        this.setPlannerState((st) => ({ plannerSubjectCache: { ...st.plannerSubjectCache, ...patch } }));
+      }
+
+      const variables = [];
+      selected.forEach((s) => {
+        const details = this.state.plannerSubjectCache[s.subjectUrl];
+        if (!details || !details.supported) return;
+        const relevantCycles = details.cycles.filter((c) => !/zakończon/i.test(c.cycleState || ''));
+        const cycle = (relevantCycles.length ? relevantCycles : details.cycles)[0];
+        if (!cycle) return;
+        (cycle.classTypes || []).forEach((ct) => {
+          if (!ct.groupsUrl) return;
+          variables.push({
+            subjectUrl: s.subjectUrl,
+            subjectName: details.subjectName || s.subjectName,
+            cycleName: cycle.cycleName,
+            classTypeLabel: ct.label,
+            classTypeShort: shortClassType(ct.label),
+            groupsUrl: ct.groupsUrl,
+          });
+        });
+      });
+
+      const missingGroupsUrls = [...new Set(variables.map((v) => v.groupsUrl))].filter((u) => !this.state.plannerGroupsCache[u]);
+      if (missingGroupsUrls.length) {
+        const docs = await Promise.all(missingGroupsUrls.map((u) => scrape.fetchDoc(u)));
+        const patch = {};
+        missingGroupsUrls.forEach((u, i) => {
+          const doc = docs[i];
+          const data = doc ? adapter.getClassGroups(doc) : { supported: false, groups: [] };
+          patch[u] = { loading: false, data };
+        });
+        this.setPlannerState((st) => ({ plannerGroupsCache: { ...st.plannerGroupsCache, ...patch } }));
+      }
+
+      const finalVariables = variables.map((v) => {
+        const cached = this.state.plannerGroupsCache[v.groupsUrl];
+        return { ...v, groups: (cached && cached.data && cached.data.groups) || [] };
+      });
+      return { ok: finalVariables.length > 0, variables: finalVariables };
+    }
+
+    // Kicks off fetch → generate. Yields a frame between each state
+    // transition (setTimeout after requestAnimationFrame) so the "wczytywanie
+    // grup…"/"generowanie…" states actually paint before the heavy,
+    // synchronous CSP search runs on the main thread — see the plan doc's
+    // note on why this is a cheap, worthwhile insurance even with a
+    // sub-250ms search budget.
+    async plannerAutoGenerate() {
+      if (this.state.plannerAutoStatus === 'fetching' || this.state.plannerAutoStatus === 'generating') return;
+      if (!Object.keys(this.state.plannerAutoSelected).length) return;
+
+      this.setPlannerState({ plannerAutoStatus: 'fetching', plannerAutoCandidates: [], plannerAutoFailure: null });
+      await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
+      const { ok, variables } = await this.plannerAutoFetchAll();
+      if (!ok) {
+        this.setPlannerState({ plannerAutoStatus: 'failed', plannerAutoFailure: { kind: 'fetch', message: 'Nie udało się wczytać grup zajęć dla wybranych przedmiotów — spróbuj ponownie.' } });
+        return;
+      }
+
+      this.setPlannerState({ plannerAutoStatus: 'generating' });
+      await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
+      const engine = window.USOSPP_GENERATOR;
+      if (!engine) {
+        this.setPlannerState({ plannerAutoStatus: 'failed', plannerAutoFailure: { kind: 'error', message: 'Silnik generatora nie jest dostępny.' } });
+        return;
+      }
+
+      const hardConstraints = {
+        earliestStart: this.state.plannerAutoEarliestStart || null,
+        latestEnd: this.state.plannerAutoLatestEnd || null,
+        blockedWindows: this.state.plannerAutoBlockedWindows,
+      };
+      const preferences = {
+        maxPerDay: this.state.plannerAutoMaxPerDay ? parseInt(this.state.plannerAutoMaxPerDay, 10) : null,
+        preferredDays: this.state.plannerAutoPreferredDays ? parseInt(this.state.plannerAutoPreferredDays, 10) : null,
+        minimizeGaps: this.state.plannerAutoMinimizeGaps,
+      };
+
+      const result = engine.generate({ variables, hardConstraints, preferences });
+      if (result.ok) {
+        this.setPlannerState({ plannerAutoStatus: 'done', plannerAutoCandidates: result.candidates, plannerAutoActiveCandidateIndex: 0, plannerAutoFailure: null });
+      } else {
+        this.setPlannerState({ plannerAutoStatus: 'failed', plannerAutoFailure: result });
+      }
+    }
+
+    // "Użyj tego planu" — saves the chosen candidate as a brand-new saved
+    // plan (same mechanism as plannerNewPlan/planner-store.js's MAX_PLANS
+    // cap), never merged into whatever's currently active. Switches back to
+    // manual mode on success so the result immediately shows in the normal,
+    // fully-editable planner — confirmed with the user: a generated plan is
+    // just an ordinary plan afterward, nothing special about it.
+    plannerUseGeneratedCandidate(index) {
+      const candidate = this.state.plannerAutoCandidates[index];
+      const planner = window.USOSPP_PLANNER;
+      if (!candidate || !planner) return;
+      if (this.state.plannerPlans.length >= planner.MAX_PLANS) {
+        this.setPlannerState({ plannerAutoFailure: { kind: 'plan-limit', message: `Masz już zapisanych ${planner.MAX_PLANS} planów — usuń jeden z istniejących w trybie manualnym (zakładki planu), żeby zapisać tę propozycję.` } });
+        return;
+      }
+      const picks = candidate.assignment.map(pickFromAssignment);
+      planner.setData((data) => {
+        if (data.plans.length >= planner.MAX_PLANS) return data;
+        const plan = { id: planner.genId(), name: `Wygenerowany plan ${data.plans.length + 1}`, picks };
+        return { plans: [...data.plans, plan], activePlanId: plan.id };
+      }).then((next) => {
+        this.applyPlannerSwitchResult(next);
+        this.setPlannerState({ plannerMode: 'manual', plannerAutoCandidates: [], plannerAutoStatus: 'idle', plannerAutoFailure: null });
+      });
+    }
+
     // Expands/collapses a subject's class-type configurator in the planner's
     // subject list. Pre-fills the draft selection from whatever's already
     // saved for this subject, so reopening it to tweak one class type
@@ -1470,6 +1882,42 @@
       return [...map.values()];
     }
 
+    // Every subject the planner (manual list AND automatic generator's
+    // subject picker) can offer: auto-detected from the student's current
+    // programme stage, plus anything added via "Dodaj przedmiot spoza
+    // listy" (derived straight from plannerPicks — see renderPlannerBody's
+    // former inline version of this, now shared so both modes agree).
+    get plannerSubjectCandidates() {
+      const stages = this.stageSubjects;
+      const stageRanks = stages.map((s) => cycleRank(stageCycleLabel(s)));
+      const knownRanks = stageRanks.filter((r) => r !== null);
+      const earliestRank = knownRanks.length ? Math.min(...knownRanks) : null;
+      const currentStages = earliestRank === null
+        ? stages
+        : stages.filter((s, i) => stageRanks[i] === null || stageRanks[i] === earliestRank);
+      const skippedStages = stages.length - currentStages.length;
+
+      const allSubjects = [];
+      const seen = new Set();
+      currentStages.forEach((stage) => (stage.sections || []).forEach((section) => (section.subjects || []).forEach((s) => {
+        if (!s.detailsUrl || seen.has(s.detailsUrl)) return;
+        seen.add(s.detailsUrl);
+        allSubjects.push(s);
+      })));
+
+      const knownIds = new Set(allSubjects.map((s) => subjectId(s.detailsUrl)));
+      const customSubjects = [];
+      const seenCustom = new Set();
+      this.state.plannerPicks.forEach((p) => {
+        const id = subjectId(p.subjectUrl);
+        if (knownIds.has(id) || seenCustom.has(id)) return;
+        seenCustom.add(id);
+        customSubjects.push({ name: p.subjectName, code: '', detailsUrl: p.subjectUrl });
+      });
+
+      return { subjects: [...allSubjects, ...customSubjects], autoCount: allSubjects.length, skippedStages };
+    }
+
     // Colour is assigned by subject NAME, not by subject id — USOS often
     // splits one real course into separate wykład/ćwiczenia/lab subjects
     // with their own prz_kod (so they're tracked as distinct picks), but
@@ -1501,11 +1949,22 @@
     handleChange(e) {
       const el = e.target.closest('[data-bind]');
       if (!el) return;
+      // The auto-generator's preference fields (time/number inputs) fire
+      // 'change' on every native spinner/arrow nudge, not just on blur —
+      // routing those through the generic setState below would replay the
+      // whole page's fade-in on each one (see setTopbarState's comment for
+      // the same issue elsewhere). setPlannerPrefsState only patches that
+      // one card.
+      if (el.dataset.bind.startsWith('plannerAuto')) {
+        this.setPlannerPrefsState({ [el.dataset.bind]: el.value });
+        return;
+      }
       this.setState({ [el.dataset.bind]: el.value });
     }
 
     handleInput(e) {
       if (e.target.dataset.action === 'searchInput') this.onSearchInput(e.target.value);
+      else if (e.target.dataset.action === 'plannerSearchInput') this.onPlannerSearchInput(e.target.value);
     }
 
     handleKeydown(e) {
@@ -1547,6 +2006,31 @@
       this.setSearchState({ searchResults: null, searchLoading: false });
       const input = this.root.querySelector('[data-search-input]');
       if (input) input.value = '';
+    }
+
+    // Same debounce/min-length/staleness-guard shape as onSearchInput/
+    // runSearch above, kept as its own state slice (plannerCustomSearch*)
+    // rather than reusing searchQuery/searchResults — this box lives inside
+    // the planner, not the topbar, and the two shouldn't clobber each
+    // other's in-flight query if both happened to be touched.
+    onPlannerSearchInput(value) {
+      this.state.plannerCustomSearchQuery = value; // the <input> already shows this — no DOM patch needed just for that
+      clearTimeout(this._plannerSearchDebounce);
+      const q = value.trim();
+      if (q.length < 3) {
+        this.setPlannerSearchState({ plannerCustomSearchResults: null, plannerCustomSearchLoading: false });
+        return;
+      }
+      this.setPlannerSearchState({ plannerCustomSearchLoading: true });
+      this._plannerSearchDebounce = setTimeout(() => this.runPlannerSearch(q), 300);
+    }
+
+    async runPlannerSearch(query) {
+      const scrape = window.USOSPP_SCRAPE;
+      if (!scrape) { this.setPlannerSearchState({ plannerCustomSearchLoading: false }); return; }
+      const results = await scrape.searchCatalog(query);
+      if (this.state.plannerCustomSearchQuery.trim() !== query) return;
+      this.setPlannerSearchState({ plannerCustomSearchLoading: false, plannerCustomSearchResults: results.subjects });
     }
 
     emitSettings(payload) {
@@ -1708,7 +2192,7 @@
                     <div class="usospp-dropdown-sub">${u.album ? `nr albumu ${esc(u.album)}` : '—'}</div>
                   </div>
                   <div class="usospp-dropdown-item" data-action="nav" data-view="ustawienia">Ustawienia konta</div>
-                  <div class="usospp-dropdown-item" data-action="disableUsospp" style="color:oklch(58% 0.19 25);">Wyłącz USOS++ / Powrót do USOS</div>
+                  <div class="usospp-dropdown-item" data-action="disableUsospp" style="color:oklch(58% 0.19 25);">Wyłącz panel USOS++ / Powrót do USOS</div>
                 </div>
               ` : ''}
             </div>
@@ -2379,10 +2863,12 @@
                     if (startMin === null || endMin === null) return '';
                     const top = (startMin - hourStart * 60) * (ROW_H / 60);
                     const height = Math.max(40, (endMin - startMin) * (ROW_H / 60));
-                    const full = [e.label, e.teacher, e.place].filter(Boolean).join(' — ');
+                    const weeksTag = weeksLabel(e.weeks);
+                    const full = [e.label, e.teacher, e.place].filter(Boolean).join(' — ')
+                      + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '');
                     return `
                       <div class="usospp-tt-entry" style="top:${top}px;height:${height}px;" title="${esc(full)}">
-                        <div class="usospp-tt-entry-time">${esc(e.start)}–${esc(e.end)}</div>
+                        <div class="usospp-tt-entry-time">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
                         <div class="usospp-tt-entry-label">${esc(e.label || '')}</div>
                         ${e.teacher ? `<div class="usospp-tt-entry-meta">${esc(e.teacher)}</div>` : ''}
                         ${e.place ? `<div class="usospp-tt-entry-meta">${esc(e.place)}</div>` : ''}
@@ -2516,31 +3002,21 @@
     }
 
     renderPlannerBody() {
-      const stages = this.stageSubjects;
-      const stageRanks = stages.map((s) => cycleRank(stageCycleLabel(s)));
-      const knownRanks = stageRanks.filter((r) => r !== null);
-      const earliestRank = knownRanks.length ? Math.min(...knownRanks) : null;
-      // Only the stage(s) on the earliest (currently-running) cycle count as
-      // "your assigned semester" — a stage on a later cycle is a future
-      // semester USOS already lets you browse, kept out of the candidate
-      // list so it doesn't look like a random, unexplained subject. A stage
-      // whose cycle we couldn't parse is kept rather than dropped, so an
-      // unexpected label never silently hides real subjects.
-      const currentStages = earliestRank === null
-        ? stages
-        : stages.filter((s, i) => stageRanks[i] === null || stageRanks[i] === earliestRank);
-      const skippedStages = stages.length - currentStages.length;
+      const modeTabs = `
+        <div style="display:flex;gap:6px;margin-bottom:16px;">
+          <button class="usospp-mode-btn${this.state.plannerMode !== 'auto' ? ' active' : ''}" data-action="plannerSetMode" data-mode="manual">Manualny</button>
+          <button class="usospp-mode-btn${this.state.plannerMode === 'auto' ? ' active' : ''}" data-action="plannerSetMode" data-mode="auto">Automatyczny</button>
+        </div>
+      `;
+      if (this.state.plannerMode === 'auto') {
+        return modeTabs + this.renderPlannerAutoBody();
+      }
 
-      const allSubjects = [];
-      const seen = new Set();
-      currentStages.forEach((stage) => (stage.sections || []).forEach((section) => (section.subjects || []).forEach((s) => {
-        if (!s.detailsUrl || seen.has(s.detailsUrl)) return;
-        seen.add(s.detailsUrl);
-        allSubjects.push(s);
-      })));
+      const { subjects, skippedStages } = this.plannerSubjectCandidates;
       const bySubject = this.plannerPicksBySubject;
 
       return `
+        ${modeTabs}
         <div class="usospp-card">
           <div class="usospp-card-head">
             <div class="usospp-card-title">Generator planu</div>
@@ -2555,10 +3031,11 @@
           <div class="usospp-card">
             <div class="usospp-card-title" style="margin-bottom:12px;">Dodaj przedmiot</div>
             ${this.renderPlannerPlanTabs()}
+            ${this.renderPlannerCustomSearch()}
             ${skippedStages > 0 ? `<div class="usospp-tag-muted" style="display:block;margin-bottom:10px;">Pominięto ${skippedStages} etap(y) programu z późniejszego cyklu (np. kolejny semestr) — pokazujemy tylko przedmioty z bieżącego cyklu.</div>` : ''}
-            ${allSubjects.length === 0 ? `
-              <div class="usospp-empty-hint">Nie znaleźliśmy listy przedmiotów Twojego kierunku — sprawdź zakładkę „Przedmioty”.</div>
-            ` : allSubjects.map((s) => this.renderPlannerSubjectRow(s)).join('')}
+            ${subjects.length === 0 ? `
+              <div class="usospp-empty-hint">Nie znaleźliśmy listy przedmiotów Twojego kierunku — sprawdź zakładkę „Przedmioty” albo dodaj przedmiot spoza listy powyżej.</div>
+            ` : subjects.map((s) => this.renderPlannerSubjectRow(s)).join('')}
           </div>
 
           <div style="display:flex;flex-direction:column;gap:20px;">
@@ -2573,6 +3050,311 @@
                 ${bySubject.map((entry) => this.renderPlannerPickGroup(entry)).join('')}
               </div>
             ` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // "Dodaj przedmiot spoza listy" — collapsed to a plain ghost button;
+    // expanded, a search box over the full catalog (same searchCatalog used
+    // by the topbar search, see onPlannerSearchInput), so a student can add
+    // a subject their programme stage didn't surface (WF, a language
+    // elective, a course from another kierunek…).
+    renderPlannerCustomSearch() {
+      if (!this.state.plannerCustomSearchOpen) {
+        return `<button class="usospp-btn-ghost" style="margin-bottom:12px;" data-action="plannerToggleCustomSearch">+ Dodaj przedmiot spoza listy</button>`;
+      }
+      return `
+        <div style="margin-bottom:14px;">
+          <div class="usospp-search-wrap" style="width:100%;">
+            <input class="usospp-search-input" type="text" placeholder="Szukaj przedmiotu po nazwie lub kodzie…" data-action="plannerSearchInput" value="${esc(this.state.plannerCustomSearchQuery)}">
+            <div data-planner-search-results-root>${this.renderPlannerCustomSearchResults()}</div>
+          </div>
+          <a data-action="plannerToggleCustomSearch" style="display:inline-block;margin-top:8px;font-size:12px;font-weight:600;">Anuluj</a>
+        </div>
+      `;
+    }
+
+    renderPlannerCustomSearchResults() {
+      const q = this.state.plannerCustomSearchQuery.trim();
+      if (q.length < 3) return '';
+      if (this.state.plannerCustomSearchLoading) {
+        return `<div class="usospp-search-dropdown"><div class="usospp-empty-hint" style="padding:16px;">Szukanie…</div></div>`;
+      }
+      const results = this.state.plannerCustomSearchResults;
+      if (!results) return '';
+      if (results.length === 0) {
+        return `<div class="usospp-search-dropdown"><div class="usospp-empty-hint" style="padding:16px;">Brak wyników dla „${esc(q)}”.</div></div>`;
+      }
+      return `
+        <div class="usospp-search-dropdown">
+          ${results.slice(0, 8).map((subj) => `
+            <div class="usospp-search-item" data-action="plannerSelectSearchSubject" data-url="${esc(location.origin)}/kontroler.php?_action=katalog2/przedmioty/pokazPrzedmiot&prz_kod=${esc(subj.kod)}" data-name="${esc(subj.nazwa)}">
+              <div class="usospp-search-item-title">${esc(subj.nazwa)}</div>
+              <div class="usospp-search-item-sub">${esc(subj.jedn || '')}${subj.jedn ? ' · ' : ''}${esc(subj.kod)}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    renderPlannerAutoBody() {
+      const { subjects } = this.plannerSubjectCandidates;
+      // A subject picked via the search box below is checked into
+      // plannerAutoSelected immediately (see plannerSelectSearchSubject),
+      // but — unlike a manually-picked one — has no committed pick yet, so
+      // plannerSubjectCandidates' pick-derived customSubjects list doesn't
+      // know about it. Union it in here so it still shows up as a normal,
+      // untickable-off-and-back-on row instead of only existing invisibly
+      // in plannerAutoSelected.
+      const knownIds = new Set(subjects.map((s) => subjectId(s.detailsUrl)));
+      const extraSelected = Object.values(this.state.plannerAutoSelected)
+        .filter((v) => !knownIds.has(subjectId(v.subjectUrl)))
+        .map((v) => ({ name: v.subjectName, code: '', detailsUrl: v.subjectUrl }));
+      const allRows = [...subjects, ...extraSelected];
+      const selectedCount = Object.keys(this.state.plannerAutoSelected).length;
+      const status = this.state.plannerAutoStatus;
+      const busy = status === 'fetching' || status === 'generating';
+      return `
+        <div class="usospp-card">
+          <div class="usospp-card-title" style="margin-bottom:6px;">Generator automatyczny</div>
+          <p class="usospp-muted-text">
+            Wybierz przedmioty, ustaw ograniczenia i preferencje — USOS++ spróbuje ułożyć za Ciebie do 5 pasujących wariantów planu z realnych grup. To wciąż tylko podgląd czasowy: nie sprawdzamy, czy zapisy na dany cykl są otwarte.
+          </p>
+        </div>
+
+        <div class="usospp-two-col">
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:12px;">Przedmioty do uwzględnienia (${selectedCount})</div>
+            ${this.renderPlannerCustomSearch()}
+            ${allRows.length === 0 ? `
+              <div class="usospp-empty-hint">Nie znaleźliśmy listy przedmiotów Twojego kierunku — dodaj przedmiot spoza listy powyżej.</div>
+            ` : allRows.map((s) => this.renderPlannerAutoSubjectRow(s)).join('')}
+          </div>
+
+          ${this.renderPlannerAutoPrefsForm()}
+        </div>
+
+        <button class="usospp-btn-primary" style="margin-top:16px;" data-action="plannerAutoGenerate" ${selectedCount === 0 || busy ? 'disabled' : ''}>
+          ${status === 'fetching' ? 'Wczytywanie grup…' : status === 'generating' ? 'Generowanie…' : 'Generuj plan'}
+        </button>
+
+        <div style="margin-top:20px;">
+          ${this.renderPlannerAutoResults()}
+        </div>
+      `;
+    }
+
+    renderPlannerAutoSubjectRow(s) {
+      const id = subjectId(s.detailsUrl);
+      const checked = !!this.state.plannerAutoSelected[id];
+      return `
+        <div class="usospp-list-row" data-action="plannerAutoToggleSubject" data-url="${esc(s.detailsUrl)}" data-name="${esc(s.name)}" style="cursor:pointer;">
+          <div style="min-width:0;">
+            <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.name)}</div>
+            <div style="font-size:11.5px;color:var(--ink-3);">${esc(s.code || '')}</div>
+          </div>
+          <div class="usospp-switch${checked ? ' on' : ''}"><div class="usospp-switch-knob"></div></div>
+        </div>
+      `;
+    }
+
+    renderPlannerAutoPrefsForm() {
+      const s = this.state;
+      const dayOptions = ['poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota', 'niedziela'];
+      return `
+        <div class="usospp-card" data-planner-prefs-root>
+          <div class="usospp-card-title" style="margin-bottom:12px;">Ograniczenia i preferencje</div>
+
+          <div class="usospp-field-stack">
+            <div>
+              <label class="usospp-field-label">Najwcześniejsza godzina rozpoczęcia (twarde)</label>
+              <input class="usospp-input" type="time" data-bind="plannerAutoEarliestStart" value="${esc(s.plannerAutoEarliestStart)}">
+            </div>
+            <div>
+              <label class="usospp-field-label">Najpóźniejsza godzina zakończenia (twarde)</label>
+              <input class="usospp-input" type="time" data-bind="plannerAutoLatestEnd" value="${esc(s.plannerAutoLatestEnd)}">
+            </div>
+          </div>
+
+          <div style="margin-top:14px;">
+            <label class="usospp-field-label">Zablokowane terminy (twarde)</label>
+            ${s.plannerAutoBlockedWindows.map((b, i) => `
+              <div class="usospp-list-row">
+                <div style="font-size:12.5px;">${esc(shortDay(b.day))} ${esc(b.start)}–${esc(b.end)}</div>
+                <a data-action="plannerAutoRemoveBlock" data-index="${i}" style="font-size:12px;font-weight:600;color:oklch(58% 0.19 25);">usuń</a>
+              </div>
+            `).join('')}
+            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+              <select class="usospp-input" style="width:auto;" data-bind="plannerAutoBlockDraftDay">
+                ${dayOptions.map((d) => `<option value="${esc(d)}" ${s.plannerAutoBlockDraftDay === d ? 'selected' : ''}>${esc(shortDay(d))}</option>`).join('')}
+              </select>
+              <input class="usospp-input" style="width:auto;" type="time" data-bind="plannerAutoBlockDraftStart" value="${esc(s.plannerAutoBlockDraftStart)}">
+              <span style="color:var(--ink-3);">–</span>
+              <input class="usospp-input" style="width:auto;" type="time" data-bind="plannerAutoBlockDraftEnd" value="${esc(s.plannerAutoBlockDraftEnd)}">
+              <button class="usospp-btn-ghost" data-action="plannerAutoAddBlock">+ Dodaj blokadę</button>
+            </div>
+          </div>
+
+          <div class="usospp-field-stack" style="margin-top:14px;">
+            <div>
+              <label class="usospp-field-label">Maks. liczba zajęć dziennie (preferencja)</label>
+              <input class="usospp-input" type="number" min="1" data-bind="plannerAutoMaxPerDay" value="${esc(s.plannerAutoMaxPerDay)}" placeholder="bez limitu">
+            </div>
+            <div>
+              <label class="usospp-field-label">Preferowana liczba dni zajęciowych</label>
+              <input class="usospp-input" type="number" min="1" max="7" data-bind="plannerAutoPreferredDays" value="${esc(s.plannerAutoPreferredDays)}" placeholder="bez preferencji">
+            </div>
+            <div class="usospp-list-row">
+              <div style="font-size:13px;">Minimalizuj okienka między zajęciami</div>
+              <div class="usospp-switch${s.plannerAutoMinimizeGaps ? ' on' : ''}" data-action="plannerAutoToggleMinimizeGaps"><div class="usospp-switch-knob"></div></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    renderPlannerAutoResults() {
+      const status = this.state.plannerAutoStatus;
+      if (status === 'idle') {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Wybierz przedmioty i kliknij „Generuj plan”.</div></div>`;
+      }
+      if (status === 'fetching' || status === 'generating') {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">${status === 'fetching' ? 'Wczytywanie grup zajęć…' : 'Generowanie propozycji…'}</div></div>`;
+      }
+      if (status === 'failed') {
+        return this.renderPlannerAutoFailure();
+      }
+      const candidates = this.state.plannerAutoCandidates;
+      if (!candidates.length) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Brak propozycji.</div></div>`;
+      }
+      const activeIndex = Math.min(this.state.plannerAutoActiveCandidateIndex, candidates.length - 1);
+      const active = candidates[activeIndex];
+      return `
+        <div class="usospp-card">
+          <div class="usospp-card-head">
+            <div class="usospp-card-title">Wygenerowane warianty</div>
+            <button class="usospp-btn-primary" data-action="plannerUseGeneratedCandidate" data-index="${activeIndex}">Użyj tego planu</button>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;">
+            ${candidates.map((c, i) => `
+              <button class="usospp-mode-btn${i === activeIndex ? ' active' : ''}" data-action="plannerAutoSelectCandidate" data-index="${i}">Wariant ${i + 1}</button>
+            `).join('')}
+          </div>
+          ${this.renderPlannerCandidateGrid(active)}
+        </div>
+      `;
+    }
+
+    renderPlannerAutoFailure() {
+      const f = this.state.plannerAutoFailure;
+      if (!f) return '';
+      if (f.kind === 'plan-limit' || f.kind === 'fetch' || f.kind === 'error') {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">${esc(f.message)}</div></div>`;
+      }
+      if (f.reason === 'empty-domain') {
+        return `
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:8px;color:oklch(55% 0.19 25);">Nie da się ułożyć planu</div>
+            <p class="usospp-muted-text">Żadna dostępna grupa nie mieści się w Twoich ograniczeniach dla:</p>
+            <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;">
+              ${f.emptyVariables.map((v) => `<li>${esc(v.subjectName)} — ${esc(v.classTypeLabel)}</li>`).join('')}
+            </ul>
+            <p class="usospp-muted-text" style="margin-top:8px;">Poluzuj godziny dostępności albo usuń kolidującą blokadę terminu i spróbuj ponownie.</p>
+          </div>
+        `;
+      }
+      if (f.reason === 'infeasible') {
+        const hasRelaxations = f.helpfulRelaxations && f.helpfulRelaxations.length;
+        const hasPairs = f.conflictingPairs && f.conflictingPairs.length;
+        return `
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:8px;color:oklch(55% 0.19 25);">Nie da się ułożyć planu</div>
+            <p class="usospp-muted-text">Każdy przedmiot z osobna ma jakieś dostępne grupy, ale żadna ich kombinacja nie mieści się bez kolizji.</p>
+            ${hasRelaxations ? `
+              <p style="font-size:13px;font-weight:600;margin-top:10px;margin-bottom:4px;">To by pomogło (sprawdzone):</p>
+              <ul style="margin:0 0 0 18px;padding:0;font-size:13px;">
+                ${f.helpfulRelaxations.map((r) => `<li>Zluzuj: ${esc(r)}</li>`).join('')}
+              </ul>
+            ` : ''}
+            ${hasPairs ? `
+              <p style="font-size:13px;font-weight:600;margin-top:10px;margin-bottom:4px;">Całkowicie skonfliktowane pary zajęć:</p>
+              <ul style="margin:0 0 0 18px;padding:0;font-size:13px;">
+                ${f.conflictingPairs.map((p) => `<li>${esc(p.a)} ↔ ${esc(p.b)}</li>`).join('')}
+              </ul>
+            ` : ''}
+            ${!hasRelaxations && !hasPairs ? `<p class="usospp-muted-text" style="margin-top:8px;">Spróbuj usunąć jeden z przedmiotów z generowania albo poluzować preferencje.</p>` : ''}
+          </div>
+        `;
+      }
+      return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wygenerować planu.</div></div>`;
+    }
+
+    // Same pixel-positioned weekly grid as renderPlannerGrid (same classes:
+    // .usospp-timetable/.usospp-tt-*), just sourced from one generated
+    // candidate's assignment instead of state.plannerPicks — no draft-
+    // ghosting, no pendingRemoval, no conflict detection needed, since the
+    // CSP engine only ever returns candidates that are already internally
+    // conflict-free by construction.
+    renderPlannerCandidateGrid(candidate) {
+      const dark = this.settings.darkMode;
+      const flat = [];
+      candidate.assignment.forEach(({ variable, group }) => {
+        (group.sessions || []).forEach((s) => {
+          if (!s.start || !s.end) return;
+          flat.push({
+            day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
+            subjectName: variable.subjectName, classTypeShort: variable.classTypeShort, teacher: group.teacher,
+            seed: this.plannerColorSeed(variable.subjectName),
+          });
+        });
+      });
+      if (!flat.length) return `<div class="usospp-empty-hint">Brak zajęć w tym wariancie.</div>`;
+
+      const allMins = flat.flatMap((e) => [toMin(e.start), toMin(e.end)]).filter((n) => n !== null);
+      const hourStart = Math.max(0, Math.floor(Math.min(...allMins) / 60));
+      const hourEnd = Math.ceil(Math.max(...allMins) / 60);
+      const ROW_H = 60;
+      const totalHeight = Math.max(1, hourEnd - hourStart) * ROW_H;
+      const hours = [];
+      for (let h = hourStart; h <= hourEnd; h++) hours.push(h);
+
+      const byDay = {};
+      flat.forEach((e) => { const d = shortDay(e.day); (byDay[d] = byDay[d] || []).push(e); });
+      const dayGroups = DAY_KEYS.map((dk) => ({ day: dk, entries: byDay[dk] || [] })).filter((d) => d.entries.length);
+
+      return `
+        <div class="usospp-timetable">
+          <div class="usospp-tt-hours" style="height:${totalHeight}px;">
+            ${hours.map((h) => `<div class="usospp-tt-hour" style="top:${(h - hourStart) * ROW_H}px;">${h}:00</div>`).join('')}
+          </div>
+          <div class="usospp-tt-days">
+            ${dayGroups.map((d) => `
+              <div class="usospp-tt-daycol">
+                <div class="usospp-tt-daylabel">${esc(d.day)}</div>
+                <div class="usospp-tt-daybody" style="height:${totalHeight}px;background-size:100% ${ROW_H}px;">
+                  ${d.entries.map((e) => {
+                    const startMin = toMin(e.start);
+                    const endMin = toMin(e.end);
+                    const top = (startMin - hourStart * 60) * (ROW_H / 60);
+                    const height = Math.max(36, (endMin - startMin) * (ROW_H / 60));
+                    const color = subjectColor(e.seed, dark);
+                    const weeksTag = weeksLabel(e.weeks);
+                    const full = [e.subjectName, e.teacher, e.place].filter(Boolean).join(' — ')
+                      + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '');
+                    return `
+                      <div class="usospp-tt-entry" style="top:${top}px;height:${height}px;background:${color.bg};" title="${esc(full)}">
+                        <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
+                        <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · ${esc(e.subjectName)}</div>
+                        ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(e.teacher)}</div>` : ''}
+                        ${e.place ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(shortPlace(e.place))}</div>` : ''}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            `).join('')}
           </div>
         </div>
       `;
@@ -2689,7 +3471,7 @@
     }
 
     renderPlannerGroupOption(key, groupsUrl, classTypeLabel, g, selected) {
-      const schedule = (g.sessions || []).map((sess) => `${esc(shortDay(sess.day))} ${esc(sess.start)}–${esc(sess.end)}${sess.place ? `, ${esc(shortPlace(sess.place))}` : ''}`).join(' · ') || 'brak danych o terminie';
+      const schedule = (g.sessions || []).map((sess) => `${esc(shortDay(sess.day))} ${esc(sess.start)}–${esc(sess.end)}${weeksLabel(sess.weeks) ? ` (${weeksLabel(sess.weeks)})` : ''}${sess.place ? `, ${esc(shortPlace(sess.place))}` : ''}`).join(' · ') || 'brak danych o terminie';
       const buildings = [...new Set((g.sessions || []).map((sess) => buildingCode(sess.place)).filter(Boolean))];
       return `
         <div class="usospp-radio-row${selected ? ' selected' : ''}" data-action="plannerSelectGroup" data-key="${esc(key)}" data-groups-url="${esc(groupsUrl)}" data-nr="${esc(g.nr)}" data-class-type-label="${esc(classTypeLabel)}">
@@ -2719,7 +3501,7 @@
             <div class="usospp-list-row">
               <div>
                 <div style="font-size:12.5px;">${esc(p.classTypeLabel)} · grupa ${esc(p.nr)}</div>
-                <div style="font-size:11.5px;color:var(--ink-3);margin-top:1px;">${(p.sessions || []).map((sess) => `${esc(shortDay(sess.day))} ${esc(sess.start)}–${esc(sess.end)}`).join(' · ') || 'brak danych o terminie'}${p.teacher ? ' · ' + esc(p.teacher) : ''}</div>
+                <div style="font-size:11.5px;color:var(--ink-3);margin-top:1px;">${(p.sessions || []).map((sess) => `${esc(shortDay(sess.day))} ${esc(sess.start)}–${esc(sess.end)}${weeksLabel(sess.weeks) ? ` (${weeksLabel(sess.weeks)})` : ''}`).join(' · ') || 'brak danych o terminie'}${p.teacher ? ' · ' + esc(p.teacher) : ''}</div>
               </div>
               <a data-action="plannerRemovePick" data-key="${esc(p.key)}" style="font-size:12px;font-weight:600;color:oklch(58% 0.19 25);">usuń</a>
             </div>
@@ -2742,7 +3524,7 @@
         (p.sessions || []).forEach((s, i) => {
           if (!s.start || !s.end) return;
           flat.push({
-            day: s.day, start: s.start, end: s.end, place: s.place,
+            day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
             subjectName: p.subjectName, classTypeShort: p.classTypeShort, teacher: p.teacher,
             seed: this.plannerColorSeed(p.subjectName), pickKey: `${p.key}::${i}`, draft: false, pendingRemoval,
           });
@@ -2771,7 +3553,7 @@
           (g.sessions || []).forEach((s, i) => {
             if (!s.start || !s.end) return;
             flat.push({
-              day: s.day, start: s.start, end: s.end, place: s.place,
+              day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
               subjectName, classTypeShort: shortClassType(g.classTypeLabel), teacher: g.teacher,
               seed: this.plannerColorSeed(subjectName), pickKey: `${key}::draft::${i}`, draft: true,
             });
@@ -2802,7 +3584,7 @@
           for (let j = i + 1; j < list.length; j++) {
             const a = list[i];
             const b = list[j];
-            if (toMin(a.start) < toMin(b.end) && toMin(b.start) < toMin(a.end)) {
+            if (sessionsOverlap(a, b)) {
               conflicts.add(a.pickKey);
               conflicts.add(b.pickKey);
             }
@@ -2831,7 +3613,9 @@
                     const color = subjectColor(e.seed, dark);
                     const conflict = conflicts.has(e.pickKey);
                     const removeColor = 'oklch(55% 0.19 25)';
+                    const weeksTag = weeksLabel(e.weeks);
                     const full = [e.subjectName, e.teacher, e.place].filter(Boolean).join(' — ')
+                      + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '')
                       + (e.draft ? ' (jeszcze niedodane)' : e.pendingRemoval ? ' (zostanie usunięte po zapisaniu)' : '');
                     const entryStyle = e.draft
                       ? `background:transparent;border:2px dashed ${color.time};opacity:0.85;`
@@ -2841,7 +3625,7 @@
                     const labelStyle = `color:${e.pendingRemoval ? removeColor : color.label};${e.pendingRemoval ? 'text-decoration:line-through;' : ''}`;
                     return `
                       <div class="usospp-tt-entry${conflict ? ' usospp-tt-entry--conflict' : ''}" style="top:${top}px;height:${height}px;${entryStyle}" title="${esc(full)}">
-                        <div class="usospp-tt-entry-time" style="color:${e.pendingRemoval ? removeColor : color.time};">${esc(e.start)}–${esc(e.end)}</div>
+                        <div class="usospp-tt-entry-time" style="color:${e.pendingRemoval ? removeColor : color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
                         <div class="usospp-tt-entry-label" style="${labelStyle}">${esc(e.classTypeShort)} · ${esc(e.subjectName)}</div>
                         ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${e.pendingRemoval ? removeColor : color.meta};">${esc(e.teacher)}</div>` : ''}
                         ${e.place ? `<div class="usospp-tt-entry-meta" style="color:${e.pendingRemoval ? removeColor : color.meta};">${esc(shortPlace(e.place))}</div>` : ''}
@@ -3037,17 +3821,18 @@
       // inject.js's applyIndependentFeatures for the code these describe.
       const featureGroups = [
         {
-          label: 'Wymagają włączonego USOS++',
+          label: 'Wymagają włączonego panelu USOS++',
           keys: {
             keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–9 do przełączania sekcji w USOS++'],
             autorefresh: ['Automatyczne odświeżanie danych', 'Dane odświeżają się bez przeładowania strony'],
-            gradeBadge: ['Odznaka średniej na ikonie', 'Aktualizuje się, gdy USOS++ jest włączony'],
+            gradeBadge: ['Odznaka średniej na ikonie', 'Aktualizuje się, gdy panel USOS++ jest włączony'],
           },
         },
         {
-          label: 'Działają niezależnie od USOS++',
+          label: 'Działają niezależnie od panelu USOS++',
           keys: {
-            quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, gdy USOS++ jest wyłączony'],
+            quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, gdy panel USOS++ jest wyłączony'],
+            classicWidgets: ['Widżety na stronach klasycznych', 'Średnia w Ocenach, zaległości w Płatnościach, licznik zajęć w Planie i podsumowanie w Mój USOSweb'],
           },
         },
       ];
