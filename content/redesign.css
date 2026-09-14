@@ -201,6 +201,13 @@
 .usospp-badge { font-size: 12px; font-weight: 700; padding: 3px 12px; border-radius: 999px; white-space: nowrap; }
 
 .usospp-empty-hint { font-size: 13.5px; color: var(--ink-3); padding: 20px 0; }
+
+/* ---- Logged out of USOSweb (see App#renderLoggedOut) — sidebar/topbar
+   stay up, only the content pane swaps to this on every view. ---- */
+.usospp-loggedout { text-align: center; padding: 90px 20px 40px; max-width: 420px; margin: 0 auto; }
+.usospp-loggedout-logo { width: 44px; height: 44px; margin: 0 auto 20px; }
+.usospp-loggedout-title { font-size: 19px; font-weight: 700; margin: 0 0 10px 0; }
+.usospp-loggedout-text { font-size: 14px; color: var(--ink-2); line-height: 1.55; margin: 0 0 22px 0; }
 .usospp-notice {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
   background: oklch(92% 0.03 45); color: oklch(30% 0.02 45); border-radius: 10px;
@@ -272,6 +279,13 @@
 .usospp-btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--ink); }
 .usospp-btn-primary { background: #d9773a; color: #fff; border: none; }
 .usospp-btn-primary:hover { background: oklch(52% 0.15 45); }
+/* .usospp-root a's own color rule (higher specificity: class+element) would
+   otherwise win over .usospp-btn-primary here when the button is an <a>
+   (e.g. the "Zaloguj się" login link) — orange text on an orange
+   background, unreadable. Every other primary/ghost button is a <button>,
+   unaffected by that rule, so this only needs to target the anchor case. */
+.usospp-root a.usospp-btn-primary,
+.usospp-root a.usospp-btn-primary:hover { color: #fff; }
 .usospp-mode-btn { flex: 1; border: 1px solid var(--border); background: transparent; color: var(--ink); padding: 11px; }
 .usospp-mode-btn.active { border-color: oklch(60% 0.15 45); background: oklch(92% 0.03 45); color: oklch(40% 0.13 45); }
 .usospp-root[data-theme="dark"] .usospp-mode-btn.active { background: oklch(30% 0.03 45); color: oklch(85% 0.05 45); }

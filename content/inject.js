@@ -37,6 +37,18 @@
     cachedLogoutUrl = cas ? cas.getAttribute('logout-url') : null;
   }
 
+  // cas-bar is part of USOSweb's shared page shell, so it (and usos-layout/
+  // usos-frame, which looksLikeUsos checks) is present even on the "musisz
+  // się zalogować" page — mode="anon" is what actually distinguishes a
+  // logged-out load from a real one. Without this check mountRedesign()
+  // would fetch a dozen pages that are all just this same login prompt and
+  // render the full dashboard shell with everything silently empty, with no
+  // hint that logging in (not disabling USOS++) is what's needed.
+  function isLoggedOut() {
+    const cas = document.querySelector('cas-bar');
+    return !!cas && cas.getAttribute('mode') === 'anon';
+  }
+
   function ensureContainer() {
     if (container) return container;
     container = document.createElement('div');
@@ -77,6 +89,14 @@
   async function refreshData() {
     const adapter = selectAdapter();
     if (!adapter || !app) return;
+    if (isLoggedOut()) {
+      // Session expired while the redesign was already open (autorefresh,
+      // or an explicit rescrape) — drop back to the login prompt instead of
+      // re-rendering the dashboard with everything now empty.
+      unmountRedesign();
+      await mountRedesign();
+      return;
+    }
     const data = await collectAll(adapter);
     app.data = data;
     app.render();
@@ -124,6 +144,17 @@
     }
     hideNative();
     const el = ensureContainer();
+    if (isLoggedOut()) {
+      // Still mount the real app shell (sidebar/topbar stay usable, nav
+      // still highlights whatever's clicked) — only the content pane is
+      // replaced, on every view, by App#renderLoggedOut. No point fetching
+      // a dozen pages that are all just this same login prompt.
+      const cas = document.querySelector('cas-bar');
+      const data = { loggedOut: true, loginUrl: cas ? cas.getAttribute('login-url') : null };
+      app = window.USOSPP_APP.mount(el, data, { darkMode: currentSettings.darkMode, features: currentSettings.features });
+      maybeUpdateBadge(data);
+      return;
+    }
     const data = await collectAll(adapter);
     app = window.USOSPP_APP.mount(el, data, { darkMode: currentSettings.darkMode, features: currentSettings.features });
     maybeUpdateBadge(data);

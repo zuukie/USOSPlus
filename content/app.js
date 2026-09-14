@@ -1787,6 +1787,11 @@
     }
 
     renderView() {
+      // Logged out of USOSweb: no per-page data exists to show regardless
+      // of which nav item is active, so every view falls back to the same
+      // login prompt instead of rendering its normal (empty) content — the
+      // sidebar/topbar stay fully usable, only the content pane changes.
+      if (this.data.loggedOut) return this.renderLoggedOut();
       switch (this.state.view) {
         case 'dashboard': return this.renderDashboard();
         case 'aktualnosci': return this.renderAktualnosci();
@@ -1878,6 +1883,24 @@
     }
 
     // ---- views ---------------------------------------------------------
+
+    renderLoggedOut() {
+      const loginUrl = this.data.loginUrl;
+      return `
+        <div class="usospp-view">
+          <div class="usospp-loggedout">
+            <div class="usospp-loggedout-logo">${logoSvg(false)}</div>
+            <div class="usospp-loggedout-title">Zaloguj się do USOSweb</div>
+            <p class="usospp-loggedout-text">Nie jesteś obecnie zalogowany/a, więc USOS++ nie ma skąd wziąć danych.</p>
+            ${loginUrl ? `
+              <a class="usospp-btn-primary" style="display:inline-block;text-decoration:none;" href="${esc(loginUrl)}">Zaloguj się →</a>
+            ` : `
+              <p class="usospp-muted-text">Nie udało się znaleźć linku logowania — odśwież stronę.</p>
+            `}
+          </div>
+        </div>
+      `;
+    }
 
     renderDashboard() {
       const grades = this.numericGrades;
