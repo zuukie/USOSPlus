@@ -61,7 +61,7 @@ Szczegółowy opis struktury kodu (moduły `core/`, `usos/`, `irk/`, zasady doda
 
 Pull requesty są mile widziane! Jeśli chcesz dodać nową funkcję lub adapter dla innej uczelni:
 
-1. Zapoznaj się z [ARCHITECTURE.md](ARCHITECTURE.md) — opisuje podział na moduły i zasady projektu (np. brak zgadywanych selektorów bez realnej strony do zweryfikowania).
+1. Zapoznaj się z [ARCHITECTURE.md](ARCHITECTURE.md) — opisuje podział na moduły i zasady projektu.
 2. Zrób forka repozytorium i utwórz branch na swoją zmianę.
 3. Otwórz Pull Request z krótkim opisem, co i dlaczego zmieniasz.
 
@@ -77,9 +77,9 @@ Projekt jest dostępny na licencji [MIT](LICENSE).
 
 ## Contact
 
-- 📧 E-mail: [michalwyszk@gmail.com](mailto:michalwyszk@gmail.com)
+- 📧 E-mail: [usosplus@zuukie.dev](mailto:usosplus@zuukie.dev)
 - 📸 Instagram: [@usosplus](https://instagram.com/usosplus)
-- 💻 GitHub Issues: [zuukie/USOS--](https://github.com/zuukie/USOS--/issues)
+- 💻 GitHub Issues: [zuukie/USOS--](https://github.com/zuukie/USOS++/issues)
 
 ---
 
