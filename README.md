@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange)](#status)
 
-🌐 [Strona / projekt](https://github.com/zuukie/USOS--) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOS--)
+🌐 [Strona / projekt](https://github.com/zuukie/USOS--) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOS++)
 
 </div>
 
