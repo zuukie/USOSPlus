@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange)](#status)
 
-🌐 [Strona / projekt](https://github.com/zuukie/USOS--) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOS++)
+🌐 [Strona / projekt](https://github.com/zuukie/USOSPlus) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOS++)
 
 </div>
 
@@ -65,11 +65,11 @@ Pull requesty są mile widziane! Jeśli chcesz dodać nową funkcję lub adapter
 2. Zrób forka repozytorium i utwórz branch na swoją zmianę.
 3. Otwórz Pull Request z krótkim opisem, co i dlaczego zmieniasz.
 
-Większe zmiany warto najpierw przedyskutować w [Issues](https://github.com/zuukie/USOS--/issues).
+Większe zmiany warto najpierw przedyskutować w [Issues](https://github.com/zuukie/USOSPlus/issues).
 
 ## Issues / Zgłaszanie błędów
 
-Znalazłeś błąd albo masz pomysł na nową funkcję? Zgłoś go w zakładce [Issues](https://github.com/zuukie/USOS--/issues) — postaraj się opisać kroki do odtworzenia problemu i (jeśli to możliwe) dodać zrzut ekranu.
+Znalazłeś błąd albo masz pomysł na nową funkcję? Zgłoś go w zakładce [Issues](https://github.com/zuukie/USOSPlus/issues) — postaraj się opisać kroki do odtworzenia problemu i (jeśli to możliwe) dodać zrzut ekranu.
 
 ## License
 
@@ -79,7 +79,7 @@ Projekt jest dostępny na licencji [MIT](LICENSE).
 
 - 📧 E-mail: [usosplus@zuukie.dev](mailto:usosplus@zuukie.dev)
 - 📸 Instagram: [@usosplus](https://instagram.com/usosplus)
-- 💻 GitHub Issues: [zuukie/USOS--](https://github.com/zuukie/USOS++/issues)
+- 💻 GitHub Issues: [zuukie/USOSPlus](https://github.com/zuukie/USOS++/issues)
 
 ---
 
