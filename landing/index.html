@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Jeśli strona dostanie własną domenę, podmień poniższe 3 miejsca:
+       canonical, og:url i twitter:image oraz adres w sitemap.xml -->
+  <title>USOS++ — nowoczesny USOSweb | Rozszerzenie do Chrome dla studentów</title>
+  <meta name="description" content="USOS++ to darmowe rozszerzenie do Chrome, które zamienia USOSweb w jeden szybki panel: oceny i średnia, plan zajęć, płatności, egzaminy. Działa lokalnie w przeglądarce. Wersja beta.">
+  <link rel="canonical" href="https://zuukie.github.io/USOSPlus/">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#d9773a">
+
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="pl_PL">
+  <meta property="og:site_name" content="USOS++">
+  <meta property="og:title" content="USOS++ — nowoczesny USOSweb w Twojej przeglądarce">
+  <meta property="og:description" content="Ten sam USOS, to samo logowanie — ale jeden szybki panel zamiast rozjeżdżających się podstron. Oceny, plan, płatności i egzaminy. Darmowe rozszerzenie do Chrome.">
+  <meta property="og:url" content="https://zuukie.github.io/USOSPlus/">
+  <meta property="og:image" content="https://zuukie.github.io/USOSPlus/assets/og-cover.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="USOS++ — nowoczesny panel USOSweb: oceny, plan zajęć i płatności w jednym miejscu">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="USOS++ — nowoczesny USOSweb w Twojej przeglądarce">
+  <meta name="twitter:description" content="Rozszerzenie do Chrome dla studentów: oceny i średnia, plan zajęć, płatności, egzaminy — w jednym panelu, lokalnie w przeglądarce.">
+  <meta name="twitter:image" content="https://zuukie.github.io/USOSPlus/assets/og-cover.png">
+
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/icon-32.png">
+  <link rel="apple-touch-icon" href="assets/icon-128.png">
+
+  <link rel="preload" href="assets/fonts/generalsans/gs-600.woff2" as="font" type="font/woff2" crossorigin>
+  <script>
+    // Motyw przed pierwszym malowaniem: zapisany wybór > system > jasny.
+    (function () {
+      try {
+        var t = localStorage.getItem('usospp-landing-theme');
+        if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = t;
+      } catch (e) {
+        document.documentElement.dataset.theme = 'light';
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="assets/fonts/fonts.css">
+  <link rel="stylesheet" href="styles.css">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "USOS++",
+    "applicationCategory": "EducationalApplication",
+    "applicationSubCategory": "BrowserApplication",
+    "operatingSystem": ["ChromeOS", "Windows", "macOS", "Linux"],
+    "description": "Rozszerzenie do Chrome, które przebudowuje USOSweb w jeden szybki panel: oceny i średnia, plan zajęć, płatności, egzaminy, mapa kampusu i tryb ciemny. Działa lokalnie w przeglądarce.",
+    "url": "https://zuukie.github.io/USOSPlus/",
+    "downloadUrl": "https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "PLN" },
+    "license": "https://github.com/zuukie/USOSPlus/blob/main/LICENSE",
+    "author": { "@type": "Organization", "name": "USOS++", "url": "https://github.com/zuukie/USOSPlus" }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Czy USOS++ zastępuje USOS?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Nie. USOS++ to rozszerzenie przeglądarkowe, które nakłada wygodniejszy wygląd na istniejący USOSweb Twojej uczelni. System, dane i logowanie zostają te same." }
+      },
+      {
+        "@type": "Question",
+        "name": "Czy muszę zakładać nowe konto?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Nie. Logujesz się do USOSweb dokładnie tak jak dotychczas. USOS++ nie ma własnego logowania ani bazy użytkowników." }
+      },
+      {
+        "@type": "Question",
+        "name": "Czy USOS++ działa na telefonie?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Nie. USOS++ to rozszerzenie do przeglądarki na komputerze — działa w Chrome i innych przeglądarkach opartych na Chromium (m.in. Edge, Brave, Opera). Nie jest to aplikacja mobilna ani osobna aplikacja." }
+      },
+      {
+        "@type": "Question",
+        "name": "Czy USOS++ jest bezpieczny? Co dzieje się z moimi danymi?",
+        "acceptedAnswer": { "@type": "Answer", "text": "USOS++ czyta tylko to, co Twoja zalogowana przeglądarka i tak już widzi na stronach USOSweb, i buduje z tego lepszy interfejs lokalnie. Nic nie trafia na żaden zewnętrzny serwer, nie ma analityki ani reklam. Jedyny wyjątek to widok Mapy, który pobiera publiczne kafelki mapy z OpenStreetMap." }
+      },
+      {
+        "@type": "Question",
+        "name": "Na jakich uczelniach działa USOS++?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Zweryfikowany jest USOSweb Politechniki Wrocławskiej. Obsługę innej uczelni na tej samej platformie USOS dodasz jednym kliknięciem w oknie rozszerzenia, z jawnym potwierdzeniem uprawnień przez Chrome." }
+      },
+      {
+        "@type": "Question",
+        "name": "Co oznacza, że projekt jest w wersji beta?",
+        "acceptedAnswer": { "@type": "Answer", "text": "Projekt rozwija jedna osoba — student — więc część podstron może jeszcze nie działać idealnie. Rozszerzenie zawsze uczciwie oznacza takie miejsca w interfejsie, a błędy możesz zgłaszać na GitHubie." }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Przejdź do treści</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#start" aria-label="USOS++ — początek strony">
+        <img class="brand-logo" src="assets/logo.svg" width="28" height="28" alt="Logo USOS++">
+        <span class="brand-text">USOS<span class="brand-plus">++</span></span>
+        <span class="beta-pill">Beta</span>
+      </a>
+      <nav id="site-nav" class="site-nav" aria-label="Nawigacja główna">
+        <a href="#funkcje">Funkcje</a>
+        <a href="#jak-to-dziala">Jak to działa</a>
+        <a href="#prywatnosc">Prywatność</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="header-actions">
+        <a class="btn btn-primary btn-small header-cta" href="https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa" target="_blank" rel="noopener">Zainstaluj</a>
+        <button class="theme-toggle" type="button" aria-pressed="false" aria-label="Przełącz na tryb ciemny">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><line x1="12" y1="1.5" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22.5"/><line x1="4.3" y1="4.3" x2="6" y2="6"/><line x1="18" y1="18" x2="19.7" y2="19.7"/><line x1="1.5" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22.5" y2="12"/><line x1="4.3" y1="19.7" x2="6" y2="18"/><line x1="18" y1="6" x2="19.7" y2="4.3"/></svg>
+        </button>
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Otwórz menu">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ============ HERO ============ -->
+    <section class="hero wrap" id="start" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Rozszerzenie do przeglądarki na komputer • Wersja beta</p>
+        <h1 id="page-title">USOS++ — nowoczesny USOSweb w&nbsp;Twojej przeglądarce</h1>
+        <p class="lede">Ten sam USOS, to samo logowanie — ale <strong>jeden szybki panel</strong> zamiast rozjeżdżających się podstron. Oceny ze średnią, plan zajęć, płatności i egzaminy wreszcie w jednym miejscu.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa" target="_blank" rel="noopener">Zainstaluj z Chrome Web Store</a>
+          <a class="btn btn-ghost" href="#jak-to-dziala">Zobacz, jak to działa</a>
+        </div>
+        <ul class="trust-list">
+          <li>Darmowy i open source (MIT)</li>
+          <li>Wszystko dzieje się lokalnie w przeglądarce</li>
+          <li>Zweryfikowany na USOSweb Politechniki Wrocławskiej</li>
+        </ul>
+      </div>
+      <figure class="hero-visual" aria-label="Poglądowa wizualizacja panelu USOS++: pasek boczny oraz karty ze średnią ocen, dzisiejszymi zajęciami i płatnościami">
+        <div class="mock" aria-hidden="true">
+          <div class="mock-side">
+            <div class="mock-brand"><i></i><b>USOS++</b></div>
+            <div class="mock-link on">Dashboard</div>
+            <div class="mock-link">Plan zajęć</div>
+            <div class="mock-link">Oceny</div>
+            <div class="mock-link">Płatności</div>
+            <div class="mock-link">Egzaminy</div>
+          </div>
+          <div class="mock-main">
+            <div class="mock-top"><span class="mock-search">Szukaj przedmiotu, jednostki…</span><span class="mock-bell"></span></div>
+            <div class="mock-cards">
+              <div class="mock-card"><small>Średnia ocen</small><strong>4,32</strong><span>policzona automatycznie</span></div>
+              <div class="mock-card"><small>Dziś zajęcia</small><strong>Bazy danych</strong><span>10:15 · sala 2.28</span></div>
+              <div class="mock-card"><small>Płatności</small><strong>0 zł zaległości</strong><span>wszystko opłacone</span></div>
+            </div>
+          </div>
+        </div>
+        <figcaption class="mock-caption">Wizualizacja poglądowa — tak wygląda nowy panel nałożony na Twój USOSweb.</figcaption>
+      </figure>
+    </section>
+
+    <p class="strip wrap" role="note"><strong>To nie aplikacja mobilna ani zamiennik USOS-a.</strong> USOS++ działa na komputerze, w przeglądarkach Chromium.</p>
+
+    <!-- ============ FUNKCJE ============ -->
+    <section class="section wrap" id="funkcje" aria-labelledby="funkcje-title">
+      <h2 id="funkcje-title">Wszystko, po co wchodzisz do USOS — w jednym panelu</h2>
+      <p class="section-sub">Bez zbędnego klikania między podstronami. Poniżej funkcje, które rozszerzenie ma naprawdę — nic tu nie jest wymyślone.</p>
+      <div class="grid features">
+        <article class="card card-wide">
+          <div class="feat-head">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="5" y1="20" x2="5" y2="11"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="19" y1="20" x2="19" y2="14"/></svg></span>
+            <h3>Oceny i średnia</h3>
+          </div>
+          <p>Oceny z całego toku studiów i średnia policzona automatycznie. Bez przepisywania do kalkulatora.</p>
+        </article>
+        <article class="card card-wide">
+          <div class="feat-head">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg></span>
+            <h3>Plan zajęć i generator planu</h3>
+          </div>
+          <p>Czytelny plan na dziś i na cały tydzień. A przed zapisami ułożysz sobie przykładowy plan z realnych grup — tylko do podglądu, rozszerzenie nikogo nigdzie nie zapisuje.</p>
+        </article>
+        <article class="card">
+          <div class="feat-head">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="2"/><line x1="3" y1="10.5" x2="21" y2="10.5"/><line x1="7" y1="15" x2="11" y2="15"/></svg></span>
+            <h3>Płatności</h3>
+          </div>
+          <p>Widać ile i za co zostało do zapłaty — z podpowiedzią o zaległościach także w klasycznym widoku USOS.</p>
+        </article>
+        <article class="card">
+          <div class="feat-head">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 5-5.5"/></svg></span>
+            <h3>Egzaminy i sprawdziany</h3>
+          </div>
+          <p>Wszystkie terminy egzaminów i sprawdzianów zebrane w jednym miejscu, zamiast szukania po zakładkach.</p>
+        </article>
+        <article class="card">
+          <div class="feat-head">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg></span>
+            <h3>Wyszukiwarka i mapa kampusu</h3>
+          </div>
+          <p>Przedmioty, jednostki i programy studiów — prosto z górnego paska. Do tego mapa budynków uczelni na danych z USOS.</p>
+        </article>
+        <article class="card">
+          <div class="feat-head">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5h-15S6 13 6 9z"/><path d="M10 19a2.2 2.2 0 0 0 4 0"/></svg></span>
+            <h3>Aktualności, tryb ciemny, drobiazgi</h3>
+          </div>
+          <p>Ogłoszenia wydziału, tryb ciemny i skróty klawiaturowe 1–9. Drobne widżety pomagają nawet przy wyłączonym panelu.</p>
+        </article>
+      </div>
+      <p class="more-line">A do tego w tym samym panelu: <strong>stypendia, podania i ankiety</strong> — oraz wsparcie przeglądania rekrutacji <strong>IRK</strong> dla kandydatów (oferta i szczegóły kierunków, tylko do odczytu).</p>
+    </section>
+
+    <!-- ============ JAK TO DZIAŁA ============ -->
+    <section class="section section-alt" id="jak-to-dziala" aria-labelledby="jak-title">
+      <div class="wrap">
+        <h2 id="jak-title">Jak to działa?</h2>
+        <p class="section-sub">Trzy kroki, żadnej magii — i żadnego nowego konta.</p>
+        <ol class="steps">
+          <li>
+            <span class="step-num" aria-hidden="true">1</span>
+            <h3>Instalujesz rozszerzenie</h3>
+            <p>Jednym kliknięciem z Chrome Web Store, na komputerze — w Chrome i innych przeglądarkach opartych na Chromium. Bez rejestracji i bez podawania danych.</p>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">2</span>
+            <h3>Logujesz się do USOSweb jak zawsze</h3>
+            <p>To samo logowanie uczelniane, ta sama strona. USOS++ nie ma własnego logowania.</p>
+          </li>
+          <li>
+            <span class="step-num" aria-hidden="true">3</span>
+            <h3>USOS układa się w jeden panel</h3>
+            <p>Rozszerzenie czyta lokalnie to, co przeglądarka już widzi, i pokazuje to wygodniej: pasek boczny, wyszukiwarka, karty. W każdej chwili możesz wrócić do klasycznego widoku.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ============ PRYWATNOŚĆ ============ -->
+    <section class="section wrap" id="prywatnosc" aria-labelledby="prywatnosc-title">
+      <div class="split">
+        <div class="split-head">
+          <h2 id="prywatnosc-title">Prywatność bez gwiazdek</h2>
+          <p class="section-sub">Krótko, po ludzku. Pełna wersja jest w polityce prywatności projektu.</p>
+          <p><a href="https://github.com/zuukie/USOSPlus/blob/main/PRIVACY.md" target="_blank" rel="noopener">Przeczytaj politykę prywatności</a></p>
+        </div>
+        <div class="split-list">
+          <article class="priv-row">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
+            <div>
+              <h3>Wszystko zostaje u Ciebie</h3>
+              <p>Oceny, plan czy płatności są przetwarzane w pamięci Twojej karty i pokazywane na ekranie. Nic nie trafia na żaden zewnętrzny serwer autora.</p>
+            </div>
+          </article>
+          <article class="priv-row">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12s3.5-6.5 9-6.5c2 0 3.7.8 5 2M21 12s-3.5 6.5-9 6.5c-2 0-3.7-.8-5-2"/><line x1="4" y1="4" x2="20" y2="20"/></svg></span>
+            <div>
+              <h3>Zero śledzenia i reklam</h3>
+              <p>Brak analityki, telemetrii i reklam. Cały kod jest w paczce rozszerzenia i przechodzi przegląd Chrome Web Store.</p>
+            </div>
+          </article>
+          <article class="priv-row">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><circle class="knob" cx="15" cy="7" r="2.2"/><line x1="4" y1="12" x2="20" y2="12"/><circle class="knob" cx="9" cy="12" r="2.2"/><line x1="4" y1="17" x2="20" y2="17"/><circle class="knob" cx="14" cy="17" r="2.2"/></svg></span>
+            <div>
+              <h3>Tylko potrzebne uprawnienia</h3>
+              <p>Rozszerzenie prosi wyłącznie o to, czego realnie używa — a obsługę innej uczelni dodajesz świadomie, jednym kliknięciem.</p>
+            </div>
+          </article>
+          <article class="priv-row">
+            <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-5.5-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.5 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.3"/></svg></span>
+            <div>
+              <h3>Jeden wyjątek: mapa</h3>
+              <p>Widok mapy pobiera publiczne obrazki kafelków z OpenStreetMap dla budynków z USOS. Nigdy nie pyta o Twoją lokalizację.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ UCZELNIE + BETA ============ -->
+    <section class="section section-alt" id="uczelnie" aria-labelledby="uczelnie-title">
+      <div class="wrap">
+        <h2 id="uczelnie-title">Uczelnie i status beta</h2>
+        <article class="card uni-card">
+          <span class="feat-icon feat-icon-large" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="16" height="17" rx="1.5"/><line x1="9" y1="20.5" x2="9" y2="17"/><line x1="15" y1="20.5" x2="15" y2="17"/><line x1="4" y1="20.5" x2="20" y2="20.5"/><line x1="8" y1="7" x2="8.2" y2="7"/><line x1="12" y1="7" x2="12.2" y2="7"/><line x1="16" y1="7" x2="16.2" y2="7"/><line x1="8" y1="10.5" x2="8.2" y2="10.5"/><line x1="12" y1="10.5" x2="12.2" y2="10.5"/><line x1="16" y1="10.5" x2="16.2" y2="10.5"/></svg></span>
+          <div>
+            <h3>Zweryfikowany na Politechnice Wrocławskiej</h3>
+            <p>USOS++ powstał i jest testowany na USOSweb PWr (<code>web.usos.pwr.edu.pl</code>). Korzystasz z USOS na innej uczelni? Obsługę jej strony dodasz jednym kliknięciem w oknie rozszerzenia — Chrome jawnie poprosi Cię o zgodę tylko dla tej jednej domeny.</p>
+          </div>
+        </article>
+        <aside class="beta-banner" aria-label="Informacja o wersji beta">
+          <span class="feat-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4"/><path d="M5 4.5h13l-2.5 3.8L18 12H5"/></svg></span>
+          <div class="beta-banner-text">
+            <h3>Uczciwa beta</h3>
+            <p>To studencki, nieoficjalny projekt — niezwiązany formalnie z USOS ani z żadną uczelnią. Część podstron może jeszcze nie działać idealnie, ale rozszerzenie <strong>zawsze oznacza takie miejsca w interfejsie</strong>. Znalazłeś coś? Zgłoś to — naprawdę to czytamy.</p>
+          </div>
+          <a class="btn btn-ghost btn-small" href="https://github.com/zuukie/USOSPlus/issues" target="_blank" rel="noopener">Zgłoś błąd lub pomysł</a>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ FAQ ============ -->
+    <section class="section wrap" id="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">Częste pytania</h2>
+      <div class="faq">
+        <details>
+          <summary>Czy USOS++ zastępuje USOS?</summary>
+          <p>Nie. To rozszerzenie przeglądarkowe, które nakłada wygodniejszy wygląd na istniejący USOSweb Twojej uczelni. System, dane i logowanie zostają te same.</p>
+        </details>
+        <details>
+          <summary>Czy muszę zakładać nowe konto?</summary>
+          <p>Nie. Logujesz się do USOSweb dokładnie tak jak dotychczas. USOS++ nie ma własnego logowania ani bazy użytkowników.</p>
+        </details>
+        <details>
+          <summary>Czy USOS++ działa na telefonie?</summary>
+          <p>Nie. USOS++ to rozszerzenie do przeglądarki na komputerze — działa w Chrome i innych przeglądarkach opartych na Chromium (m.in. Edge, Brave, Opera). Nie jest to aplikacja mobilna ani osobna aplikacja.</p>
+        </details>
+        <details>
+          <summary>Czy to bezpieczne? Co dzieje się z moimi danymi?</summary>
+          <p>USOS++ czyta tylko to, co Twoja zalogowana przeglądarka i tak już widzi na stronach USOSweb, i buduje z tego lepszy interfejs — lokalnie, u Ciebie. Nic nie trafia na zewnętrzny serwer, nie ma analityki ani reklam. Jedyny wyjątek to widok Mapy, który pobiera publiczne kafelki mapy z OpenStreetMap.</p>
+        </details>
+        <details>
+          <summary>Na jakich uczelniach działa USOS++?</summary>
+          <p>Zweryfikowany jest USOSweb Politechniki Wrocławskiej. Obsługę innej uczelni na tej samej platformie USOS dodasz jednym kliknięciem w oknie rozszerzenia, z jawnym potwierdzeniem uprawnień przez Chrome.</p>
+        </details>
+        <details>
+          <summary>Co oznacza, że projekt jest w wersji beta?</summary>
+          <p>Projekt rozwija jedna osoba — student — więc część podstron może jeszcze nie działać idealnie. Rozszerzenie zawsze uczciwie oznacza takie miejsca w interfejsie, a błędy możesz zgłaszać na GitHubie.</p>
+        </details>
+      </div>
+    </section>
+
+    <!-- ============ FINAL CTA ============ -->
+    <section class="section wrap" id="instalacja" aria-labelledby="instalacja-title">
+      <div class="final-cta">
+        <h2 id="instalacja-title">Masz dość przeklikiwania USOS-a?</h2>
+        <p>Zainstaluj USOS++ na komputerze i zobacz swój USOSweb w jednym, szybkim panelu. Za darmo, w minutę, z powrotem do klasycznego widoku w każdej chwili.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary btn-large" href="https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa" target="_blank" rel="noopener">Zainstaluj USOS++ (Beta)</a>
+        </div>
+        <p class="final-links">
+          <a href="https://github.com/zuukie/USOSPlus/issues" target="_blank" rel="noopener">Zgłoś błąd lub pomysł</a> ·
+          <a href="https://github.com/zuukie/USOSPlus" target="_blank" rel="noopener">Kod na GitHubie</a> ·
+          <a href="https://instagram.com/usosplus" target="_blank" rel="noopener">Instagram @usosplus</a> ·
+          <a href="mailto:usosplus@zuukie.dev">usosplus@zuukie.dev</a>
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p class="footer-brand">
+        <img src="assets/logo.svg" width="20" height="20" alt="" aria-hidden="true">
+        <strong>USOS++</strong> <span class="beta-pill beta-pill-small">Beta</span>
+      </p>
+      <p class="footer-note">Studencki, nieoficjalny projekt. Niezwiązany formalnie z systemem USOS ani z żadną uczelnią. Kod na licencji MIT: <a href="https://github.com/zuukie/USOSPlus" target="_blank" rel="noopener">github.com/zuukie/USOSPlus</a>.</p>
+      <nav class="footer-nav" aria-label="Linki w stopce">
+        <a href="https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa" target="_blank" rel="noopener">Instalacja</a>
+        <a href="https://github.com/zuukie/USOSPlus/blob/main/PRIVACY.md" target="_blank" rel="noopener">Prywatność</a>
+        <a href="https://github.com/zuukie/USOSPlus/issues" target="_blank" rel="noopener">Zgłoś problem</a>
+        <a href="https://instagram.com/usosplus" target="_blank" rel="noopener">Instagram</a>
+      </nav>
+      <p class="footer-copy">© <span id="year">2026</span> USOS++. Tworzony przez studenta, dla studentów.</p>
+    </div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>

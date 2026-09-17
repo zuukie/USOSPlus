@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange)](#status)
 
-🌐 [Strona / projekt](https://github.com/zuukie/USOSPlus) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOS++)
+🌐 [Strona / projekt](https://github.com/zuukie/USOSPlus) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOSPlus)
 
 </div>
 
@@ -30,7 +30,6 @@
 - 🔎 **Szybkie wyszukiwanie** przedmiotów, jednostek i programów studiów
 - 🌙 Estetyczny redesign z **trybem ciemnym**
 - 🔔 Wbudowane centrum powiadomień o nowych ogłoszeniach — bez powiadomień systemowych
-- 🎓 Stypendia, podania i ankiety w tym samym panelu
 - 🧭 Wsparcie dla **IRK** (Internetowej Rekrutacji Kandydatów)
 
 Rozszerzenie nie korzysta z żadnego wewnętrznego, niepublicznego API USOS-a i nie omija żadnych zabezpieczeń strony — czyta wyłącznie to, co Twoja zalogowana przeglądarka i tak już widzi, i buduje z tego lepszy interfejs lokalnie, u Ciebie w przeglądarce. Nic nie trafia na żaden zewnętrzny serwer — szczegóły w [polityce prywatności](PRIVACY.md).
@@ -79,7 +78,7 @@ Projekt jest dostępny na licencji [MIT](LICENSE).
 
 - 📧 E-mail: [usosplus@zuukie.dev](mailto:usosplus@zuukie.dev)
 - 📸 Instagram: [@usosplus](https://instagram.com/usosplus)
-- 💻 GitHub Issues: [zuukie/USOSPlus](https://github.com/zuukie/USOS++/issues)
+- 💻 GitHub Issues: [zuukie/USOSPlus](https://github.com/zuukie/USOSPlus/issues)
 
 ---
 

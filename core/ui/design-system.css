@@ -83,6 +83,12 @@
 .usospp-nav-item:hover { background: oklch(24% 0.016 55); }
 .usospp-nav-item.active { font-weight: 600; color: #fff; background: oklch(30% 0.02 45); }
 .usospp-nav-item.sub { padding-left: 34px; font-size: 13px; }
+/* Logged-out rows whose view needs a session (see PUBLIC_VIEWS in
+   usos/app.js) — still clickable, landing on the login prompt, but dimmed
+   with a lock icon so the requirement is visible upfront. */
+.usospp-nav-item-locked { opacity: 0.55; }
+.usospp-nav-item-locked:hover { opacity: 0.8; }
+.usospp-nav-item-locked.active { opacity: 0.85; }
 .usospp-nav-dot { width: 7px; height: 7px; border-radius: 50%; background: #d9773a; margin-left: auto; flex-shrink: 0; }
 .usospp-nav-chevron { display: flex; flex-shrink: 0; transition: transform 0.15s ease; }
 .usospp-nav-chevron.open { transform: rotate(90deg); }

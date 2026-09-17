@@ -83,5 +83,5 @@ kod.
 
 ## Kontakt
 
-Pytania dotyczące prywatności: [zuukie/USOS++ na GitHubie](https://github.com/zuukie/USOS--)
+Pytania dotyczące prywatności: [zuukie/USOSPlus na GitHubie](https://github.com/zuukie/USOSPlus)
 (zgłoszenie w zakładce Issues) lub e-mail: michalwyszk@gmail.com.

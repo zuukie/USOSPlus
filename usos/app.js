@@ -210,6 +210,7 @@
   // top-level slot. Mapa leads this group: it's reachable by search as
   // often as by the sidebar, and it works logged out unlike the rest.
   const MORE_NAV_ITEMS = [
+    { id: 'katalog', label: 'Katalog', icon: 'layers' },
     { id: 'mapa', label: 'Mapa', icon: 'pin' },
     { id: 'platnosci', label: 'Płatności', icon: 'card' },
     { id: 'stypendia', label: 'Stypendia', icon: 'coins' },
@@ -224,6 +225,13 @@
     { id: 'wiadomosci', label: 'Wiadomości', icon: 'mail', external: 'kontroler.php?_action=home/usos_mail/nowaWiadomosc&usospp_off=1' },
   ];
 
+  // Temporarily hidden from the sidebar (the views aren't reliable yet) —
+  // see docs/hidden-nav-items.md. Everything behind them stays intact:
+  // VALID_VIEWS, TITLES, renderers, scraping and fetches, so a hidden view
+  // still works when opened directly (e.g. a sessionStorage restore after a
+  // reload) and comes back to the menu by just removing its id from this set.
+  const HIDDEN_NAV_ITEMS = new Set(['stypendia', 'podania', 'ankiety']);
+
   // "przedmioty" is a hub tile screen — Przegląd/Zapisy/Generator planu live
   // one level under it now instead of each having their own nav row. A nav
   // item should still read as "active" while the user is anywhere inside its
@@ -231,6 +239,7 @@
   // though only the hub id itself appears in NAV_ITEMS.
   const NAV_GROUPS = {
     przedmioty: ['przedmioty', 'przedmiotyLista', 'zapisy', 'planer'],
+    katalog: ['katalog', 'katalogJednostki', 'katalogPrzedmioty', 'katalogKierunki', 'katalogBudynki'],
   };
 
   // Per-view list of `this.data` result keys whose *shape* — not just
@@ -270,7 +279,7 @@
   // buildings), so they keep working while logged out — everything else in
   // this.data is personal and falls back to the login prompt (renderView).
   // The topbar's search overlay isn't a view and needs no entry here.
-  const PUBLIC_VIEWS = new Set(['aktualnosci', 'subjectPage', 'catalogPage', 'mapa']);
+  const PUBLIC_VIEWS = new Set(['aktualnosci', 'subjectPage', 'catalogPage', 'mapa', 'katalog', 'katalogJednostki', 'katalogPrzedmioty', 'katalogKierunki', 'katalogBudynki']);
 
   // "Is there a new announcement since I last opened Aktualności" — chrome
   // .storage.local (device-local, not synced, survives tab close unlike
@@ -317,6 +326,7 @@
     more: '<circle cx="5" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="15" cy="10" r="1.3" fill="currentColor" stroke="none"></circle>',
     chevron: '<path d="M7.5 5l5.5 5-5.5 5" stroke-width="2"></path>',
     pin: '<path d="M10 2.6c-3.3 0-6 2.6-6 5.9 0 4.4 6 9.1 6 9.1s6-4.7 6-9.1c0-3.3-2.7-5.9-6-5.9z"></path><circle cx="10" cy="8.3" r="2.1"></circle>',
+    lock: '<rect x="5" y="9" width="10" height="7.5" rx="1.5"></rect><path d="M7 9V6.3a3 3 0 0 1 6 0V9"></path>',
   };
 
   function icon(name, size = 19) {
@@ -436,6 +446,11 @@
     ustawienia: ['Ustawienia', 'Profil, wygląd i powiadomienia'],
     subjectPage: ['Przedmiot', 'Szczegóły z katalogu USOS'],
     catalogPage: ['Katalog', 'Szczegóły z katalogu USOS'],
+    katalog: ['Katalog', 'Jednostki, przedmioty, kierunki i budynki'],
+    katalogJednostki: ['Jednostki', 'Przeglądaj strukturę uczelni'],
+    katalogPrzedmioty: ['Przedmioty', 'Oferta przedmiotów wg jednostek'],
+    katalogKierunki: ['Kierunki i programy', 'Co można studiować i w jakich trybach'],
+    katalogBudynki: ['Budynki', 'Lista budynków — dane z USOS'],
     mapa: ['Mapa kampusu', 'Budynki na mapie — dane z USOS'],
   };
 
@@ -540,6 +555,26 @@
         catalogBackSnapshot: null,
         catalogBackPrevKind: initialCatalogPrevKind,
         catalogBackPrevKod: initialCatalogPrevKod,
+        katalogRootKod: null,
+        katalogRootLoading: false,
+        katalogRootError: false,
+        katalogRootData: null,
+        katalogBrowseKod: null,
+        katalogBrowseLoading: false,
+        katalogBrowseError: false,
+        katalogBrowseData: null,
+        katalogPrzedmiotyUnitKod: null,
+        katalogPrzedmiotyLoading: false,
+        katalogPrzedmioty: [],
+        katalogPrzedmiotyTotal: 0,
+        katalogPrzedmiotyNextUrl: null,
+        katalogPrzedmiotyQuery: '',
+        katalogPrzedmiotyCurrentOnly: false,
+        katalogKierunkiUnitKod: null,
+        katalogKierunkiLoading: false,
+        katalogKierunki: [],
+        katalogKierunkiNextUrl: null,
+        katalogBudynkiQuery: '',
         mapaLoading: false,
         mapaError: false,
         mapaBuildings: [],
@@ -630,6 +665,12 @@
         }
       }
       if (initialView === 'mapa') {
+        this.ensureMapaData();
+      }
+      if (initialView === 'katalogJednostki' || initialView === 'katalogPrzedmioty' || initialView === 'katalogKierunki') {
+        this.ensureKatalogRoot();
+      }
+      if (initialView === 'katalogBudynki') {
         this.ensureMapaData();
       }
     }
@@ -776,6 +817,12 @@
         else this.fetchCatalogPage(p.catalogKind, p.catalogKod);
       } else if (view === 'mapa') {
         this.setState({ view: 'mapa', notifPanelOpen: false, avatarMenuOpen: false });
+        this.ensureMapaData();
+      } else if (view === 'katalogJednostki' || view === 'katalogPrzedmioty' || view === 'katalogKierunki') {
+        this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
+        this.ensureKatalogRoot();
+      } else if (view === 'katalogBudynki') {
+        this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
         this.ensureMapaData();
       } else {
         this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
@@ -977,6 +1024,10 @@
       this.setState(patch);
       this.persistViewState();
       if (view === 'mapa') this.ensureMapaData();
+      if (view === 'katalogJednostki') this.ensureKatalogRoot();
+      if (view === 'katalogPrzedmioty') this.ensureKatalogRoot();
+      if (view === 'katalogKierunki') this.ensureKatalogRoot();
+      if (view === 'katalogBudynki') this.ensureMapaData();
     }
 
     persistNewsSeen() {
@@ -1080,6 +1131,24 @@
           break;
         case 'toggleCatalogSubjectsCurrentOnly':
           this.setCatalogSubjectsSectionState((s) => ({ catalogSubjectsCurrentOnly: !s.catalogSubjectsCurrentOnly }));
+          break;
+        case 'katalogBrowseUnit':
+          this.fetchKatalogBrowse(el.dataset.kod);
+          break;
+        case 'katalogSelectUnit':
+          this.katalogSelectUnit(el.dataset.kod);
+          break;
+        case 'katalogRetry':
+          this.katalogRetry();
+          break;
+        case 'katalogPrzedmiotyLoadMore':
+          this.loadMoreKatalogPrzedmioty();
+          break;
+        case 'katalogKierunkiLoadMore':
+          this.loadMoreKatalogKierunki();
+          break;
+        case 'katalogPrzedmiotyToggleCurrent':
+          this.setState((s) => ({ katalogPrzedmiotyCurrentOnly: !s.katalogPrzedmiotyCurrentOnly }));
           break;
         case 'searchOpenSubject':
           this.state.searchQuery = '';
@@ -1847,8 +1916,11 @@
     // there would rebuild the topbar and yank focus out of the search
     // input mid-typing, and no other view reads the mapa state, so only a
     // visible Mapa view needs re-rendering when these async flips land.
+    // katalogBudynki reads the same mapaBuildings list as its own rows, so
+    // it needs the same re-render (otherwise the list stays on its first
+    // empty paint until the user visits Mapa and comes back).
     renderMapaStateIfNeeded() {
-      if (this.state.view === 'mapa') this.render();
+      if (this.state.view === 'mapa' || this.state.view === 'katalogBudynki') this.render();
     }
 
     async ensureMapaData() {
@@ -1946,6 +2018,278 @@
       this.state.mapaError = false;
       this.render();
       await this.fetchMapaData(cacheKey);
+    }
+
+    // Manual "odśwież" link in renderMapa() — buildings are cached
+    // indefinitely (see ensureMapaData), so this is the only way to pick up
+    // a change without waiting for the cache to be cleared some other way.
+    async mapaRefresh() {
+      const cacheKey = 'usospp:campusBuildings:' + location.origin;
+      try { await chrome.storage.local.remove(cacheKey); } catch (e) { /* ignore */ }
+      this.state.mapaBuildings = [];
+      this.state.mapaLoading = true;
+      this.state.mapaError = false;
+      this.render();
+      await this.fetchMapaData(cacheKey);
+    }
+
+    // Katalog: root uczelni + browse drzewa + oferta per jednostka.
+    // Root tym samym sposobem co Mapa (własny wydział → ancestors[0],
+    // anonimowo: public search → ancestors) — działa bez logowania.
+    renderKatalogStateIfNeeded() {
+      if ((this.state.view || '').startsWith('katalog')) this.render();
+    }
+
+    async ensureKatalogRoot() {
+      if (this.state.katalogRootData || this.state.katalogRootLoading) return;
+      this.state.katalogRootLoading = true;
+      this.state.katalogRootError = false;
+      this.renderKatalogStateIfNeeded();
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters ? adapters.selectAdapter() : null;
+      if (!scrape || !adapter) {
+        this.state.katalogRootLoading = false;
+        this.state.katalogRootError = true;
+        this.renderKatalogStateIfNeeded();
+        return;
+      }
+      try {
+        const facultyCode = this.data.user && this.data.user.facultyCode;
+        let rootKod = null;
+        let rootDetail = null;
+        if (facultyCode) {
+          const unitDoc = await scrape.fetchDoc(scrape.PATHS.unitDetail(facultyCode));
+          const detail = unitDoc ? adapter.getUnitDetail(unitDoc) : null;
+          if (detail && detail.supported) {
+            rootKod = (detail.ancestors && detail.ancestors.length) ? detail.ancestors[0].kod : facultyCode;
+            if (rootKod === facultyCode) rootDetail = detail;
+          }
+        }
+        if (!rootKod) {
+          for (const pattern of ['instytut', 'wydzia', 'zakład']) {
+            const found = await scrape.searchCatalog(pattern);
+            if (!found.units.length) continue;
+            const anyKod = found.units[0].kod;
+            const unitDoc = await scrape.fetchDoc(scrape.PATHS.unitDetail(anyKod));
+            const detail = unitDoc ? adapter.getUnitDetail(unitDoc) : null;
+            if (!detail || !detail.supported) continue;
+            rootKod = (detail.ancestors && detail.ancestors.length) ? detail.ancestors[0].kod : anyKod;
+            if (rootKod === anyKod) rootDetail = detail;
+            if (rootKod) break;
+          }
+        }
+        if (!rootKod) {
+          this.state.katalogRootLoading = false;
+          this.state.katalogRootError = true;
+          this.renderKatalogStateIfNeeded();
+          return;
+        }
+        if (!rootDetail) {
+          const rootDoc = await scrape.fetchDoc(scrape.PATHS.unitDetail(rootKod));
+          rootDetail = rootDoc ? adapter.getUnitDetail(rootDoc) : null;
+        }
+        this.state.katalogRootLoading = false;
+        if (!rootDetail || !rootDetail.supported) {
+          this.state.katalogRootError = true;
+        } else {
+          this.state.katalogRootKod = rootKod;
+          this.state.katalogRootData = rootDetail;
+          this.state.katalogRootError = false;
+        }
+        this.renderKatalogStateIfNeeded();
+      } catch (e) {
+        this.state.katalogRootLoading = false;
+        this.state.katalogRootError = true;
+        this.renderKatalogStateIfNeeded();
+      }
+    }
+
+    katalogRetry() {
+      this.state.katalogRootKod = null;
+      this.state.katalogRootData = null;
+      this.state.katalogRootError = false;
+      this.state.katalogBrowseKod = null;
+      this.state.katalogBrowseData = null;
+      this.state.katalogBrowseError = false;
+      this.ensureKatalogRoot();
+    }
+
+    fetchKatalogBrowse(kod) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters || !kod) return;
+      this.setState({ katalogBrowseKod: kod, katalogBrowseLoading: true, katalogBrowseError: false, katalogBrowseData: null });
+      scrape.fetchDoc(scrape.PATHS.unitDetail(kod))
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const detail = doc && adapter ? adapter.getUnitDetail(doc) : null;
+          if (this.state.katalogBrowseKod !== kod) return;
+          if (!detail || !detail.supported) {
+            this.setState({ katalogBrowseLoading: false, katalogBrowseError: true });
+          } else {
+            this.setState({ katalogBrowseLoading: false, katalogBrowseData: detail });
+          }
+        })
+        .catch(() => {
+          if (this.state.katalogBrowseKod !== kod) return;
+          this.setState({ katalogBrowseLoading: false, katalogBrowseError: true });
+        });
+    }
+
+    // Picker w Przedmiotach/Kierunkach: ta sama jednostka dla obu nie jest
+    // współdzielona celowo — każdy widok pamięta własny wybór.
+    katalogSelectUnit(kod) {
+      if (!kod) return;
+      if (this.state.view === 'katalogPrzedmioty') {
+        this.setState({
+          katalogPrzedmiotyUnitKod: kod,
+          katalogPrzedmiotyLoading: true,
+          katalogPrzedmioty: [],
+          katalogPrzedmiotyTotal: 0,
+          katalogPrzedmiotyNextUrl: null,
+          katalogPrzedmiotyQuery: '',
+          katalogPrzedmiotyCurrentOnly: false,
+        });
+        this.fetchKatalogPrzedmioty(kod);
+      } else if (this.state.view === 'katalogKierunki') {
+        this.setState({
+          katalogKierunkiUnitKod: kod,
+          katalogKierunkiLoading: true,
+          katalogKierunki: [],
+          katalogKierunkiNextUrl: null,
+        });
+        this.fetchKatalogKierunki(kod);
+      }
+    }
+
+    fetchKatalogPrzedmioty(kod) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setState({ katalogPrzedmiotyLoading: false });
+        return;
+      }
+      scrape.fetchDoc(scrape.PATHS.unitSubjects(kod))
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitSubjects(doc) : null;
+          if (this.state.view !== 'katalogPrzedmioty' || this.state.katalogPrzedmiotyUnitKod !== kod) return;
+          this.setState({
+            katalogPrzedmioty: res ? res.subjects : [],
+            katalogPrzedmiotyTotal: res ? res.total : 0,
+            katalogPrzedmiotyNextUrl: res && res.nextUrl ? res.nextUrl.replace(/(tab[0-9a-z]+_limit)=\d+/, '$1=300') : null,
+            katalogPrzedmiotyLoading: false,
+          });
+        })
+        .catch(() => {
+          if (this.state.view !== 'katalogPrzedmioty' || this.state.katalogPrzedmiotyUnitKod !== kod) return;
+          this.setState({ katalogPrzedmiotyLoading: false });
+        });
+    }
+
+    loadMoreKatalogPrzedmioty() {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const url = this.state.katalogPrzedmiotyNextUrl;
+      const kod = this.state.katalogPrzedmiotyUnitKod;
+      if (!scrape || !adapters || !url || this.state.katalogPrzedmiotyLoading) return;
+      this.setState({ katalogPrzedmiotyLoading: true });
+      scrape.fetchDoc(url)
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitSubjects(doc) : null;
+          if (this.state.view !== 'katalogPrzedmioty' || this.state.katalogPrzedmiotyUnitKod !== kod) return;
+          const known = new Set(this.state.katalogPrzedmioty.map((r) => r.kod));
+          const fresh = res ? res.subjects.filter((r) => !known.has(r.kod)) : [];
+          this.setState({
+            katalogPrzedmioty: this.state.katalogPrzedmioty.concat(fresh),
+            katalogPrzedmiotyTotal: (res && res.total) || this.state.katalogPrzedmiotyTotal,
+            katalogPrzedmiotyNextUrl: (res && res.nextUrl && fresh.length) ? res.nextUrl.replace(/(tab[0-9a-z]+_limit)=\d+/, '$1=300') : null,
+            katalogPrzedmiotyLoading: false,
+          });
+        })
+        .catch(() => {
+          if (this.state.view === 'katalogPrzedmioty') this.setState({ katalogPrzedmiotyLoading: false, katalogPrzedmiotyNextUrl: null });
+        });
+    }
+
+    fetchKatalogKierunki(kod) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setState({ katalogKierunkiLoading: false });
+        return;
+      }
+      scrape.fetchDoc(scrape.PATHS.unitPrograms(kod))
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitPrograms(doc) : null;
+          if (this.state.view !== 'katalogKierunki' || this.state.katalogKierunkiUnitKod !== kod) return;
+          this.setState({
+            katalogKierunki: res ? res.programs : [],
+            katalogKierunkiNextUrl: res ? res.nextUrl : null,
+            katalogKierunkiLoading: false,
+          });
+        })
+        .catch(() => {
+          if (this.state.view !== 'katalogKierunki' || this.state.katalogKierunkiUnitKod !== kod) return;
+          this.setState({ katalogKierunkiLoading: false });
+        });
+    }
+
+    loadMoreKatalogKierunki() {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const url = this.state.katalogKierunkiNextUrl;
+      const kod = this.state.katalogKierunkiUnitKod;
+      if (!scrape || !adapters || !url || this.state.katalogKierunkiLoading) return;
+      this.setState({ katalogKierunkiLoading: true });
+      scrape.fetchDoc(url)
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitPrograms(doc) : null;
+          if (this.state.view !== 'katalogKierunki' || this.state.katalogKierunkiUnitKod !== kod) return;
+          const known = new Set(this.state.katalogKierunki.map((r) => r.kod));
+          const fresh = res ? res.programs.filter((r) => !known.has(r.kod)) : [];
+          this.setState({
+            katalogKierunki: this.state.katalogKierunki.concat(fresh),
+            katalogKierunkiNextUrl: (res && res.nextUrl && fresh.length) ? res.nextUrl : null,
+            katalogKierunkiLoading: false,
+          });
+        })
+        .catch(() => {
+          if (this.state.view === 'katalogKierunki') this.setState({ katalogKierunkiLoading: false, katalogKierunkiNextUrl: null });
+        });
+    }
+
+    setKatalogPrzedmiotyQueryState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'katalogPrzedmioty') return;
+      // Patch listy bez dotykania inputa — ten sam powód co
+      // setCatalogSubjectsState (focus/kursor w trakcie pisania).
+      this.render();
+      const input = this.root.querySelector('[data-action="katalogPrzedmiotyQueryInput"]');
+      if (input && document.activeElement !== input) { /* render odtworzył input — focus wraca tylko gdy był */ }
+      if (input) {
+        const val = this.state.katalogPrzedmiotyQuery || '';
+        if (input.value !== val) input.value = val;
+        input.focus();
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* ignore */ }
+      }
+    }
+
+    setKatalogBudynkiQueryState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'katalogBudynki') return;
+      this.render();
+      const input = this.root.querySelector('[data-action="katalogBudynkiQueryInput"]');
+      if (input) {
+        const val = this.state.katalogBudynkiQuery || '';
+        if (input.value !== val) input.value = val;
+        input.focus();
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* ignore */ }
+      }
     }
 
     // "Pokaż na mapie" on a unit page's building list — instead of
@@ -2832,6 +3176,8 @@
       else if (e.target.dataset.action === 'plannerSearchInput') this.onPlannerSearchInput(e.target.value);
       else if (e.target.dataset.action === 'mapaSearchInput') this.onMapaSearchInput(e.target.value);
       else if (e.target.dataset.action === 'catalogSubjectQueryInput') this.setCatalogSubjectsState({ catalogSubjectQuery: e.target.value });
+      else if (e.target.dataset.action === 'katalogPrzedmiotyQueryInput') this.setKatalogPrzedmiotyQueryState({ katalogPrzedmiotyQuery: e.target.value });
+      else if (e.target.dataset.action === 'katalogBudynkiQueryInput') this.setKatalogBudynkiQueryState({ katalogBudynkiQuery: e.target.value });
     }
 
     handleKeydown(e) {
@@ -2958,16 +3304,28 @@
     renderSidebar() {
       const u = this.data.user || {};
       const initials = (u.name || '? ?').split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
-      const renderNavItem = (item, sub) => item.external ? `
-        <div class="usospp-nav-item${sub ? ' sub' : ''}" data-action="openUsos" data-url="${esc(location.origin)}/${item.external}" title="Otwiera klasyczny USOS w nowej karcie">
-          ${icon(item.icon)}<span>${esc(item.label)}</span>
+      // Logged out, only PUBLIC_VIEWS render real content — everything else
+      // lands on the login prompt (renderView's gate). The click behavior
+      // stays exactly the same, but locked rows get a lock icon + dimmed
+      // style so it's obvious upfront which sections need a login. External
+      // link-outs (Wiadomości) have no view id in PUBLIC_VIEWS, so they read
+      // as locked too.
+      const loggedOut = !!this.data.loggedOut;
+      const renderNavItem = (item, sub) => {
+        const locked = loggedOut && !PUBLIC_VIEWS.has(item.id);
+        const lockedClass = locked ? ' usospp-nav-item-locked' : '';
+        const lockedTitle = locked ? ' title="Wymaga zalogowania"' : '';
+        return item.external ? `
+        <div class="usospp-nav-item${sub ? ' sub' : ''}${lockedClass}" data-action="openUsos" data-url="${esc(location.origin)}/${item.external}" title="${locked ? 'Wymaga zalogowania — ' : ''}Otwiera klasyczny USOS w nowej karcie">
+          ${icon(locked ? 'lock' : item.icon)}<span>${esc(item.label)}</span>
         </div>
       ` : `
-        <div class="usospp-nav-item${sub ? ' sub' : ''}${this.isNavActive(item.id) ? ' active' : ''}" data-action="nav" data-view="${item.id}">
-          ${icon(item.icon)}<span>${esc(item.label)}</span>
+        <div class="usospp-nav-item${sub ? ' sub' : ''}${this.isNavActive(item.id) ? ' active' : ''}${lockedClass}" data-action="nav" data-view="${item.id}"${lockedTitle}>
+          ${icon(locked ? 'lock' : item.icon)}<span>${esc(item.label)}</span>
           ${this.navItemDot(item.id) ? '<span class="usospp-nav-dot"></span>' : ''}
         </div>
       `;
+      };
       // Three states, independent of each other: fully expanded shows every
       // item (moreExpanded); collapsed-but-something-inside-is-active shows
       // just that one row, so you never lose track of where you are; fully
@@ -2977,11 +3335,16 @@
       // otherwise there'd be no way to collapse it back while still on one
       // of its pages.
       const moreOpen = this.state.moreExpanded;
+      // Hidden views (HIDDEN_NAV_ITEMS) are left out of the listing and the
+      // collapsed dot, but the active-row lookup below runs on the full list
+      // on purpose — a hidden view opened directly still shows its row for
+      // orientation, exactly like any other active "Więcej" item.
+      const visibleMoreItems = MORE_NAV_ITEMS.filter((item) => !HIDDEN_NAV_ITEMS.has(item.id));
       const activeMoreItem = MORE_NAV_ITEMS.find((item) => item.id === this.state.view);
       const moreActive = !!activeMoreItem;
-      const moreHasDot = !moreOpen && !activeMoreItem && MORE_NAV_ITEMS.some((item) => this.navItemDot(item.id));
+      const moreHasDot = !moreOpen && !activeMoreItem && visibleMoreItems.some((item) => this.navItemDot(item.id));
       const moreChildren = moreOpen
-        ? MORE_NAV_ITEMS.map((item) => renderNavItem(item, true)).join('')
+        ? visibleMoreItems.map((item) => renderNavItem(item, true)).join('')
         : (activeMoreItem ? renderNavItem(activeMoreItem, true) : '');
       return `
         <aside class="usospp-sidebar" data-sidebar-root>
@@ -3001,6 +3364,15 @@
             ${moreChildren}
           </nav>
           <div class="usospp-spacer"></div>
+          ${loggedOut ? `
+          <a class="usospp-user-card" ${this.data.loginUrl ? `href="${esc(this.data.loginUrl)}"` : `data-action="nav" data-view="dashboard"`} style="text-decoration:none;" title="Zaloguj się do USOSweb">
+            <div class="usospp-avatar" style="background:oklch(38% 0.01 55);">${icon('lock', 16)}</div>
+            <div class="usospp-user-meta">
+              <div class="usospp-user-name">Niezalogowany</div>
+              <div class="usospp-user-sub">Zaloguj się →</div>
+            </div>
+          </a>
+          ` : `
           <div class="usospp-user-card" data-action="nav" data-view="ustawienia" title="Ustawienia">
             <div class="usospp-avatar">${esc(initials || '—')}</div>
             <div class="usospp-user-meta">
@@ -3008,6 +3380,7 @@
               <div class="usospp-user-sub">${esc(this.kierunek || u.faculty || (u.album ? `nr albumu ${u.album}` : '—'))}</div>
             </div>
           </div>
+          `}
         </aside>
       `;
     }
@@ -3208,6 +3581,11 @@
         case 'ustawienia': return this.renderUstawienia();
         case 'subjectPage': return this.renderSubjectPage();
         case 'mapa': return this.renderMapa();
+        case 'katalog': return this.renderKatalogHub();
+        case 'katalogJednostki': return this.renderKatalogJednostki();
+        case 'katalogPrzedmioty': return this.renderKatalogPrzedmioty();
+        case 'katalogKierunki': return this.renderKatalogKierunki();
+        case 'katalogBudynki': return this.renderKatalogBudynki();
         case 'catalogPage': {
           if (this.state.catalogKind === 'unit') return this.renderUnitPage();
           if (this.state.catalogKind === 'stage') return this.renderStagePage();
@@ -3289,7 +3667,7 @@
           <div class="usospp-loggedout">
             <div class="usospp-loggedout-logo">${logoSvg(false)}</div>
             <div class="usospp-loggedout-title">Zaloguj się do USOSweb</div>
-            <p class="usospp-loggedout-text">Nie jesteś obecnie zalogowany/a, więc ten widok nie ma skąd wziąć danych. Aktualności, Mapa kampusu i wyszukiwarka (przedmioty, jednostki, programy studiów) działają też bez logowania — wybierz je z menu po lewej.</p>
+            <p class="usospp-loggedout-text">Nie jesteś obecnie zalogowany/a, więc ten widok nie ma skąd wziąć danych. Aktualności, Katalog, Mapa kampusu i wyszukiwarka (przedmioty, jednostki, programy studiów) działają też bez logowania — wybierz je z menu po lewej.</p>
             ${loginUrl ? `
               <a class="usospp-btn-primary" style="display:inline-block;text-decoration:none;" href="${esc(loginUrl)}">Zaloguj się →</a>
             ` : `
@@ -3439,6 +3817,37 @@
         { view: 'zapisy', icon: 'ticket', title: 'Zapisy na przedmioty', desc: 'Kalendarz tur rejestracji na wydziale — bez zapisywania niczego za Ciebie.' },
         { view: 'planer', icon: 'layers', title: 'Generator planu', desc: 'Poukładaj sobie plan zajęć na próbę, zanim zapiszesz się naprawdę.' },
       ];
+      // All three tiles are personal — logged out they all land on the login
+      // prompt, so dim them with the shared locked-tile style + lock pill
+      // (same as IRK's renderHubTile) instead of looking freely available.
+      const locked = !!this.data.loggedOut;
+      return `
+        <div class="usospp-view">
+          <div class="usospp-hub-grid">
+            ${tiles.map((t) => `
+              <div class="usospp-hub-tile${locked ? ' usospp-hub-tile-locked' : ''}" data-action="nav" data-view="${esc(t.view)}">
+                <div class="usospp-hub-tile-icon">${icon(locked ? 'lock' : t.icon, 20)}</div>
+                <div class="usospp-hub-tile-title">${esc(t.title)}</div>
+                ${locked
+                  ? `<div class="usospp-lock-hint">${icon('lock', 12)} Zaloguj się, aby odblokować</div>`
+                  : `<div class="usospp-hub-tile-desc">${esc(t.desc)}</div>`}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Publiczny hub Katalogu — ten sam pattern co renderPrzedmiotyHub:
+    // kafelki prowadzą do pod-widoków przez data-action="nav". Działa bez
+    // logowania (PUBLIC_VIEWS), wszystko dociągane leniwie z katalog2.
+    renderKatalogHub() {
+      const tiles = [
+        { view: 'katalogJednostki', icon: 'grid', title: 'Jednostki', desc: 'Wydziały, katedry i instytuty — przeglądaj strukturę uczelni.' },
+        { view: 'katalogPrzedmioty', icon: 'book', title: 'Przedmioty', desc: 'Oferta przedmiotów wybranej jednostki.' },
+        { view: 'katalogKierunki', icon: 'star', title: 'Kierunki i programy', desc: 'Co można studiować — programy zgrupowane po kierunku.' },
+        { view: 'katalogBudynki', icon: 'pin', title: 'Budynki', desc: 'Lista budynków z adresami i podglądem na mapie.' },
+      ];
       return `
         <div class="usospp-view">
           <div class="usospp-hub-grid">
@@ -3449,6 +3858,202 @@
                 <div class="usospp-hub-tile-desc">${esc(t.desc)}</div>
               </div>
             `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Jednostki: przeglądanie drzewa od korzenia uczelni. Root wyprowadzany
+    // jak w fetchMapaData (własny wydział → ancestors[0], anonimowo: public
+    // search → ancestors). Klik w dziecko przełącza browse na tę jednostkę,
+    // klik w nazwę/„szczegóły” otwiera pełną stronę catalogPage unit.
+    renderKatalogJednostki() {
+      const s = this.state;
+      if (s.katalogRootLoading || s.katalogBrowseLoading) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie jednostek…</div></div></div>`;
+      }
+      const data = s.katalogBrowseData || s.katalogRootData;
+      if (s.katalogRootError || s.katalogBrowseError || !data) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać jednostek.</div><div style="margin-top:10px;"><a data-action="katalogRetry" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div></div></div>`;
+      }
+      const atRoot = !s.katalogBrowseKod || s.katalogBrowseKod === s.katalogRootKod;
+      return `
+        <div class="usospp-view">
+          ${backLink('katalog')}
+          <div class="usospp-card">
+            ${data.ancestors && data.ancestors.length ? `
+              <div style="font-size:12.5px;color:var(--ink-3);margin-bottom:10px;">
+                ${data.ancestors.map((a) => `<span data-action="katalogBrowseUnit" data-kod="${esc(a.kod)}" style="text-decoration:underline;cursor:pointer;">${esc(a.name)}</span>`).join(' / ')}
+              </div>
+            ` : ''}
+            <div class="usospp-card-title" style="margin-bottom:6px;">${esc(data.name || 'Jednostki')}</div>
+            <div style="margin-bottom:14px;"><a data-action="searchOpenUnit" data-kod="${esc(atRoot ? (s.katalogRootKod || '') : (s.katalogBrowseKod || ''))}" style="font-size:12.5px;font-weight:600;cursor:pointer;">szczegóły jednostki →</a></div>
+            ${(data.children || []).length ? `
+              <div class="usospp-card" style="box-shadow:none;border:1px solid var(--border);">
+                <div class="usospp-card-title" style="margin-bottom:14px;">Jednostki podrzędne (${(data.children || []).length})</div>
+                ${(data.children || []).map((c) => `
+                  <div class="usospp-list-row" data-action="katalogBrowseUnit" data-kod="${esc(c.kod)}" style="cursor:pointer;">
+                    <div style="font-size:13.5px;font-weight:500;">${esc(c.name)}</div>
+                    <div style="color:var(--ink-3);">→</div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : `<div class="usospp-empty-hint">Brak podjednostek.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    // Wspólny picker jednostek (dzieci roota = wydziały) dla Przedmiotów
+    // i Kierunków. USOS nie ma endpointu „wszystkie przedmioty uczelni” —
+    // jest tylko oferta per jednostka (faculty_organized / by_faculty),
+    // więc wybór wydziału jest bramą do przeglądania, nie doodatkiem.
+    renderKatalogUnitPicker(selectedKod) {
+      const root = this.state.katalogRootData;
+      const kids = (root && root.children) || [];
+      if (!kids.length) return '';
+      const chipStyle = 'flex:0 0 auto;border-radius:99px;padding:6px 13px;font-size:12.5px;';
+      return `
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">
+          ${kids.map((c) => `<button class="usospp-mode-btn${selectedKod === c.kod ? ' active' : ''}" style="${chipStyle}" data-action="katalogSelectUnit" data-kod="${esc(c.kod)}">${esc(c.name)}</button>`).join('')}
+        </div>
+      `;
+    }
+
+    renderKatalogPrzedmioty() {
+      const s = this.state;
+      if (s.katalogRootLoading) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie jednostek…</div></div></div>`;
+      }
+      if (s.katalogRootError || !s.katalogRootData) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać jednostek.</div><div style="margin-top:10px;"><a data-action="katalogRetry" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div></div></div>`;
+      }
+      const q = (s.katalogPrzedmiotyQuery || '').trim().toLowerCase();
+      const currentYear = (() => {
+        const years = new Set();
+        s.katalogPrzedmioty.forEach((r) => (r.years || []).forEach((y) => years.add(y)));
+        return years.size ? Math.max(...years) : null;
+      })();
+      const rows = s.katalogPrzedmioty.filter((r) => {
+        if (s.katalogPrzedmiotyCurrentOnly && currentYear && !(r.years || []).includes(currentYear)) return false;
+        if (!q) return true;
+        return (r.name || '').toLowerCase().includes(q) || (r.kod || '').toLowerCase().includes(q);
+      });
+      const yearLabel = currentYear ? `${currentYear}/${String((currentYear + 1) % 100).padStart(2, '0')}` : '';
+      return `
+        <div class="usospp-view">
+          ${backLink('katalog')}
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:12px;">Wybierz jednostkę</div>
+            ${this.renderKatalogUnitPicker(s.katalogPrzedmiotyUnitKod)}
+            ${!s.katalogPrzedmiotyUnitKod ? `<div class="usospp-empty-hint">Wybierz wydział powyżej, aby zobaczyć jego ofertę przedmiotów.</div>` : `
+              <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">
+                <input class="usospp-search-input" data-action="katalogPrzedmiotyQueryInput" type="text" placeholder="Szukaj po nazwie lub kodzie…" autocomplete="off" value="${esc(s.katalogPrzedmiotyQuery)}" style="flex:1;">
+                ${currentYear && s.katalogPrzedmioty.length ? `<a data-action="katalogPrzedmiotyToggleCurrent" style="font-size:12px;font-weight:600;color:${s.katalogPrzedmiotyCurrentOnly ? '#d9773a' : 'var(--ink-3)'};white-space:nowrap;cursor:pointer;">${s.katalogPrzedmiotyCurrentOnly ? '●' : '○'} tylko ${esc(yearLabel)}</a>` : ''}
+              </div>
+              <div data-katalog-przedmioty-root>
+                ${s.katalogPrzedmiotyLoading && !s.katalogPrzedmioty.length ? `<div class="usospp-empty-hint">Wczytywanie przedmiotów…</div>` : `
+                  ${rows.slice(0, 400).map((r) => `
+                    <div class="usospp-list-row" data-action="openSubjectPage" data-url="${esc(r.url)}" style="cursor:pointer;align-items:flex-start;">
+                      <div>
+                        <div style="font-size:13.5px;font-weight:500;">${esc(r.name)}</div>
+                        ${r.grupa ? `<div style="color:var(--ink-3);font-size:12px;margin-top:2px;">${esc(r.grupa)}</div>` : ''}
+                      </div>
+                      <div style="color:var(--ink-3);font-size:11.5px;font-family:ui-monospace,Menlo,monospace;flex-shrink:0;">${esc(r.kod)}</div>
+                    </div>
+                  `).join('')}
+                  ${rows.length > 400 ? `<div class="usospp-empty-hint">Pokazuję pierwszych 400 — doprecyzuj wyszukiwanie, aby zawęzić.</div>` : ''}
+                  ${!rows.length && !s.katalogPrzedmiotyLoading ? `<div class="usospp-empty-hint">Brak przedmiotów${q || (s.katalogPrzedmiotyCurrentOnly && currentYear) ? ' spełniających filtr' : ' w tej jednostce'}.</div>` : ''}
+                  ${s.katalogPrzedmiotyLoading ? `<div class="usospp-empty-hint">Wczytywanie…</div>` : ''}
+                  ${s.katalogPrzedmiotyNextUrl && !s.katalogPrzedmiotyLoading ? `<a data-action="katalogPrzedmiotyLoadMore" style="display:inline-block;margin-top:10px;font-size:13px;font-weight:600;color:#d9773a;cursor:pointer;">Wczytaj więcej →</a>` : ''}
+                `}
+              </div>
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    // Wariant A: brak osobnego parsera kierunku — programy grupowane po
+    // polu `kierunek` z getUnitPrograms (jeden wiersz USOS na kierunek,
+    // w środku kilka instancji pokazProgram). Klik → searchOpenProgram.
+    renderKatalogKierunki() {
+      const s = this.state;
+      if (s.katalogRootLoading) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie jednostek…</div></div></div>`;
+      }
+      if (s.katalogRootError || !s.katalogRootData) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać jednostek.</div><div style="margin-top:10px;"><a data-action="katalogRetry" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div></div></div>`;
+      }
+      const byKierunek = new Map();
+      s.katalogKierunki.forEach((p) => {
+        const key = p.kierunek || '—';
+        if (!byKierunek.has(key)) byKierunek.set(key, []);
+        byKierunek.get(key).push(p);
+      });
+      return `
+        <div class="usospp-view">
+          ${backLink('katalog')}
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:12px;">Wybierz jednostkę</div>
+            ${this.renderKatalogUnitPicker(s.katalogKierunkiUnitKod)}
+            ${!s.katalogKierunkiUnitKod ? `<div class="usospp-empty-hint">Wybierz wydział powyżej, aby zobaczyć jego kierunki i programy.</div>` : `
+              ${s.katalogKierunkiLoading && !s.katalogKierunki.length ? `<div class="usospp-empty-hint">Wczytywanie programów…</div>` : `
+                ${[...byKierunek.entries()].map(([kierunek, programs]) => `
+                  <div style="margin-bottom:10px;">
+                    ${kierunek !== '—' ? `<div style="font-size:12px;font-weight:600;color:var(--ink-3);margin-bottom:4px;">${esc(kierunek)}</div>` : ''}
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;">${programs.map((p) => `<button class="usospp-mode-btn" style="flex:0 0 auto;border-radius:99px;padding:6px 13px;font-size:12.5px;" data-action="searchOpenProgram" data-kod="${esc(p.kod)}">${esc(p.name)}</button>`).join('')}</div>
+                  </div>
+                `).join('')}
+                ${!s.katalogKierunki.length && !s.katalogKierunkiLoading ? `<div class="usospp-empty-hint">Brak programów w tej jednostce.</div>` : ''}
+                ${s.katalogKierunkiNextUrl && !s.katalogKierunkiLoading ? `<a data-action="katalogKierunkiLoadMore" style="display:inline-block;margin-top:10px;font-size:13px;font-weight:600;color:#d9773a;cursor:pointer;">Wczytaj więcej →</a>` : ''}
+              `}
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    // Budynki: ta sama lista co Mapa (state.mapaBuildings), ale jako lista
+    // nazwa / jednostka / adres + „Zobacz na mapie” → openMapaFocused.
+    renderKatalogBudynki() {
+      const s = this.state;
+      if (s.mapaLoading || (!s.mapaBuildings.length && !s.mapaError)) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie budynków…</div></div></div>`;
+      }
+      if (s.mapaError || !s.mapaBuildings.length) {
+        return `<div class="usospp-view">${backLink('katalog')}<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać budynków.</div><div style="margin-top:10px;"><a data-action="mapaRefresh" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div></div></div>`;
+      }
+      const q = (s.katalogBudynkiQuery || '').trim().toLowerCase();
+      const rows = s.mapaBuildings.filter((b) => {
+        if (!q) return true;
+        return (b.name || '').toLowerCase().includes(q)
+          || (b.kod || '').toLowerCase().includes(q)
+          || (b.address || '').toLowerCase().includes(q)
+          || (b.unitName || '').toLowerCase().includes(q);
+      });
+      return `
+        <div class="usospp-view">
+          ${backLink('katalog')}
+          <div class="usospp-card">
+            <div class="usospp-card-head">
+              <div class="usospp-card-title">Budynki (${rows.length}${q ? ` z ${s.mapaBuildings.length}` : ''})</div>
+            </div>
+            <input class="usospp-search-input" data-action="katalogBudynkiQueryInput" type="text" placeholder="Szukaj budynku, adresu, jednostki…" autocomplete="off" value="${esc(s.katalogBudynkiQuery)}" style="width:100%;margin-bottom:12px;">
+            <div data-katalog-budynki-root>
+              ${rows.slice(0, 300).map((b) => `
+                <div class="usospp-list-row" style="align-items:flex-start;">
+                  <div>
+                    <div style="font-size:13.5px;font-weight:500;">${esc(b.name)}</div>
+                    ${b.unitName ? `<div style="color:var(--ink-3);font-size:12px;margin-top:2px;">${esc(b.unitName)}</div>` : ''}
+                    ${b.address ? `<div style="color:var(--ink-3);font-size:12px;margin-top:2px;">${esc(b.address)}</div>` : ''}
+                  </div>
+                  <div style="flex-shrink:0;">${b.kod ? `<a data-action="openMapaFocused" data-kod="${esc(b.kod)}" style="font-size:12px;font-weight:600;color:#d9773a;cursor:pointer;">Zobacz na mapie →</a>` : ''}</div>
+                </div>
+              `).join('')}
+              ${rows.length > 300 ? `<div class="usospp-empty-hint">Pokazuję pierwszych 300 — doprecyzuj wyszukiwanie, aby zawęzić.</div>` : ''}
+              ${!rows.length ? `<div class="usospp-empty-hint">Brak budynków spełniających filtr.</div>` : ''}
+            </div>
           </div>
         </div>
       `;

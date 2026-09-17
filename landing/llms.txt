@@ -1,0 +1,64 @@
+# USOS++
+
+> USOS++ to darmowe, open-source'owe (MIT) rozszerzenie do przeglądarek
+> opartych na Chromium, które przebudowuje USOSweb w jeden, szybki panel:
+> oceny i średnia, plan zajęć, płatności, egzaminy i sprawdziany,
+> wyszukiwarka katalogu, mapa kampusu i tryb ciemny.
+> Projekt jednej osoby (studenta), w wersji beta, nieoficjalny i niezwiązany
+> z systemem USOS ani z żadną uczelnią.
+
+- Strona: https://zuukie.github.io/USOSPlus/
+- Instalacja: https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa
+- Kod: https://github.com/zuukie/USOSPlus
+- Zgłaszanie błędów i pomysłów: https://github.com/zuukie/USOSPlus/issues
+- Polityka prywatności: https://github.com/zuukie/USOSPlus/blob/main/PRIVACY.md
+- Kontakt: usosplus@zuukie.dev, Instagram https://instagram.com/usosplus
+
+## Czym jest, a czym nie jest
+
+- JEST rozszerzeniem przeglądarkowym na komputer (Chrome, Edge, Brave,
+  Opera i inne oparte na Chromium). Działa na stronie USOSweb uczelni,
+  po normalnym logowaniu uczelnianym. Nie ma własnego logowania ani bazy
+  użytkowników.
+- NIE JEST osobną aplikacją, aplikacją mobilną ani zamiennikiem USOS-a.
+  System, dane i logowanie zostają te same.
+
+## Funkcje
+
+- Oceny z całego toku studiów i średnia liczona automatycznie.
+- Plan zajęć na dziś i na cały tydzień oraz generator przykładowego planu
+  z realnych grup (tylko podgląd — rozszerzenie nikogo nigdzie nie zapisuje).
+- Płatności: ile i za co zostało do zapłaty, z podpowiedzią o zaległościach.
+- Egzaminy i sprawdziany zebrane w jednym miejscu.
+- Szybkie wyszukiwanie przedmiotów, jednostek i programów studiów.
+- Mapa budynków kampusu (dane z USOS, kafelki OpenStreetMap).
+- Aktualności wydziału z wbudowanym centrum powiadomień (bez powiadomień
+  systemowych), tryb ciemny, skróty klawiaturowe 1–9.
+- Ograniczone, tylko do odczytu wsparcie przeglądania rekrutacji IRK
+  (oferta, szczegóły kierunków).
+
+## Prywatność
+
+- Wszystko dzieje się lokalnie w przeglądarce; nic nie trafia na żaden
+  zewnętrzny serwer autora. Brak analityki, telemetrii i reklam.
+- Jedyny wyjątek: widok Mapy pobiera publiczne kafelki z OpenStreetMap;
+  rozszerzenie nigdy nie pyta o lokalizację użytkownika.
+
+## Kompatybilność i status
+
+- Zweryfikowany na USOSweb Politechniki Wrocławskiej
+  (web.usos.pwr.edu.pl). Obsługę innej uczelni na tej samej platformie
+  USOS dodaje się jednym kliknięciem, z jawnym potwierdzeniem uprawnień
+  przez Chrome.
+- Wersja beta: część podstron może działać niedoskonale; rozszerzenie
+  oznacza takie miejsca w interfejsie.
+
+## Najczęstsze pytania (skrót)
+
+- Czy USOS++ zastępuje USOS? Nie — nakłada wygodniejszy wygląd na
+  istniejący USOSweb.
+- Czy trzeba zakładać konto? Nie — logowanie uczelniane jak dotychczas.
+- Czy działa na telefonie? Nie — tylko przeglądarki desktopowe Chromium.
+- Czy to bezpieczne? Tak — dane nie opuszczają przeglądarki (poza
+  kafelkami mapy OpenStreetMap).
+- Ile kosztuje? 0 zł, licencja MIT.
