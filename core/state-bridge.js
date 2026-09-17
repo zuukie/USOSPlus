@@ -8,6 +8,8 @@
     pluginEnabled: true,
     darkMode: false,
     myUniversity: null,
+    // Keep in sync with core/state.js — IRK favourite programme URLs.
+    irkFavorites: [],
     features: {
       quickbar: true,
       autorefresh: false,

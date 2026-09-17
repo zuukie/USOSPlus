@@ -48,6 +48,18 @@
   // (the plain /pl/ landing page lists several — "Studia I stopnia...",
   // "Szkoła doktorska", ... — each its own campaign with its own slug, so
   // there's nothing single to dashboard until one is chosen).
+  //
+  // Mount is deliberately cheap: only the anonymous-safe sections (Oferta,
+  // Aktualności, Jednostki) are fetched here — 3 requests, not 8. The
+  // logged-in sections (Zgłoszenia, Konto, Formularze, Płatności,
+  // Wiadomości) come back as lazy placeholders and are fetched on demand
+  // via fetchProtectedSection() the first time their view is opened (see
+  // irk/app.js's ensureProtected) — an anonymous visitor never pays for
+  // them at all.
+  function lazyPlaceholder() {
+    return { supported: false, verified: false, lazy: true };
+  }
+
   async function collectAll(slug) {
     const adapters = window.USOSPP_IRK_ADAPTERS;
     // Read off the currently loaded page itself — see adapter.isLoggedIn —
@@ -58,15 +70,10 @@
     const loginUrl = adapters.getLoginUrl(document);
     if (!slug) return { noRecruitmentSelected: true, loggedIn, loginUrl };
 
-    const [offerDoc, newsDoc, unitsDoc, applicationsDoc, accountDoc, personalFormsDoc, paymentsDoc, messagesDoc] = await Promise.all([
+    const [offerDoc, newsDoc, unitsDoc] = await Promise.all([
       fetchDoc(PATHS.offer(slug)),
       fetchDoc(PATHS.news(slug)),
       fetchDoc(PATHS.units(slug)),
-      fetchDoc(PATHS.applications()),
-      fetchDoc(PATHS.account()),
-      fetchDoc(PATHS.personalForms()),
-      fetchDoc(PATHS.payments()),
-      fetchDoc(PATHS.messages()),
     ]);
 
     const recruitmentLabel = adapters.recruitmentLabel(offerDoc || document);
@@ -79,25 +86,6 @@
     const unitsResult = unitsDoc
       ? adapters.getUnitsList(unitsDoc)
       : { supported: false, verified: false, units: [] };
-    // Fetched unconditionally alongside the rest, same as unitsResult — for
-    // an anonymous visitor (or one not logged in as a candidate) this just
-    // comes back unsupported, same as any other adapter on a page that
-    // doesn't apply to them.
-    const applicationsResult = applicationsDoc
-      ? adapters.getApplications(applicationsDoc)
-      : { supported: false, verified: false, recruitments: [] };
-    const accountResult = accountDoc
-      ? adapters.getAccountProfile(accountDoc)
-      : { supported: false, verified: false };
-    const personalFormsResult = personalFormsDoc
-      ? adapters.getPersonalFormsHub(personalFormsDoc)
-      : { supported: false, verified: false, forms: [] };
-    const paymentsResult = paymentsDoc
-      ? adapters.getPayments(paymentsDoc)
-      : { supported: false, verified: false, currencies: [] };
-    const messagesResult = messagesDoc
-      ? adapters.getMessages(messagesDoc)
-      : { supported: false, verified: false, conversations: [] };
 
     return {
       noRecruitmentSelected: false,
@@ -108,12 +96,57 @@
       offerResult,
       newsResult,
       unitsResult,
-      applicationsResult,
-      accountResult,
-      personalFormsResult,
-      paymentsResult,
-      messagesResult,
+      // Lazy placeholders — see fetchProtectedSection. Fetched unconditionally
+      // alongside the rest before this change; for an anonymous visitor (or
+      // one not logged in as a candidate) they just parsed into
+      // "unsupported", same as any other adapter on a page that doesn't
+      // apply to them. Now they cost zero requests until opened.
+      applicationsResult: { ...lazyPlaceholder(), recruitments: [] },
+      accountResult: lazyPlaceholder(),
+      personalFormsResult: { ...lazyPlaceholder(), forms: [] },
+      paymentsResult: { ...lazyPlaceholder(), currencies: [] },
+      messagesResult: { ...lazyPlaceholder(), conversations: [] },
     };
+  }
+
+  // One logged-in section, fetched on demand (see collectAll's comment).
+  // `name` is one of 'applications' | 'account' | 'forms' | 'payments' |
+  // 'messages'. Returns the same shape collectAll used to put on the data
+  // model directly, so app.js can just assign it over the placeholder.
+  async function fetchProtectedSection(name) {
+    const adapters = window.USOSPP_IRK_ADAPTERS;
+    switch (name) {
+      case 'applications': {
+        const doc = await fetchDoc(PATHS.applications());
+        return doc
+          ? adapters.getApplications(doc)
+          : { supported: false, verified: false, recruitments: [] };
+      }
+      case 'account': {
+        const doc = await fetchDoc(PATHS.account());
+        return doc ? adapters.getAccountProfile(doc) : { supported: false, verified: false };
+      }
+      case 'forms': {
+        const doc = await fetchDoc(PATHS.personalForms());
+        return doc
+          ? adapters.getPersonalFormsHub(doc)
+          : { supported: false, verified: false, forms: [] };
+      }
+      case 'payments': {
+        const doc = await fetchDoc(PATHS.payments());
+        return doc
+          ? adapters.getPayments(doc)
+          : { supported: false, verified: false, currencies: [] };
+      }
+      case 'messages': {
+        const doc = await fetchDoc(PATHS.messages());
+        return doc
+          ? adapters.getMessages(doc)
+          : { supported: false, verified: false, conversations: [] };
+      }
+      default:
+        return { supported: false, verified: false };
+    }
   }
 
   // Oferta's own listing (adapter.getOfferList) doesn't carry which wydział
@@ -130,27 +163,55 @@
   // exact same field irk/app.js's programme detail view already renders.
   async function fetchUnitsByUrl(urls) {
     const adapters = window.USOSPP_IRK_ADAPTERS;
-    const entries = await Promise.all(urls.map(async (url) => {
-      let doc = await fetchDoc(url);
-      if (!doc) return [url, null];
-      let detail = adapters.getProgrammeDetail(doc);
-      if (!detail.supported) {
-        // A multi-variant kierunek's Oferta link points to a /field/<code>/
-        // hub (see adapter.getFieldVariants), not a single programme page —
-        // follow its first variant instead, since every variant of the same
-        // kierunek is the same wydział in practice.
-        const hub = adapters.getFieldVariants(doc);
-        if (hub.supported && hub.variants[0]) {
-          doc = await fetchDoc(hub.variants[0].url);
-          detail = doc ? adapters.getProgrammeDetail(doc) : null;
-        } else {
-          detail = null;
-        }
+    // Cached per recruitment slug in sessionStorage (survives reloads of
+    // the same tab, cleared on tab close — same reasoning as app.js's
+    // VIEW_STORAGE_KEY). Without this, every mount re-fetched ~30-40
+    // programme detail pages just to rebuild the wydział filter.
+    const slugMatch = urls.length ? (urls[0].match(/\/offer\/([^/]+)\//) || [])[1] : null;
+    const cacheKey = slugMatch ? `usospp_irk_units_${slugMatch}` : null;
+    let cached = {};
+    if (cacheKey) {
+      try {
+        cached = JSON.parse(sessionStorage.getItem(cacheKey) || '{}') || {};
+      } catch (e) {
+        cached = {};
       }
-      const unitField = detail && detail.fields.find((f) => /Jednostka organizacyjna/i.test(f.label));
-      return [url, unitField ? unitField.value : null];
-    }));
-    return Object.fromEntries(entries);
+    }
+    const missing = urls.filter((u) => !(u in cached));
+    if (missing.length) {
+      // Bounded parallelism (6 at a time) instead of one Promise.all over
+      // ~40 URLs — same total work, less of a burst against IRK.
+      const CONCURRENCY = 6;
+      async function fetchOne(url) {
+        let doc = await fetchDoc(url);
+        if (!doc) return [url, null];
+        let detail = adapters.getProgrammeDetail(doc);
+        if (!detail.supported) {
+          // A multi-variant kierunek's Oferta link points to a /field/<code>/
+          // hub (see adapter.getFieldVariants), not a single programme page —
+          // follow its first variant instead, since every variant of the same
+          // kierunek is the same wydział in practice.
+          const hub = adapters.getFieldVariants(doc);
+          if (hub.supported && hub.variants[0]) {
+            doc = await fetchDoc(hub.variants[0].url);
+            detail = doc ? adapters.getProgrammeDetail(doc) : null;
+          } else {
+            detail = null;
+          }
+        }
+        const unitField = detail && detail.fields.find((f) => /Jednostka organizacyjna/i.test(f.label));
+        return [url, unitField ? unitField.value : null];
+      }
+      for (let i = 0; i < missing.length; i += CONCURRENCY) {
+        const batch = missing.slice(i, i + CONCURRENCY);
+        const entries = await Promise.all(batch.map(fetchOne));
+        entries.forEach(([url, unit]) => { cached[url] = unit; });
+      }
+      if (cacheKey) {
+        try { sessionStorage.setItem(cacheKey, JSON.stringify(cached)); } catch (e) { /* private mode etc. */ }
+      }
+    }
+    return Object.fromEntries(urls.map((u) => [u, u in cached ? cached[u] : null]));
   }
 
   // The list of parallel recruitment campaigns (Studia I stopnia, Szkoła
@@ -165,12 +226,18 @@
     return window.USOSPP_IRK_ADAPTERS.getRecruitmentOptions(doc);
   }
 
-  // Verified live (2026-09-14): visiting this URL directly (a plain GET,
-  // nothing submitted) sets which recruitment campaign the visitor's session
-  // is browsing and redirects to `next` — and the server rewrites `next`'s
-  // own slug segment to match the NEWLY selected campaign before doing so,
-  // so passing back the CURRENT recruitment's own Oferta path here reliably
-  // lands on the equivalent Oferta view under the new one, not a 404.
+  // Fallback switch URL, used only when the picker's own switchUrl (the
+  // button's native data-href — see adapter.getRecruitmentOptions) is
+  // unavailable. Verified live (2026-09-14): visiting this URL directly (a
+  // plain GET, nothing submitted) sets which recruitment campaign the
+  // visitor's session is browsing and redirects to `next` — and the server
+  // rewrites `next`'s own slug segment to match the NEWLY selected campaign
+  // before doing so, so passing back the CURRENT recruitment's own Oferta
+  // path here reliably lands on the equivalent Oferta view under the new
+  // one, not a 404. Known gap this fallback keeps: from a slugless page
+  // (the /pl/ landing, account-wide /pl/profile/... as first page) there is
+  // no slug-bearing `next` to pass, so `next` degrades to '/pl/home/' with
+  // no slug segment for the server to rewrite — prefer switchUrl there.
   function switchRecruitmentUrl(targetSlug, currentSlug) {
     const next = currentSlug ? PATHS.offer(currentSlug) : '/pl/home/';
     return `${location.origin}/pl/offer/registration-select/${targetSlug}/?next=${encodeURIComponent(next)}`;
@@ -219,6 +286,7 @@
     fetchDoc,
     fetchUnitsByUrl,
     fetchRecruitmentOptions,
+    fetchProtectedSection,
     fetchApplicationNextSteps,
     fetchPersonalForm,
     fetchExamScores,

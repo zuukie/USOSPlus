@@ -9,6 +9,9 @@ export const DEFAULT_STATE = {
   pluginEnabled: true,
   darkMode: false,
   myUniversity: null,
+  // Global IRK favourite programme URLs (plain programme/field page URLs,
+  // shared across recruitments — a candidate compares across campaigns).
+  irkFavorites: [],
   features: {
     quickbar: true,
     autorefresh: false,

@@ -1141,6 +1141,9 @@
         case 'katalogRetry':
           this.katalogRetry();
           break;
+        case 'newsRetry':
+          this.newsRetry();
+          break;
         case 'katalogPrzedmiotyLoadMore':
           this.loadMoreKatalogPrzedmioty();
           break;
@@ -2113,6 +2116,28 @@
       this.state.katalogBrowseData = null;
       this.state.katalogBrowseError = false;
       this.ensureKatalogRoot();
+    }
+
+    // Manual "Spróbuj ponownie" in renderAktualnosci()'s failure card —
+    // same lazy pattern as katalogRetry/mapaRefresh: flip a loading flag
+    // (the card shows "Ładowanie…"), re-render, refetch just the news
+    // section via scrape.refreshNews (same DOM-shapes-then-pwnews path
+    // as the initial collect), store it back into the data model and
+    // re-render. On failure the previous (unsupported) result stays, so
+    // the card — with both buttons — simply comes back.
+    async newsRetry() {
+      if (this.state.newsRefreshing) return;
+      this.setState({ newsRefreshing: true });
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      try {
+        const adapter = adapters ? adapters.selectAdapter() : null;
+        if (!scrape || !adapter || !scrape.refreshNews) throw new Error('no scraper');
+        this.data.newsResult = await scrape.refreshNews(adapter);
+      } catch (e) {
+        // keep the previous result — the failure card stays
+      }
+      this.setState({ newsRefreshing: false });
     }
 
     fetchKatalogBrowse(kod) {
@@ -3738,7 +3763,7 @@
       const news = this.data.newsResult || {};
       const items = news.items || [];
       if (!news.supported) {
-        return `<div class="usospp-view"><div class="usospp-empty-hint">Nie udało się odczytać aktualności ze strony USOS.</div></div>`;
+        return `<div class="usospp-view"><div class="usospp-card"><div class="usospp-empty-hint">${this.state.newsRefreshing ? 'Ładowanie aktualności…' : 'Nie udało się odczytać aktualności ze strony USOS.'}</div><div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><button class="usospp-btn-ghost" data-action="newsRetry">Spróbuj ponownie</button><button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=news/default&usospp_off=1">Otwórz w USOS →</button></div></div></div>`;
       }
       if (items.length === 0) {
         return `<div class="usospp-view"><div class="usospp-empty-hint">Brak aktualności.</div></div>`;

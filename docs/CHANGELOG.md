@@ -10,6 +10,10 @@ Bez żargonu: tylko efekt, który widać w panelu.
 
 ## 0.9.5 (nieopublikowane)
 
+- **Panel IRK: ulubione i porównywarka kierunków** — bo kandydat wybiera spośród dziesiątek ofert i gubi się w kartach. Efekt: gwiazdka przy kierunku zapisuje go na liście, a maksymalnie 3 kierunki da się zestawić obok siebie w jednej tabeli.
+- **Panel IRK: filtry zgłoszeń i licznik nieprzeczytanych** — bo przy kilku zgłoszeniach trudno wypatrzyć to nieopłacone albo nieprzeczytaną wiadomość. Efekt: filtr po statusie opłaty/kwalifikacji i wyszukiwarce kierunku plus badge z liczbą nieprzeczytanych na Dashboardzie.
+- **Panel IRK: szybszy start** — bo dashboard pobierał 8 stron naraz przy każdym wejściu. Efekt: sekcje konta (zgłoszenia, formularze, płatności, wiadomości, konto) dociągają się dopiero przy pierwszym wejściu w widok, a wydziały kierunków są cachowane na czas sesji karty.
+
 - **Publiczny Katalog uczelni** — bo sporo treści USOSa jest jawnych i nie
   powinno wymagać logowania. Bez konta przejrzysz strukturę jednostek
   (wydziały, katedry, instytuty), ofertę przedmiotów, kierunki i programy

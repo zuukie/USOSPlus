@@ -128,7 +128,11 @@
   // </button></li>...</ul> — this only reads that list; the actual switch
   // (a plain GET to that data-href, no form/POST — see irk/scraping.js's
   // switchRecruitmentUrl) stays a real navigation, not something this parser
-  // triggers itself.
+  // triggers itself. The button's own data-href is passed through as
+  // switchUrl — it carries the server-generated ?next= (the page the visitor
+  // was on when IRK rendered the picker), which the server needs to land
+  // back correctly; rebuilding ?next= by hand (see switchRecruitmentUrl's
+  // comment) guesses wrong for slugless pages like the /pl/ landing.
   function getRecruitmentOptions(doc = document) {
     const list = doc.querySelector('ul.reg_select');
     if (!list) return { supported: false, verified: false, options: [] };
@@ -142,6 +146,7 @@
           name: textOf(paragraphs[0]),
           description: paragraphs[1] ? textOf(paragraphs[1]) : null,
           protectedAccess: !!btn.querySelector('.reg-status-info'),
+          switchUrl: href || null,
         };
       })
       .filter((o) => o.slug && o.name);

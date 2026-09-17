@@ -171,10 +171,9 @@ function switchHtml(on, key) {
 
 function render() {
   const dark = state.darkMode;
-  // IRK has no redesign/features to show yet (see irk/inject.js) — the
-  // features subview only ever applies to the USOS toggles in FEATURE_GROUPS,
-  // so an IRK-looking tab always gets its own small header+body instead of
-  // being routed through view === 'features'.
+  // The features subview only ever applies to the USOS toggles in
+  // FEATURE_GROUPS, so an IRK-looking tab always gets its own small
+  // header+body instead of being routed through view === 'features'.
   const irkView = !!(tab && looksLikeIrk);
   appEl.innerHTML = `
     <div class="pp-root" data-theme="${dark ? 'dark' : 'light'}">
@@ -338,7 +337,8 @@ function renderMainBody() {
 // Before hasHostPermission, same opt-in flow as "Dodaj obsługę tej uczelni"
 // above but registering the 'irk' file set (see background.js's
 // registerModule) instead of 'usos'. After that, a real toggle — irk/app.js
-// now has an actual dashboard (Oferta/Aktualności) to show or hide.
+// shows the full dashboard (Oferta/Aktualności/Jednostki + Zgłoszenia,
+// Formularze, Płatności, Wiadomości i Konto po zalogowaniu).
 function renderIrkBody() {
   const errorBanner = actionError ? `
     <div class="pp-unsupported-banner">
@@ -360,7 +360,7 @@ function renderIrkBody() {
             <div style="margin-top:6px;"><a data-action="addUniversity" data-module="irk">Dodaj obsługę tej uczelni (IRK) →</a></div>
           </div>
         </div>
-        <div class="pp-empty">Kierunki i aktualności z IRK; status zgłoszenia, terminy i opłaty pojawią się w kolejnych wersjach USOS++.</div>
+        <div class="pp-empty">Oferta, aktualności i jednostki bez logowania; zgłoszenia, formularze, płatności, wiadomości i konto — po zalogowaniu na konto kandydata.</div>
       </div>
     `;
   }
@@ -374,8 +374,8 @@ function renderIrkBody() {
         </span>
         ${enabled ? 'Wyłącz panel USOS++ (IRK)' : 'Włącz panel USOS++ (IRK)'}
       </button>
-      <div class="pp-main-hint">${enabled ? 'Klasyczny IRK jest zastąpiony dashboardem — oferta i aktualności tej rekrutacji' : 'Przełącz aktualną kartę IRK na dashboard USOS++'}</div>
-      <div class="pp-empty">Status zgłoszenia, terminy i opłaty wymagają zalogowanego konta kandydata do zweryfikowania — na razie tylko oferta i aktualności.</div>
+      <div class="pp-main-hint">${enabled ? 'Klasyczny IRK jest zastąpiony dashboardem — oferta, aktualności, jednostki oraz (po zalogowaniu) zgłoszenia, formularze, płatności, wiadomości i konto' : 'Przełącz aktualną kartę IRK na dashboard USOS++'}</div>
+      <div class="pp-empty">Sekcje konta kandydata wymagają zalogowania w IRK; oferta, aktualności i jednostki działają anonimowo.</div>
     </div>
   `;
 }

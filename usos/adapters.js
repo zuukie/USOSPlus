@@ -202,11 +202,12 @@
   // uwaga / red — red ones were only seen inside a comment holding a
   // retired maintenance notice, but they clearly intend to use it for
   // live urgent ones), so every .pole with a heading is kept rather than
-  // trusting one category. The greeting ("Witamy w systemie…", in the
-  // first pole) is dropped by a first-item-only text check — no
-  // structural marker separates it there (verified at PB; Polish-only
-  // pattern, non-Polish installations would at worst show their
-  // greeting as one extra announcement, which degrades gracefully).
+  // trusting one category. The greeting ("Witamy w systemie…", observed
+  // first at PB but mid-archive at PBS — shape F) is dropped by a
+  // position-independent text check, not a first-item rule: no heading
+  // separates it structurally (verified at PB; Polish-only pattern,
+  // non-Polish installations would at worst show their greeting as one
+  // extra announcement, which degrades gracefully).
   function parsePoleNews(doc) {
     const poles = doc.querySelectorAll('div.pole');
     const news = [];
@@ -215,11 +216,152 @@
       if (!heading) return;
       const title = textOf(heading);
       if (!title) return;
-      if (index === 0 && /^(witaj|witamy)\b/i.test(title)) return;
+      if (/^(witaj|witamy)\b/i.test(title)) return;
       const bodyNodes = Array.from(pole.childNodes).filter((n) => n !== heading);
       news.push({ title, html: sanitizeNewsHtml(bodyNodes, doc) });
     });
     return news;
+  }
+
+  // Shape D (verified live at usosweb.al.edu.pl 2026-09-17, anonymous):
+  // announcements as <div class="info-box"> siblings grouped under
+  // <div class="separator-box"> section dividers, all inside .usos-ui.
+  // Each box's title is its <p class="header">, its date (when present)
+  // its <p class="stamp"> ("Dodano: DD.MM.YYYY r." — passed through as
+  // raw text, like the pwnews JSON date; DOM shapes A-C have no date).
+  // The remaining nodes are the body, sanitized like every other shape.
+  // Only boxes carrying a stamp are kept: the page mixes real
+  // announcements (the "Komunikaty" section) with undated static help
+  // (login instructions, file links, migration timetable), and the
+  // greeting lives in a separate .head-box outside the items. None of
+  // this page's markers (h1-h6, hr, .pole, .title-wrapper) exist here,
+  // so shapes A-C can't fire on it — and this parser requires the
+  // .info-box + .separator-box pair, so it can't fire on theirs.
+  function parseInfoBoxNews(doc) {
+    const scope = doc.querySelector('.usos-ui');
+    if (!scope) return [];
+    if (!scope.querySelector('.info-box') || !scope.querySelector('.separator-box')) return [];
+    const news = [];
+    scope.querySelectorAll('.info-box').forEach((box) => {
+      const header = box.querySelector('p.header');
+      const title = textOf(header);
+      if (!title) return;
+      const stamp = box.querySelector('p.stamp');
+      const stampText = textOf(stamp);
+      if (!stampText) return; // undated static help — not an announcement
+      const m = stampText.match(/Dodano:\s*(.+)/i);
+      const date = m ? m[1].trim() : stampText;
+      const bodyNodes = Array.from(box.childNodes).filter((n) => n !== header && n !== stamp);
+      news.push({ title, html: sanitizeNewsHtml(bodyNodes, doc), date });
+    });
+    return news;
+  }
+
+  // Shape E (verified live at usosweb.tu.kielce.pl 2026-09-17,
+  // anonymous): announcements as <usos-frame> cards, each headed by
+  // <h2 slot="title"> (any h1-h6 accepted) with the body in the frame's
+  // remaining nodes. The first frame is the greeting ("Witamy w
+  // systemie…") — dropped by a position-independent witamy check, since
+  // shape F proved greetings can sit mid-archive, not just first. No
+  // dates on this installation. Tried after A-D: PWr's modern shell also
+  // uses usos-frame, but shape A wins there first whenever it matches.
+  function parseFrameNews(doc) {
+    const frames = Array.from(doc.querySelectorAll('usos-frame'));
+    const titled = frames.filter((f) => f.querySelector('h1,h2,h3,h4,h5,h6'));
+    if (!titled.length) return [];
+    const news = [];
+    titled.forEach((frame) => {
+      const heading = frame.querySelector('h1,h2,h3,h4,h5,h6');
+      const title = textOf(heading);
+      if (!title) return;
+      if (/^(witaj|witamy)\b/i.test(title)) return;
+      const bodyNodes = Array.from(frame.childNodes).filter((n) => n !== heading);
+      news.push({ title, html: sanitizeNewsHtml(bodyNodes, doc) });
+    });
+    return news;
+  }
+
+  // Shape F (verified live at usosweb.pbs.edu.pl + usosweb.po.edu.pl
+  // 2026-09-17, anonymous — one parser covers both installations):
+  // one <table class="grey"> per announcement, with the title in its
+  // <tr class="strong"> row and the body in the remaining rows (table /
+  // tr / td are not in the sanitizer allowlist, so they unwrap down to
+  // their text and links automatically). Tables WITHOUT a strong row
+  // are the installation's own metadata (data-migration status,
+  // "ostatnia modyfikacja") and are skipped structurally, not by text.
+  // The greeting ("Witamy na PBŚ!") sits mid-archive here, hence the
+  // position-independent witamy drop (also applied to shape C below).
+  // No dates on either installation.
+  function parseStrongTableNews(doc) {
+    const tables = doc.querySelectorAll('table.grey');
+    if (!tables.length) return [];
+    const news = [];
+    tables.forEach((table) => {
+      const strongRow = table.querySelector('tr.strong');
+      if (!strongRow) return;
+      const title = textOf(strongRow);
+      if (!title) return;
+      if (/^(witaj|witamy)\b/i.test(title)) return;
+      const strongRows = new Set([strongRow]);
+      const bodyNodes = [];
+      table.querySelectorAll('tr').forEach((tr) => {
+        if (!strongRows.has(tr)) bodyNodes.push(tr);
+      });
+      news.push({ title, html: sanitizeNewsHtml(bodyNodes, doc) });
+    });
+    return news;
+  }
+
+  // Shape G (verified live at usosweb.polsl.pl 2026-09-17, anonymous):
+  // flat flow where each announcement starts at an <h1>, body runs to
+  // the next <h1> (an <hr/> additionally cuts off a heading-less EU
+  // project footer, dropped for having no title). Unlike shape B,
+  // titles ARE h1 here, so B's h1-drop would eat them — G runs after B
+  // and only fires when B found nothing. Retired announcements inside
+  // HTML comments never become headings (they aren't elements). Static
+  // help sections ("LOGOWANIE DO USOSWEB") are structurally identical
+  // to news and are kept deliberately — same graceful-degradation call
+  // as shape C's non-Polish greeting. Title-bearing panel links (the
+  // mLegitymacja h1 links a sub-panel file) stay plain text: bodies are
+  // never rewritten. At least two titled segments are required, so a
+  // one-h1 static info page can't pose as an archive. No dates here.
+  function parseH1SegmentNews(doc) {
+    const scope = doc.querySelector('main, #content, .usos-ui');
+    if (!scope) return [];
+    const h1s = Array.from(scope.querySelectorAll('h1'));
+    if (h1s.length < 2) return [];
+    const container = h1s[0].parentElement;
+    if (!container || container.querySelectorAll('h1').length < 2) return [];
+    const items = [];
+    let current = null;
+    let stopped = false;
+    const flush = () => { if (current) { items.push(current); current = null; } };
+    Array.from(container.childNodes).forEach((node) => {
+      if (stopped) return;
+      if (node.nodeType === Node.ELEMENT_NODE && (node.tagName === 'H1' || node.tagName === 'HR')) {
+        flush();
+        if (node.tagName === 'H1') {
+          const title = textOf(node);
+          if (!title) return;
+          if (/^(witaj|witamy)\b/i.test(title)) return;
+          current = { title, bodyNodes: [] };
+        }
+        return;
+      }
+      // A nested <hr/> (e.g. wrapped in a centering div, as on the live
+      // page) marks the footer boundary: flush and ignore everything
+      // after it instead of appending boilerplate to the last item.
+      if (node.nodeType === Node.ELEMENT_NODE && node.querySelector('hr')) {
+        flush();
+        stopped = true;
+        return;
+      }
+      if (current) current.bodyNodes.push(node);
+    });
+    flush();
+    return items
+      .filter((it) => it.title)
+      .map((it) => ({ title: it.title, html: sanitizeNewsHtml(it.bodyNodes, doc) }));
   }
 
   function hasModernShell() {
@@ -880,13 +1022,13 @@
 
     // Announcements from news/default (also the site's own landing page
     // once logged in). Every server-rendered markup variant is
-    // feature-detected per parser (see the three shapes above), tried in
+    // feature-detected per parser (see the seven shapes above), tried in
     // a fixed order; the pwnews JSON probe in scraping.js's collectNews
     // only fires when ALL of these come back empty. Detection is by
     // markup, never by hostname — see the comment above the shape
     // parsers for why that matters.
     getNews(doc = document) {
-      const parsers = [parseTitleSectionNews, parseHrSegmentNews, parsePoleNews];
+      const parsers = [parseTitleSectionNews, parseHrSegmentNews, parsePoleNews, parseInfoBoxNews, parseFrameNews, parseStrongTableNews, parseH1SegmentNews];
       for (const parse of parsers) {
         const items = parse(doc);
         if (items.length > 0) return { supported: true, verified: true, items };

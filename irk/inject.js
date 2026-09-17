@@ -46,8 +46,9 @@
   }
 
   async function onAppSettingsEvent(e) {
-    const { disable } = e.detail || {};
+    const { disable, irkFavorites } = e.detail || {};
     if (disable) await setState({ irkEnabled: false });
+    if (irkFavorites) await setState({ irkFavorites });
   }
 
   async function mountDashboard() {
@@ -57,7 +58,7 @@
       const slug = adapters.recruitmentSlug();
       console.info('[USOS++] mounting IRK dashboard, slug =', slug);
       const data = await scrape.collectAll(slug);
-      app = window.USOSPP_IRK_APP.mount(el, data, { darkMode: currentSettings.darkMode });
+      app = window.USOSPP_IRK_APP.mount(el, data, { darkMode: currentSettings.darkMode, irkFavorites: currentSettings.irkFavorites || [] });
     } catch (e) {
       // A thrown error here previously left hideNative() applied with no
       // container ever appended — page looked "frozen blank" instead of
@@ -88,7 +89,7 @@
     const irkOn = active && settings.irkEnabled;
     if (irkOn) {
       if (!app) await mountDashboard();
-      else app.updateSettings({ darkMode: settings.darkMode });
+      else app.updateSettings({ darkMode: settings.darkMode, irkFavorites: settings.irkFavorites || [] });
     } else if (app || container) {
       unmountDashboard();
     }

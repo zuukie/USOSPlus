@@ -71,13 +71,26 @@
     { id: 'konto', label: 'Moje konto', icon: 'user' },
   ];
   const NAV_ITEMS = [...NAV_ITEMS_PUBLIC, ...NAV_ITEMS_PROTECTED];
-  const VALID_VIEWS = new Set([...NAV_ITEMS.map((i) => i.id), 'programme']);
+  const VALID_VIEWS = new Set([...NAV_ITEMS.map((i) => i.id), 'programme', 'porownanie']);
+  // Max programmes compared side by side (see renderPorownanie).
+  const COMPARE_MAX = 3;
+  // Logged-in views whose data arrives via fetchProtectedSection (see
+  // irk/scraping.js's collectAll comment): view id -> { section, dataKey }.
+  const PROTECTED_VIEW_SECTION = {
+    zgloszenia: { section: 'applications', dataKey: 'applicationsResult' },
+    formularze: { section: 'forms', dataKey: 'personalFormsResult' },
+    platnosci: { section: 'payments', dataKey: 'paymentsResult' },
+    wiadomosci: { section: 'messages', dataKey: 'messagesResult' },
+    konto: { section: 'account', dataKey: 'accountResult' },
+  };
+  const PROTECTED_VIEWS = new Set(Object.keys(PROTECTED_VIEW_SECTION));
 
   const TITLES = {
     dashboard: ['Dashboard', 'Podsumowanie rekrutacji'],
     aktualnosci: ['Aktualności', 'Ogłoszenia z tej rekrutacji'],
     oferta: ['Oferta', 'Kierunki studiów w tej rekrutacji'],
     programme: ['Kierunek', 'Szczegóły z IRK'],
+    porownanie: ['Porównaj kierunki', 'Zestawienie do 3 kierunków obok siebie'],
     jednostki: ['Jednostki', 'Wydziały prowadzące tę rekrutację'],
     zgloszenia: ['Zgłoszenia', 'Status Twoich zgłoszeń rekrutacyjnych'],
     formularze: ['Formularze osobowe', 'Podgląd danych zgłoszonych do tej rekrutacji'],
@@ -114,16 +127,20 @@
     constructor(root, data, initialSettings) {
       this.root = root;
       this.data = data;
-      this.settings = initialSettings; // { darkMode }
+      this.settings = { darkMode: !!initialSettings.darkMode, irkFavorites: initialSettings.irkFavorites || [] }; // { darkMode, irkFavorites }
 
       const saved = loadViewState();
       let initialView = 'dashboard';
       let initialProgrammeUrl = null;
+      let initialCompareUrls = [];
       if (saved && VALID_VIEWS.has(saved.view)) {
         if (saved.view === 'programme' && saved.programmeUrl) {
           initialView = 'programme';
           initialProgrammeUrl = saved.programmeUrl;
-        } else if (saved.view !== 'programme') {
+        } else if (saved.view === 'porownanie' && Array.isArray(saved.compareUrls) && saved.compareUrls.length) {
+          initialView = 'porownanie';
+          initialCompareUrls = saved.compareUrls.slice(0, COMPARE_MAX);
+        } else if (saved.view !== 'programme' && saved.view !== 'porownanie') {
           initialView = saved.view;
         }
       }
@@ -165,6 +182,25 @@
         // <details> is opened — see ensureMessageThread. Keyed by the
         // conversation's own URL, same shape as personalForms/examScores.
         messageThreads: {},
+        // Logged-in sections (Zgłoszenia/Formularze/Płatności/Wiadomości/
+        // Konto) are lazy placeholders until their view is first opened —
+        // see ensureProtected. 'idle' | 'loading' | 'done' | 'error'.
+        protectedStatus: { zgloszenia: 'idle', formularze: 'idle', platnosci: 'idle', wiadomosci: 'idle', konto: 'idle' },
+        // Zgłoszenia filters — patched in place like oferaSearch (see
+        // setZgloszeniaResults), so typing doesn't lose focus.
+        zgloszeniaSearch: '',
+        zgloszeniaPay: '',
+        zgloszeniaQual: '',
+        oferaFavOnly: false,
+        // Compare tray: up to COMPARE_MAX programme/field URLs picked from
+        // Oferta, fetched in parallel when the compare view opens.
+        compareUrls: initialCompareUrls,
+        compareLoading: initialView === 'porownanie',
+        compareError: false,
+        compareItems: null,
+        // Re-fetch of the public sections after an empty dashboard (see
+        // retryCollectAll). 'dataReloading' only drives the retry button.
+        dataReloading: false,
       };
       this._onClick = this.handleClick.bind(this);
       this._onInput = this.handleInput.bind(this);
@@ -187,6 +223,9 @@
       try { history.replaceState(this.viewStatePayload(), '', location.href); } catch (e) { /* ignore */ }
       if (initialView === 'programme' && initialProgrammeUrl) this.fetchProgramme(initialProgrammeUrl);
       if (initialView === 'oferta') this.ensureOfertaEnriched();
+      if (initialView === 'porownanie' && initialCompareUrls.length) this.fetchCompare();
+      if (this.data.loggedIn) this.prefetchUnread();
+      if (PROTECTED_VIEWS.has(initialView)) this.ensureProtected(initialView);
     }
 
     destroy() {
@@ -202,7 +241,7 @@
     }
 
     updateSettings(settings) {
-      this.settings = settings;
+      this.settings = { ...this.settings, ...settings };
       this.render();
     }
 
@@ -210,6 +249,7 @@
       this.setState({ view });
       this.persistViewState();
       if (view === 'oferta') this.ensureOfertaEnriched();
+      if (PROTECTED_VIEWS.has(view)) this.ensureProtected(view);
     }
 
     // "Jednostki" links a wydział straight into Oferta pre-filtered to it,
@@ -231,6 +271,15 @@
       Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
       const el = this.root.querySelector('[data-oferta-results]');
       if (el) el.innerHTML = this.renderOfertaResults();
+      else this.render();
+    }
+
+    // Patches just the Zgłoszenia results list — same focus-preserving
+    // reasoning as setOfertaResults.
+    setZgloszeniaResults(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      const el = this.root.querySelector('[data-zgloszenia-results]');
+      if (el) el.innerHTML = this.renderZgloszeniaResults();
       else this.render();
     }
 
@@ -261,6 +310,104 @@
     patchOfertaUnitSelect() {
       const el = this.root.querySelector('[data-oferta-unit-select]');
       if (el) el.innerHTML = this.renderOfertaUnitSelect();
+    }
+
+    // Slug is known but NONE of the public sections parsed — the "empty
+    // dashboard" state after a half-switched recruitment session (picked
+    // from a slugless page, session not fully settled). Loud retry instead
+    // of silent empties; per-view hints (Oferta/Jednostki/...) already cover
+    // their own single-section failures, so only the dashboard gates here.
+    publicDataFailed() {
+      if (this.data.noRecruitmentSelected) return false;
+      const { offerResult, newsResult, unitsResult } = this.data;
+      return [offerResult, newsResult, unitsResult].every((r) => !r || !r.supported);
+    }
+
+    renderDataLoadError() {
+      const reloading = this.state.dataReloading;
+      const offerPath = window.USOSPP_IRK_SCRAPE.PATHS.offer(this.data.slug);
+      return `
+        <div class="usospp-card">
+          <div class="usospp-card-title">Nie udało się wczytać danych tej rekrutacji</div>
+          <div class="usospp-muted-text" style="margin-top:6px;">Rekrutacja wygląda na wybraną (${esc(this.data.recruitmentLabel || '—')}), ale oferta, aktualności i jednostki wróciły puste. Zdarza się to tuż po przełączeniu rekrutacji, zanim sesja IRK się ustabilizuje.</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+            <button class="usospp-btn-primary" data-action="retryCollectAll" ${reloading ? 'disabled' : ''}>${reloading ? 'Wczytywanie…' : 'Spróbuj ponownie'}</button>
+            <button class="usospp-btn-ghost" data-action="openIrk" data-url="${esc(location.origin + offerPath)}">Otwórz w klasycznym IRK →</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // Re-runs the mount fetch for the same slug, preserving any already
+    // loaded protected sections (and their statuses) so a retry never
+    // wipes Zgłoszenia/Płatności/... back to lazy placeholders while their
+    // views believe them loaded.
+    async retryCollectAll() {
+      if (this.state.dataReloading || !this.data.slug) return;
+      this.setState({ dataReloading: true });
+      try {
+        const fresh = await window.USOSPP_IRK_SCRAPE.collectAll(this.data.slug);
+        for (const k of ['applicationsResult', 'accountResult', 'personalFormsResult', 'paymentsResult', 'messagesResult']) {
+          if (this.data[k] && !this.data[k].lazy) fresh[k] = this.data[k];
+        }
+        this.data = fresh;
+      } catch (e) {
+        // Falls through to dataReloading=false below — publicDataFailed()
+        // still derives from this.data, so the error card simply re-renders.
+      }
+      this.setState({ dataReloading: false });
+    }
+
+    // Fetches one logged-in section on first open (idle-guarded, same
+    // shape as ensureOfertaEnriched). Anonymous visitors never get here —
+    // renderView's login gate runs first — and a failed fetch degrades to
+    // the view's own error hint instead of breaking the shell.
+    async ensureProtected(view) {
+      const entry = PROTECTED_VIEW_SECTION[view];
+      if (!entry || !this.data.loggedIn || this.data.noRecruitmentSelected) return;
+      if (this.state.protectedStatus[view] !== 'idle') return;
+      this.state.protectedStatus = { ...this.state.protectedStatus, [view]: 'loading' };
+      this.render();
+      try {
+        this.data[entry.dataKey] = await window.USOSPP_IRK_SCRAPE.fetchProtectedSection(entry.section);
+        this.state.protectedStatus = { ...this.state.protectedStatus, [view]: 'done' };
+      } catch (e) {
+        this.state.protectedStatus = { ...this.state.protectedStatus, [view]: 'error' };
+      }
+      this.render();
+    }
+
+    protectedLoading(view) {
+      const s = this.state.protectedStatus[view];
+      return s === 'idle' || s === 'loading';
+    }
+
+    protectedError(view) {
+      return this.state.protectedStatus[view] === 'error';
+    }
+
+    // Background prefetch of the inbox just for the unread badge on the
+    // Dashboard/sidebar — one cheap request per mount for logged-in
+    // candidates. Silent on failure (resets to idle so a real open of
+    // Wiadomości retries via ensureProtected) and never blocks the mount.
+    async prefetchUnread() {
+      if (!this.data.loggedIn || this.data.noRecruitmentSelected) return;
+      if (this.state.protectedStatus.wiadomosci !== 'idle') return;
+      this.state.protectedStatus = { ...this.state.protectedStatus, wiadomosci: 'loading' };
+      try {
+        this.data.messagesResult = await window.USOSPP_IRK_SCRAPE.fetchProtectedSection('messages');
+        this.state.protectedStatus = { ...this.state.protectedStatus, wiadomosci: 'done' };
+      } catch (e) {
+        this.state.protectedStatus = { ...this.state.protectedStatus, wiadomosci: 'idle' };
+        return;
+      }
+      this.render();
+    }
+
+    unreadMessagesCount() {
+      const r = this.data.messagesResult;
+      if (!r || !r.supported) return null;
+      return r.conversations.filter((c) => c.unread).length;
     }
 
     // Same scoped-patch reasoning as usos/app.js's setModalState — opening
@@ -300,12 +447,24 @@
       }
     }
 
-    // A real page navigation (see scrape.switchRecruitmentUrl's comment on
-    // why this is safe to trigger directly) — the current tab reloads onto
-    // the newly selected recruitment, where USOS++ re-detects and re-mounts
+    // A real page navigation — the option's own switchUrl (the button's
+    // native data-href with the server-generated ?next=) is preferred over
+    // the rebuilt switchRecruitmentUrl, which guesses ?next= wrong for
+    // slugless pages like the /pl/ landing (see adapter.
+    // getRecruitmentOptions). Either way the current tab reloads onto the
+    // newly selected recruitment, where USOS++ re-detects and re-mounts
     // itself fresh, same as any other IRK navigation.
     switchRecruitment(slug) {
       if (!slug) return;
+      const option = (this.state.recruitmentOptions || []).find((o) => o.slug === slug);
+      // Code-protected recruitments need the access code on the native page
+      // (see renderRecruitmentPickerModal) — a switch from here would be a
+      // silent no-op, so refuse it outright.
+      if (option && option.protectedAccess) return;
+      if (option && option.switchUrl && option.switchUrl.startsWith('/')) {
+        location.href = location.origin + option.switchUrl;
+        return;
+      }
       location.href = window.USOSPP_IRK_SCRAPE.switchRecruitmentUrl(slug, this.data.slug);
     }
 
@@ -417,6 +576,7 @@
       return {
         view: this.state.view,
         programmeUrl: this.state.view === 'programme' ? this.state.programmeUrl : null,
+        compareUrls: this.state.view === 'porownanie' ? this.state.compareUrls : [],
       };
     }
 
@@ -439,9 +599,14 @@
       if (view === 'programme') {
         this.setState({ view: 'programme', programmeUrl: p.programmeUrl, programmeLoading: true, programmeError: false, programmeData: null, fieldData: null });
         this.fetchProgramme(p.programmeUrl);
+      } else if (view === 'porownanie') {
+        const urls = Array.isArray(p.compareUrls) ? p.compareUrls.slice(0, COMPARE_MAX) : [];
+        this.setState({ view: 'porownanie', compareUrls: urls, compareLoading: urls.length > 0, compareError: false, compareItems: null });
+        if (urls.length) this.fetchCompare();
       } else {
         this.setState({ view });
         if (view === 'oferta') this.ensureOfertaEnriched();
+        if (PROTECTED_VIEWS.has(view)) this.ensureProtected(view);
       }
       saveViewState(this.viewStatePayload());
     }
@@ -472,6 +637,78 @@
 
     hasUnverifiedProgrammeStatus() {
       return this.state.view === 'programme' && this.state.programmeData && this.state.programmeData.statusSupported && !this.state.programmeData.statusVerified;
+    }
+
+    // Global favourites (URLs shared across recruitments — see
+    // core/state.js's irkFavorites). Persisted via inject.js on every
+    // toggle; the full list re-renders since stars appear in several rows.
+    isFavorite(url) {
+      return (this.settings.irkFavorites || []).includes(url);
+    }
+
+    toggleFavorite(url) {
+      if (!url) return;
+      const favs = this.settings.irkFavorites || [];
+      const next = favs.includes(url) ? favs.filter((u) => u !== url) : [...favs, url];
+      this.settings = { ...this.settings, irkFavorites: next };
+      this.emitSettings({ irkFavorites: next });
+      this.render();
+    }
+
+    // Compare tray — at most COMPARE_MAX URLs. Past the max the extra pick
+    // is ignored (the tray hint already says "maks. 3").
+    toggleCompare(url) {
+      if (!url) return;
+      const cur = this.state.compareUrls;
+      if (cur.includes(url)) this.setState({ compareUrls: cur.filter((u) => u !== url) });
+      else if (cur.length < COMPARE_MAX) this.setState({ compareUrls: [...cur, url] });
+    }
+
+    openCompare() {
+      if (this.state.compareUrls.length < 2) return;
+      this.setState({ view: 'porownanie', compareLoading: true, compareError: false, compareItems: null });
+      this.persistViewState();
+      this.fetchCompare();
+    }
+
+    clearCompare() {
+      this.setState({ compareUrls: [], compareItems: null, compareError: false });
+      this.persistViewState();
+    }
+
+    removeCompare(url) {
+      const next = this.state.compareUrls.filter((u) => u !== url);
+      this.setState({
+        compareUrls: next,
+        compareItems: this.state.compareItems ? this.state.compareItems.filter((it) => it.url !== url) : null,
+      });
+      this.persistViewState();
+    }
+
+    // Same hub fallback as fetchProgramme/fetchUnitsByUrl: a /field/<code>/
+    // URL resolves through its first variant.
+    async fetchCompare() {
+      const scrape = window.USOSPP_IRK_SCRAPE;
+      const adapters = window.USOSPP_IRK_ADAPTERS;
+      try {
+        const items = await Promise.all(this.state.compareUrls.map(async (url) => {
+          const doc = await scrape.fetchDoc(url);
+          if (!doc) return { url, name: url, detail: null };
+          const detail = adapters.getProgrammeDetail(doc);
+          if (detail.supported) return { url, name: detail.name, detail };
+          const hub = adapters.getFieldVariants(doc);
+          if (hub.supported && hub.variants[0]) {
+            const vDoc = await scrape.fetchDoc(hub.variants[0].url);
+            const vDetail = vDoc ? adapters.getProgrammeDetail(vDoc) : null;
+            if (vDetail && vDetail.supported) return { url, name: `${hub.name} — ${vDetail.name}`, detail: vDetail };
+            return { url, name: hub.name, detail: null };
+          }
+          return { url, name: url, detail: null };
+        }));
+        this.setState({ compareLoading: false, compareItems: items, compareError: !items.some((it) => it.detail) });
+      } catch (e) {
+        this.setState({ compareLoading: false, compareError: true });
+      }
     }
 
     renderBetaNotice() {
@@ -526,6 +763,27 @@
         case 'toggleMessageThread':
           this.ensureMessageThread(el.dataset.url);
           break;
+        case 'toggleFavorite':
+          this.toggleFavorite(el.dataset.url);
+          break;
+        case 'toggleFavoritesOnly':
+          this.setOfertaResults((s) => ({ oferaFavOnly: !s.oferaFavOnly }));
+          break;
+        case 'toggleCompare':
+          this.toggleCompare(el.dataset.url);
+          break;
+        case 'openCompare':
+          this.openCompare();
+          break;
+        case 'clearCompare':
+          this.clearCompare();
+          break;
+        case 'removeCompare':
+          this.removeCompare(el.dataset.url);
+          break;
+        case 'retryCollectAll':
+          this.retryCollectAll();
+          break;
         case 'closeModalBackdrop':
           // Only when the backdrop itself was clicked, not something inside
           // the modal card that happens to bubble up to it.
@@ -540,15 +798,28 @@
     }
 
     handleInput(e) {
-      const el = e.target.closest('[data-action="oferaSearchInput"]');
-      if (!el) return;
-      this.setOfertaResults({ oferaSearch: el.value });
+      const ofertaEl = e.target.closest('[data-action="oferaSearchInput"]');
+      if (ofertaEl) {
+        this.setOfertaResults({ oferaSearch: ofertaEl.value });
+        return;
+      }
+      const zglEl = e.target.closest('[data-action="zgloszeniaSearchInput"]');
+      if (zglEl) this.setZgloszeniaResults({ zgloszeniaSearch: zglEl.value });
     }
 
     handleChange(e) {
-      const el = e.target.closest('[data-action="oferaUnitSelect"]');
-      if (!el) return;
-      this.setOfertaResults({ oferaUnitFilter: el.value });
+      const ofertaEl = e.target.closest('[data-action="oferaUnitSelect"]');
+      if (ofertaEl) {
+        this.setOfertaResults({ oferaUnitFilter: ofertaEl.value });
+        return;
+      }
+      const payEl = e.target.closest('[data-action="zgloszeniaPaySelect"]');
+      if (payEl) {
+        this.setZgloszeniaResults({ zgloszeniaPay: payEl.value });
+        return;
+      }
+      const qualEl = e.target.closest('[data-action="zgloszeniaQualSelect"]');
+      if (qualEl) this.setZgloszeniaResults({ zgloszeniaQual: qualEl.value });
     }
 
     emitSettings(detail) {
@@ -557,10 +828,12 @@
 
     renderNavItem(item, requiresLogin) {
       const locked = requiresLogin && !this.data.loggedIn;
+      const unread = item.id === 'wiadomosci' && !locked ? this.unreadMessagesCount() : null;
       return `
         <div class="usospp-nav-item ${this.state.view === item.id ? 'active' : ''}" data-action="nav" data-view="${item.id}">
           ${icon(locked ? 'lock' : item.icon, 17)}
           <span>${esc(item.label)}</span>
+          ${unread ? `<span class="usospp-badge usospp-badge-warning" style="margin-left:auto;">${unread}</span>` : ''}
         </div>
       `;
     }
@@ -644,10 +917,11 @@
         return this.renderLoginRequired();
       }
       switch (this.state.view) {
-        case 'dashboard': return this.renderDashboard();
+        case 'dashboard': return this.publicDataFailed() ? this.renderDataLoadError() : this.renderDashboard();
         case 'aktualnosci': return this.renderAktualnosci();
         case 'oferta': return this.renderOferta();
         case 'programme': return this.renderProgramme();
+        case 'porownanie': return this.renderPorownanie();
         case 'jednostki': return this.renderJednostki();
         case 'zgloszenia': return this.renderZgloszenia();
         case 'formularze': return this.renderFormularze();
@@ -709,6 +983,13 @@
       const offer = this.data.offerResult || { groups: [] };
       const totalCount = offer.groups.reduce((sum, g) => sum + g.items.length, 0);
       const slug = this.data.slug;
+      const unread = this.data.loggedIn ? this.unreadMessagesCount() : null;
+      const msgStatus = this.state.protectedStatus.wiadomosci;
+      const msgHint = !this.data.loggedIn
+        ? 'zaloguj się, aby zobaczyć'
+        : unread !== null
+          ? unread === 1 ? 'nieprzeczytana wiadomość' : 'nieprzeczytanych wiadomości'
+          : msgStatus === 'loading' ? 'wczytywanie…' : 'otwórz Wiadomości →';
       return `
         <div class="usospp-card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
           <div>
@@ -727,6 +1008,11 @@
             <div class="usospp-stat-label">Aktualności</div>
             <div class="usospp-stat-value">${(this.data.newsResult && this.data.newsResult.categories.reduce((n, c) => n + c.items.length, 0)) || '—'}</div>
             <div class="usospp-stat-hint">ogłoszeń w tej rekrutacji</div>
+          </div>
+          <div class="usospp-card">
+            <div class="usospp-stat-label">Wiadomości</div>
+            <div class="usospp-stat-value">${unread === null ? '—' : unread}</div>
+            <div class="usospp-stat-hint">${msgHint}</div>
           </div>
         </div>
         <div class="usospp-hub-grid">
@@ -763,11 +1049,18 @@
     renderOferta() {
       const result = this.data.offerResult;
       if (!result || !result.supported) return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać oferty.</div></div>`;
+      const favCount = (this.settings.irkFavorites || []).length;
+      const compareCount = this.state.compareUrls.length;
       return `
         <div class="usospp-card">
           <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
             <input class="usospp-input" style="flex:1;min-width:180px;" type="search" placeholder="Szukaj kierunku…" value="${esc(this.state.oferaSearch)}" data-action="oferaSearchInput">
             <div data-oferta-unit-select style="min-width:200px;">${this.renderOfertaUnitSelect()}</div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;">
+            <button class="usospp-btn-ghost" data-action="toggleFavoritesOnly" style="${this.state.oferaFavOnly ? 'border-color:var(--accent);color:var(--accent);' : ''}">${this.state.oferaFavOnly ? '★' : '☆'} Tylko ulubione${favCount ? ` (${favCount})` : ''}</button>
+            <button class="usospp-btn-ghost" data-action="openCompare" ${compareCount < 2 ? 'disabled' : ''}>Porównaj zaznaczone (${compareCount}/${COMPARE_MAX})</button>
+            ${compareCount >= COMPARE_MAX ? `<span class="usospp-tag-muted">maks. ${COMPARE_MAX} — odznacz coś, żeby dodać inne</span>` : ''}
           </div>
         </div>
         <div data-oferta-results>${this.renderOfertaResults()}</div>
@@ -793,7 +1086,8 @@
       const search = this.state.oferaSearch.trim().toLowerCase();
       const unitFilter = this.state.oferaUnitFilter;
       const unitByUrl = this.state.unitByUrl;
-      const filtering = !!search || !!unitFilter;
+      const favOnly = this.state.oferaFavOnly;
+      const filtering = !!search || !!unitFilter || favOnly;
 
       const totalCount = result.groups.reduce((n, g) => n + g.items.length, 0);
       const groups = result.groups
@@ -802,6 +1096,7 @@
           items: group.items.filter((item) => {
             if (search && !item.name.toLowerCase().includes(search)) return false;
             if (unitFilter && unitByUrl[item.url] !== unitFilter) return false;
+            if (favOnly && !this.isFavorite(item.url)) return false;
             return true;
           }),
         }))
@@ -819,22 +1114,30 @@
 
       if (!totalCount) return `<div class="usospp-card" style="margin-top:16px;"><div class="usospp-empty-hint">Brak kierunków w tej rekrutacji.</div></div>`;
       if (!visibleCount) {
-        return `<div class="usospp-card" style="margin-top:16px;"><div class="usospp-empty-hint">Żaden kierunek nie pasuje do filtrów.</div></div>`;
+        return `<div class="usospp-card" style="margin-top:16px;"><div class="usospp-empty-hint">${favOnly && !search && !unitFilter ? 'Brak ulubionych kierunków — dodaj je gwiazdką ★.' : 'Żaden kierunek nie pasuje do filtrów.'}</div></div>`;
       }
       return `
         <div class="usospp-muted-text" style="margin:12px 2px;">${filtering ? `${visibleCount} z ${totalCount} kierunków` : `${totalCount} kierunków`}</div>
         <div class="usospp-card">
           ${groups.map((group, i) => `
             <div class="usospp-eyebrow" style="${i === 0 ? '' : 'margin-top:20px;'}margin-bottom:8px;">${esc(group.letter)}</div>
-            ${group.items.map((item) => `
+            ${group.items.map((item) => {
+              const fav = this.isFavorite(item.url);
+              const inCompare = this.state.compareUrls.includes(item.url);
+              return `
               <div class="usospp-list-row">
                 <div>
                   <div style="font-size:13.5px;font-weight:600;"><a data-action="openProgramme" data-url="${esc(item.url)}">${esc(item.name)}</a></div>
                   ${unitByUrl[item.url] ? `<div class="usospp-tag-muted">${esc(unitByUrl[item.url])}</div>` : ''}
                 </div>
-                ${item.count !== null ? `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${item.count}</div>` : ''}
+                <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+                  <button class="usospp-icon-btn" data-action="toggleFavorite" data-url="${esc(item.url)}" title="${fav ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}">${fav ? '★' : '☆'}</button>
+                  <button class="usospp-icon-btn" data-action="toggleCompare" data-url="${esc(item.url)}" title="${inCompare ? 'Usuń z porównania' : 'Dodaj do porównania'}" style="${inCompare ? 'color:var(--accent);border-color:var(--accent);' : ''}">${inCompare ? '✓' : '+'}</button>
+                  ${item.count !== null ? `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${item.count}</div>` : ''}
+                </div>
               </div>
-            `).join('')}
+              `;
+            }).join('')}
           `).join('')}
         </div>
       `;
@@ -870,6 +1173,12 @@
     // campaign applied to (there can be more than one — e.g. I stopień and
     // Szkoła Doktorska), one row per kierunek inside it.
     renderZgloszenia() {
+      if (this.protectedLoading('zgloszenia')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie zgłoszeń…</div></div>`;
+      }
+      if (this.protectedError('zgloszenia')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać zgłoszeń.</div></div>`;
+      }
       const result = this.data.applicationsResult;
       if (!result || !result.supported) {
         return `<div class="usospp-card"><div class="usospp-empty-hint">Brak zgłoszeń do pokazania — ta strona wymaga zalogowania na konto kandydata w IRK.</div></div>`;
@@ -878,13 +1187,64 @@
       if (!recruitments.length) {
         return `<div class="usospp-card"><div class="usospp-empty-hint">Nie znaleziono żadnych zgłoszeń rekrutacyjnych na tym koncie.</div></div>`;
       }
-      return recruitments.map((rec) => `
+      // Filter options are built dynamically off the values actually
+      // present — nothing here hardcodes IRK's status vocabulary (see
+      // adapter.getApplications' comment on UNVERIFIED values).
+      const payOptions = [...new Set(recruitments.flatMap((r) => r.applications.map((a) => a.payment.status).filter(Boolean)))].sort((a, b) => a.localeCompare(b, 'pl'));
+      const qualOptions = [...new Set(recruitments.flatMap((r) => r.applications.map((a) => a.qualification.status).filter(Boolean)))].sort((a, b) => a.localeCompare(b, 'pl'));
+      return `
+        <div class="usospp-card">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+            <input class="usospp-input" style="flex:1;min-width:180px;" type="search" placeholder="Szukaj kierunku…" value="${esc(this.state.zgloszeniaSearch)}" data-action="zgloszeniaSearchInput">
+            <select class="usospp-input" data-action="zgloszeniaPaySelect" style="min-width:180px;">
+              <option value="">Opłata: wszystkie</option>
+              ${payOptions.map((o) => `<option value="${esc(o)}" ${this.state.zgloszeniaPay === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+            </select>
+            <select class="usospp-input" data-action="zgloszeniaQualSelect" style="min-width:180px;">
+              <option value="">Kwalifikacja: wszystkie</option>
+              ${qualOptions.map((o) => `<option value="${esc(o)}" ${this.state.zgloszeniaQual === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div data-zgloszenia-results>${this.renderZgloszeniaResults()}</div>
+      `;
+    }
+
+    renderZgloszeniaResults() {
+      const result = this.data.applicationsResult;
+      if (!result || !result.supported) {
+        return `<div class="usospp-card" style="margin-top:16px;"><div class="usospp-empty-hint">Brak zgłoszeń do pokazania.</div></div>`;
+      }
+      const search = this.state.zgloszeniaSearch.trim().toLowerCase();
+      const payFilter = this.state.zgloszeniaPay;
+      const qualFilter = this.state.zgloszeniaQual;
+      const filtering = !!search || !!payFilter || !!qualFilter;
+      const totalCount = result.recruitments.reduce((n, r) => n + r.applications.length, 0);
+      const recruitments = result.recruitments
+        .map((rec) => ({
+          ...rec,
+          applications: rec.applications.filter((a) => {
+            if (search && !(a.programmeName || '').toLowerCase().includes(search)) return false;
+            if (payFilter && a.payment.status !== payFilter) return false;
+            if (qualFilter && a.qualification.status !== qualFilter) return false;
+            return true;
+          }),
+        }))
+        .filter((r) => r.applications.length > 0);
+      const visibleCount = recruitments.reduce((n, r) => n + r.applications.length, 0);
+      if (!visibleCount) {
+        return `<div class="usospp-card" style="margin-top:16px;"><div class="usospp-empty-hint">Żadne zgłoszenie nie pasuje do filtrów.</div></div>`;
+      }
+      return `
+        ${filtering ? `<div class="usospp-muted-text" style="margin:12px 2px;">${visibleCount} z ${totalCount} zgłoszeń</div>` : ''}
+        ${recruitments.map((rec) => `
         <div class="usospp-card" style="margin-bottom:16px;">
           <div class="usospp-card-title">${esc(rec.name)}</div>
           <div class="usospp-muted-text" style="margin-top:2px;">${esc(rec.academicYear || '')}${rec.statusLabel ? ` · ${esc(rec.statusLabel)}` : ''}</div>
           ${rec.applications.map((a) => this.renderApplicationRow(a)).join('')}
         </div>
-      `).join('');
+      `).join('')}
+      `;
     }
 
     renderApplicationRow(a) {
@@ -971,6 +1331,12 @@
     // always opens the actual IRK page, this view only previews what's
     // already there.
     renderFormularze() {
+      if (this.protectedLoading('formularze')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie formularzy…</div></div>`;
+      }
+      if (this.protectedError('formularze')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać formularzy osobowych.</div></div>`;
+      }
       const result = this.data.personalFormsResult;
       if (!result || !result.supported) {
         return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać formularzy osobowych.</div></div>`;
@@ -1080,6 +1446,12 @@
     // the adapter comment on why) — "Zapłać / zobacz w IRK →" always sends
     // you to the real page for that, same as "Ustal priorytety".
     renderPlatnosci() {
+      if (this.protectedLoading('platnosci')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie płatności…</div></div>`;
+      }
+      if (this.protectedError('platnosci')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać płatności.</div></div>`;
+      }
       const result = this.data.paymentsResult;
       if (!result || !result.supported) {
         return `<div class="usospp-card"><div class="usospp-empty-hint">Brak danych o płatnościach do pokazania.</div></div>`;
@@ -1132,6 +1504,12 @@
     // Replying, marking read, or deleting always stays a real navigation
     // into IRK via "Odpowiedz w IRK →".
     renderWiadomosci() {
+      if (this.protectedLoading('wiadomosci')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie wiadomości…</div></div>`;
+      }
+      if (this.protectedError('wiadomosci')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać wiadomości.</div></div>`;
+      }
       const result = this.data.messagesResult;
       if (!result || !result.supported) {
         return `<div class="usospp-card"><div class="usospp-empty-hint">Brak wiadomości do pokazania.</div></div>`;
@@ -1196,6 +1574,12 @@
     }
 
     renderKonto() {
+      if (this.protectedLoading('konto')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie danych konta…</div></div>`;
+      }
+      if (this.protectedError('konto')) {
+        return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać danych konta.</div></div>`;
+      }
       const result = this.data.accountResult;
       if (!result || !result.supported) {
         return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać danych konta.</div></div>`;
@@ -1251,9 +1635,13 @@
       if (s.fieldData) return this.renderFieldVariants(s.fieldData);
       if (s.programmeError || !s.programmeData) return `<div class="usospp-card"><div class="usospp-empty-hint">Nie udało się wczytać tego kierunku.</div></div>`;
       const d = s.programmeData;
+      const fav = this.isFavorite(s.programmeUrl);
       return `
         <a class="usospp-back-link" data-action="nav" data-view="oferta">← Wróć do oferty</a>
-        <div class="usospp-card-title" style="font-size:20px;margin-top:6px;">${esc(d.name)}</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+          <div class="usospp-card-title" style="font-size:20px;">${esc(d.name)}</div>
+          <button class="usospp-btn-ghost" data-action="toggleFavorite" data-url="${esc(s.programmeUrl)}" title="${fav ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}">${fav ? '★ Ulubiony' : '☆ Dodaj do ulubionych'}</button>
+        </div>
         ${d.status ? `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);margin-top:8px;display:inline-block;">${esc(d.status)}</div>` : ''}
         ${d.pastTurns && d.pastTurns.length ? `
           <details class="usospp-disclosure">
@@ -1294,11 +1682,86 @@
         <div class="usospp-card-title" style="font-size:20px;margin-top:6px;">${esc(field.name)}</div>
         <div class="usospp-muted-text" style="margin:8px 0 16px;">Ten kierunek jest oferowany w kilku wariantach — wybierz jeden:</div>
         <div class="usospp-card">
-          ${field.variants.map((v) => `
+          ${field.variants.map((v) => {
+            const fav = this.isFavorite(v.url);
+            return `
             <div class="usospp-list-row">
               <div style="font-size:13.5px;font-weight:600;"><a data-action="openProgramme" data-url="${esc(v.url)}">${esc(v.name)}</a></div>
+              <button class="usospp-icon-btn" data-action="toggleFavorite" data-url="${esc(v.url)}" title="${fav ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}">${fav ? '★' : '☆'}</button>
             </div>
-          `).join('')}
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    // Side-by-side comparison of up to COMPARE_MAX programmes (see
+    // fetchCompare). Read-only: values come straight from each detail
+    // page's own "Szczegóły" table; row labels are the union of labels
+    // seen, in first-seen order — nothing hardcoded per university.
+    renderPorownanie() {
+      const s = this.state;
+      if (s.compareLoading) return `<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie porównania…</div></div>`;
+      if (!s.compareUrls.length) {
+        return `
+          <a class="usospp-back-link" data-action="nav" data-view="oferta">← Wróć do oferty</a>
+          <div class="usospp-card" style="margin-top:16px;"><div class="usospp-empty-hint">Wybierz co najmniej 2 kierunki w ofercie (przycisk +), żeby je tu porównać.</div></div>
+        `;
+      }
+      if (s.compareError || !s.compareItems) {
+        return `
+          <a class="usospp-back-link" data-action="nav" data-view="oferta">← Wróć do oferty</a>
+          <div class="usospp-card" style="margin-top:16px;"><div class="usospp-empty-hint">Nie udało się wczytać porównania.</div></div>
+        `;
+      }
+      const items = s.compareItems;
+      const withDetail = items.filter((it) => it.detail);
+      const labels = [];
+      withDetail.forEach((it) => it.detail.fields.forEach((f) => {
+        if (f.label && !labels.includes(f.label)) labels.push(f.label);
+      }));
+      function fieldValue(detail, label) {
+        const f = detail.fields.find((x) => x.label === label);
+        if (!f || f.value === null || f.value === '') return '—';
+        return f.link
+          ? `<a data-action="openIrk" data-url="${esc(f.link)}">${esc(f.value)}</a>`
+          : esc(f.value);
+      }
+      return `
+        <a class="usospp-back-link" data-action="nav" data-view="oferta">← Wróć do oferty</a>
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-top:6px;">
+          <div class="usospp-card-title" style="font-size:20px;">Porównanie kierunków (${items.length}/${COMPARE_MAX})</div>
+          <button class="usospp-btn-ghost" data-action="clearCompare">Wyczyść</button>
+        </div>
+        <div class="usospp-card" style="margin-top:16px;overflow-x:auto;">
+          <table class="usospp-table">
+            <thead>
+              <tr>
+                <th style="min-width:180px;"></th>
+                ${items.map((it) => `
+                  <th style="min-width:200px;">
+                    <div style="font-size:13px;">${esc(it.name)}</div>
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;font-weight:400;margin-top:4px;">
+                      <a data-action="openProgramme" data-url="${esc(it.url)}">Otwórz →</a>
+                      <a data-action="removeCompare" data-url="${esc(it.url)}">Usuń ×</a>
+                    </div>
+                  </th>
+                `).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="color:var(--ink-3);">Status zapisów</td>
+                ${items.map((it) => `<td>${it.detail && it.detail.status ? esc(it.detail.status) : '—'}</td>`).join('')}
+              </tr>
+              ${labels.map((label) => `
+                <tr>
+                  <td style="color:var(--ink-3);">${esc(label)}</td>
+                  ${items.map((it) => `<td>${it.detail ? fieldValue(it.detail, label) : '—'}</td>`).join('')}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
         </div>
       `;
     }
@@ -1320,11 +1783,17 @@
             ${status === 'done' && !options.length ? `<div class="usospp-empty-hint">Brak dostępnych rekrutacji.</div>` : ''}
             ${status === 'done' && options.length ? options.map((o) => {
               const isCurrent = o.slug === currentSlug;
+              // A code-protected recruitment's switch is a no-op without the
+              // access code (entered on the native page), so it stays
+              // unclickable here — with a way out to the classic picker.
+              const lockedByCode = o.protectedAccess && !isCurrent;
+              const selectUrl = window.USOSPP_IRK_SCRAPE.PATHS.registrationSelect();
               return `
-                <div class="usospp-list-row" style="${isCurrent ? 'opacity:0.55;' : 'cursor:pointer;'}" ${isCurrent ? '' : `data-action="switchRecruitment" data-slug="${esc(o.slug)}"`}>
+                <div class="usospp-list-row" style="${isCurrent || lockedByCode ? 'opacity:0.55;' : 'cursor:pointer;'}" ${isCurrent || lockedByCode ? '' : `data-action="switchRecruitment" data-slug="${esc(o.slug)}"`}>
                   <div>
                     <div style="font-size:13.5px;font-weight:600;">${esc(o.name)}${isCurrent ? ' <span class="usospp-tag-muted">(aktualna)</span>' : ''}</div>
                     ${o.description ? `<div class="usospp-muted-text" style="margin-top:2px;">${esc(o.description)}</div>` : ''}
+                    ${lockedByCode ? `<div class="usospp-muted-text" style="margin-top:4px;">Wymaga kodu dostępu — wybierz na klasycznej stronie: <a data-action="openIrk" data-url="${esc(location.origin + selectUrl)}">otwórz w IRK →</a></div>` : ''}
                   </div>
                   ${o.protectedAccess ? `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">kod dostępu</div>` : ''}
                 </div>

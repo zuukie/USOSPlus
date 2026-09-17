@@ -22,7 +22,9 @@
     // (universities restyle these pages themselves): adapter.getNews
     // feature-detects the observed shapes in order (.title-wrapper-section
     // at PWr, <hr>-separated heading segments at UJD, div.pole items at
-    // PB), and when none of them matches — e.g. PW ships its own news
+    // PB, div.info-box items with p.header/p.stamp at AL, usos-frame
+    // cards at TUK, table.grey + tr.strong items at PBS/PO, h1 segments
+    // at POLSL), and when none of them matches — e.g. PW ships its own
     // client-side and the DOM carries nothing — collectNews below probes
     // the pwnews JSON add-on (see PATHS.newsFallback).
     news: 'kontroler.php?_action=news/default',
@@ -248,9 +250,10 @@
   // Announcements, with the add-on fallback (see PATHS.newsFallback):
   // adapter.getNews's markup-shape parsers run first and win outright
   // whenever news/default carries server-rendered items (title-wrapper
-  // sections at PWr, hr segments at UJD, .pole divs at PB — see
-  // adapters.js). Only when they find nothing (or the page failed to
-  // fetch) do we probe the JSON endpoint and let adapter.parseNewsJson
+  // sections at PWr, hr segments at UJD, .pole divs at PB, .info-box
+  // divs at AL, usos-frame cards at TUK, table.grey items at PBS/PO,
+  // h1 segments at POLSL — see adapters.js). Only when they find
+  // nothing (or the page failed to fetch) do we probe the JSON endpoint and let adapter.parseNewsJson
   // shape the answer (PW). Either way a failed probe falls back to the
   // DOM result's ordinary "unsupported" state — an installation with
   // neither renderer keeps exactly the behavior it had before this
@@ -266,6 +269,15 @@
       if (jsonNews.supported) return jsonNews;
     }
     return domNews || { supported: false, verified: false, items: [] };
+  }
+
+  // Single-section refresh for the Aktualności "Spróbuj ponownie" link
+  // (see app.js's renderAktualnosci): re-fetches ONLY news/default and
+  // re-runs the same collectNews path (DOM shapes first, pwnews JSON
+  // probe second) — not the whole collectAll/collectAnon model.
+  async function refreshNews(adapter) {
+    const newsDoc = await fetchDoc(PATHS.news);
+    return collectNews(adapter, newsDoc);
   }
 
   async function collectAll(adapter) {
@@ -423,5 +435,5 @@
     };
   }
 
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog };
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews };
 })();

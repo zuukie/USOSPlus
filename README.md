@@ -30,7 +30,7 @@
 - 🔎 **Szybkie wyszukiwanie** przedmiotów, jednostek i programów studiów
 - 🌙 Estetyczny redesign z **trybem ciemnym**
 - 🔔 Wbudowane centrum powiadomień o nowych ogłoszeniach — bez powiadomień systemowych
-- 🧭 Wsparcie dla **IRK** (Internetowej Rekrutacji Kandydatów)
+- 🧭 Wsparcie dla **IRK** (Internetowej Rekrutacji Kandydatów) — oferta z wyszukiwarką i porównywarką kierunków, jednostki, aktualności oraz (po zalogowaniu) zgłoszenia, formularze osobowe, płatności, wiadomości i konto
 
 Rozszerzenie nie korzysta z żadnego wewnętrznego, niepublicznego API USOS-a i nie omija żadnych zabezpieczeń strony — czyta wyłącznie to, co Twoja zalogowana przeglądarka i tak już widzi, i buduje z tego lepszy interfejs lokalnie, u Ciebie w przeglądarce. Nic nie trafia na żaden zewnętrzny serwer — szczegóły w [polityce prywatności](PRIVACY.md).
 
