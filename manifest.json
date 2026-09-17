@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "USOS++",
-  "version": "0.9.2",
+  "name": "USOS++ (Beta)",
+  "version": "0.9.3",
   "description": "Nowoczesna wersja systemu USOSweb: oceny, plan zajęć, płatności i egzaminy w jednym, szybkim panelu — bez zbędnego klikania.",
   "icons": {
     "16": "icons/icon16.png",
@@ -24,15 +24,16 @@
   },
   "permissions": ["storage", "scripting", "activeTab"],
   "optional_host_permissions": ["*://*/*"],
-  "host_permissions": ["*://web.usos.pwr.edu.pl/*"],
+  "host_permissions": ["*://web.usos.pwr.edu.pl/*", "https://*.tile.openstreetmap.org/*"],
   "content_scripts": [
     {
       "matches": ["*://web.usos.pwr.edu.pl/*"],
-      "css": ["fonts/fonts.css", "core/ui/design-system.css", "usos/usos.css"],
+      "css": ["fonts/fonts.css", "core/ui/design-system.css", "usos/usos.css", "vendor/leaflet/leaflet.css"],
       "js": [
         "core/state-bridge.js",
         "core/detect.js",
         "core/sanitize-html.js",
+        "vendor/leaflet/leaflet.js",
         "usos/planner-store.js",
         "usos/adapters.js",
         "usos/scraping.js",
@@ -45,7 +46,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["fonts/generalsans/*.woff2", "fonts/inter/*.woff2"],
+      "resources": ["fonts/generalsans/*.woff2", "fonts/inter/*.woff2", "vendor/leaflet/images/*.png"],
       "matches": ["*://web.usos.pwr.edu.pl/*", "*://*/*"]
     }
   ]

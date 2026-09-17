@@ -8,6 +8,7 @@ export const DEFAULT_STATE = {
   irkEnabled: false,
   pluginEnabled: true,
   darkMode: false,
+  myUniversity: null,
   features: {
     quickbar: true,
     autorefresh: false,

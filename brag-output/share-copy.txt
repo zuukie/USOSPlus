@@ -1,0 +1,3 @@
+We built USOS++ to solve the problem of university portals from 2005.
+Modern dashboard, lightning fast, and completely local.
+University, upgraded.

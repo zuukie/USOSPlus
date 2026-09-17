@@ -18,6 +18,8 @@ Kod niezależny od USOSweb i IRK:
 
 Wszystko specyficzne dla USOSweb: `adapters.js` (parsery DOM per instalacja uczelniana), `scraping.js` (fetch+parse wielu podstron), `planner-store.js` (generator planu zajęć), `app.js` (SPA — sidebar/topbar/modale + widoki), `inject.js` (punkt wejścia), `usos.css` (TYLKO klasy specyficzne dla widoków USOS — timetable, planner, classic-widgets, kalkulator ECTS; reszta w `core/ui/design-system.css`).
 
+Aktualności (`news/default`) to jedyna podstrona, której markup uczelnie wyraźnie customizują, więc `adapter.getNews` wykrywa kształt po cechach, w stałej kolejności (zweryfikowane live 2026-09-16, anonimowo): **A** `.title-wrapper-section` w `.wrtext` (PWr), **B** płaskie segmenty rozdzielane `<hr>` z tytułem w pierwszym `h2-h6` (UJD; `h1` = greeting strony), **C** `div.pole` po jednym nagłówku (PB — strona modyfikowana przez uczelnię ~1,5 dnia przed odkryciem, czyli kształty są zmienne i detekcja po hostname by zardzewiała). Gdy DOM nie ma żadnego: sonda JSON dodatku `dodatki/pwnews` (PW — ogłoszenia wstrzykiwane inline jQuery, którego fetch+parse nie widzi; `parseNewsJson` + `collectNews`/`PATHS.newsFallback` w `scraping.js`). Żadnych hostname'ów w kodzie — lista uczelni celowo nie istnieje.
+
 ## irk/
 
 Realny, ale celowo ograniczony moduł dla Internetowej Rekrutacji Kandydatów, zweryfikowany na żywo (2026-09-14) na `irk.usos.pwr.edu.pl`:

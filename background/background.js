@@ -22,11 +22,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // registerModule call.
 const MODULE_FILES = {
   usos: {
-    css: ['fonts/fonts.css', 'core/ui/design-system.css', 'usos/usos.css'],
+    css: ['fonts/fonts.css', 'core/ui/design-system.css', 'usos/usos.css', 'vendor/leaflet/leaflet.css'],
     js: [
       'core/state-bridge.js',
       'core/detect.js',
       'core/sanitize-html.js',
+      'vendor/leaflet/leaflet.js',
       'usos/planner-store.js',
       'usos/adapters.js',
       'usos/scraping.js',
@@ -87,16 +88,33 @@ async function saveRegistryEntry(originPattern, moduleName) {
 async function registerModule(originPattern, moduleName) {
   const files = MODULE_FILES[moduleName];
   if (!files) return { ok: false, error: `Unknown USOS++ module: ${moduleName}` };
-  try {
-    const id = `usospp-dynamic-${moduleName}-` + originPattern.replace(/[^a-z0-9]+/gi, '-');
-    const entry = { id, matches: [originPattern], css: files.css, js: files.js, runAt: 'document_end' };
-    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id] });
-    if (existing.length) await chrome.scripting.updateContentScripts([entry]);
-    else await chrome.scripting.registerContentScripts([entry]);
-    await saveRegistryEntry(originPattern, moduleName);
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: String(e) };
+  const id = `usospp-dynamic-${moduleName}-` + originPattern.replace(/[^a-z0-9]+/gi, '-');
+  const entry = { id, matches: [originPattern], css: files.css, js: files.js, runAt: 'document_end' };
+  // A host permission granted moments earlier (popup.js's addUniversity calls
+  // straight in here right after chrome.permissions.request resolves) was
+  // observed live to sometimes not yet be visible to
+  // chrome.scripting.registerContentScripts() in that same tick, making it
+  // reject even though the permission really is granted. One retry after a
+  // short delay clears that without meaningfully delaying a real,
+  // non-transient failure (bad module name, malformed pattern) from
+  // surfacing. Every failure is logged here — this used to fail completely
+  // silently, with popup.js not checking the result either, so a failed
+  // registration looked to the user like classic USOS just... not changing.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id] });
+      if (existing.length) await chrome.scripting.updateContentScripts([entry]);
+      else await chrome.scripting.registerContentScripts([entry]);
+      await saveRegistryEntry(originPattern, moduleName);
+      return { ok: true };
+    } catch (e) {
+      if (attempt === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        continue;
+      }
+      console.error('USOS++ registerModule failed:', originPattern, moduleName, e);
+      return { ok: false, error: String(e) };
+    }
   }
 }
 

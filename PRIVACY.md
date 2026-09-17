@@ -1,12 +1,13 @@
 # Polityka prywatności — USOS++
 
-Ostatnia aktualizacja: 2026-09-14
+Ostatnia aktualizacja: 2026-09-15
 
 USOS++ to rozszerzenie do Chrome, które przebudowuje interfejs USOSweb
 (np. `web.usos.pwr.edu.pl`) na nowocześniejszy, jednostronicowy panel.
 Rozszerzenie **nie zbiera, nie sprzedaje i nie wysyła żadnych danych
 użytkownika na żadne serwery** — całość działa lokalnie, w przeglądarce
-użytkownika.
+użytkownika, z jednym jawnym wyjątkiem opisanym niżej (widok „Mapa”,
+kafelki OpenStreetMap).
 
 ## Jakie dane są odczytywane
 
@@ -40,13 +41,24 @@ obchodzić zabezpieczeń strony (np. `X-Frame-Options`).
   urządzenia i jest usuwane po odinstalowaniu rozszerzenia. USOS++ nie
   wysyła żadnych powiadomień systemowych — wystarcza wbudowane centrum
   powiadomień.
+- **Widok „Mapa”** pobiera obrazki kafelków mapy z publicznych serwerów
+  [OpenStreetMap](https://www.openstreetmap.org) (`*.tile.openstreetmap.org`),
+  żeby wyrenderować mapę kampusu pod współrzędnymi budynków, które USOS++
+  odczytuje z samego USOSweb (patrz wyżej). Do OpenStreetMap trafia
+  wyłącznie oglądany fragment mapy (współrzędne i poziom przybliżenia
+  kafelków) — **nigdy rzeczywista lokalizacja użytkownika**: rozszerzenie
+  nigdy nie pyta o uprawnienie do geolokalizacji i go nie posiada. Lista
+  budynków jest też cache'owana lokalnie (`chrome.storage.local`), żeby nie
+  pobierać jej ponownie przy każdej wizycie.
 
 ## Brak śledzenia i reklam
 
 USOS++ nie zawiera żadnego kodu analitycznego, telemetrii, reklam ani
 narzędzi śledzących. Nie ładuje też żadnego zdalnego/kodu wykonywalnego —
-cały kod rozszerzenia jest zawarty w jego pakiecie i podlega przeglądowi
-Chrome Web Store.
+cały kod rozszerzenia (w tym biblioteka mapy, Leaflet) jest zawarty w jego
+pakiecie i podlega przeglądowi Chrome Web Store; jedyne, co jest pobierane
+w locie z zewnątrz, to same obrazki kafelków mapy opisane wyżej — dane, nie
+kod.
 
 ## Uprawnienia i ich wykorzystanie
 
@@ -62,6 +74,8 @@ Chrome Web Store.
 - **`host_permissions` (`web.usos.pwr.edu.pl`)** — umożliwia wstrzyknięcie
   skryptu redesignu i odczyt strony USOSweb Politechniki Wrocławskiej,
   na której użytkownik jest już zalogowany.
+- **`host_permissions` (`*.tile.openstreetmap.org`)** — pozwala widokowi
+  „Mapa” pobrać obrazki kafelków mapy z OpenStreetMap (patrz wyżej).
 - **`optional_host_permissions` (`*://*/*`)** — nie jest używane
   automatycznie. Chrome prosi o nie dopiero wtedy, gdy użytkownik kliknie
   „Dodaj obsługę tej uczelni” dla konkretnej, otwartej właśnie domeny

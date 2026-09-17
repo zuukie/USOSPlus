@@ -49,6 +49,31 @@
     return !!cas && cas.getAttribute('mode') === 'anon';
   }
 
+  // USOSweb's technical-break dispatch ("USOSweb tymczasowo niedostępny"),
+  // served on EVERY path with HTTP 503 during maintenance windows like a
+  // data sync (verified live at usosweb.pb.edu.pl mid-sync: root, news and
+  // the JSON search endpoints all returned the same dispatch; the normal
+  // shell — re-verified right after the sync ended — never shows this
+  // heading, so no false positives). The dispatch is a full USOS shell
+  // with cas-bar mode="anon", so it must be checked BEFORE isLoggedOut():
+  // otherwise a maintenance load would mount the all-empty anonymous
+  // design right over the university's own explanation. UNVERIFIED for
+  // non-Polish USOSweb deployments, where the heading is presumably
+  // translated — those fall through to collectAnon, whose run then comes
+  // back 100% 503s and flags data.maintenance instead.
+  function isMaintenancePage() {
+    const h1 = document.querySelector('h1');
+    return !!h1 && h1.textContent.trim() === 'USOSweb tymczasowo niedostępny';
+  }
+
+  // The dispatch page's "Szczegóły" frame carries the current reason (e.g.
+  // "Trwa synchronizacja danych" — verified live; other reasons exist, so
+  // the text is read out, not matched). null off the dispatch page.
+  function getMaintenanceReason() {
+    const el = document.querySelector('usos-frame .stretch');
+    return el ? el.textContent.trim() : null;
+  }
+
   function ensureContainer() {
     if (container) return container;
     container = document.createElement('div');
@@ -98,6 +123,15 @@
       return;
     }
     const data = await collectAll(adapter);
+    if (data.maintenance) {
+      // The site went down while the redesign was already open (autorefresh
+      // tick or an explicit rescrape): every fetched page was the 503
+      // dispatch, so the model would render an all-empty dashboard. Swap
+      // the whole panel for the plain notice instead.
+      unmountRedesign();
+      mountMaintenanceNotice();
+      return;
+    }
     app.data = data;
     app.render();
     app.checkNewsUpdate();
@@ -142,20 +176,43 @@
       `;
       return;
     }
+    if (isMaintenancePage()) {
+      mountMaintenanceNotice(getMaintenanceReason());
+      return;
+    }
     hideNative();
     const el = ensureContainer();
     if (isLoggedOut()) {
       // Still mount the real app shell (sidebar/topbar stay usable, nav
-      // still highlights whatever's clicked) — only the content pane is
-      // replaced, on every view, by App#renderLoggedOut. No point fetching
-      // a dozen pages that are all just this same login prompt.
+      // still highlights whatever's clicked). USOSweb serves several pages
+      // to anonymous visitors too — Aktualności, the whole katalog2/search
+      // family (wyszukiwarka, subject/unit/program pages) and the campus
+      // buildings — so those views keep working logged out, and only each
+      // personal view's content pane is replaced by App#renderLoggedOut
+      // (see app.js's PUBLIC_VIEWS). collectAnon fetches the one public
+      // page the shell itself renders from at mount; the rest of the public
+      // family fetches lazily per view. No point fetching the personal
+      // pages — they are all just this same login prompt right now.
       const cas = document.querySelector('cas-bar');
-      const data = { loggedOut: true, loginUrl: cas ? cas.getAttribute('login-url') : null };
+      const data = await window.USOSPP_SCRAPE.collectAnon(adapter);
+      if (data.maintenance) {
+        // A non-Polish dispatch page this shell didn't recognize by its
+        // heading, or the site went down between page load and mount —
+        // every fetch came back 503. Nothing public works either.
+        mountMaintenanceNotice();
+        return;
+      }
+      data.loggedOut = true;
+      data.loginUrl = cas ? cas.getAttribute('login-url') : null;
       app = window.USOSPP_APP.mount(el, data, { darkMode: currentSettings.darkMode, features: currentSettings.features });
       maybeUpdateBadge(data);
       return;
     }
     const data = await collectAll(adapter);
+    if (data.maintenance) {
+      mountMaintenanceNotice();
+      return;
+    }
     app = window.USOSPP_APP.mount(el, data, { darkMode: currentSettings.darkMode, features: currentSettings.features });
     maybeUpdateBadge(data);
   }
@@ -173,13 +230,79 @@
     showNative();
   }
 
+  // Replaces the whole redesign with one card when USOSweb itself is down
+  // — mounting the app shell there would only render a stack of empty
+  // panes (sidebar, topbar, "brak danych" everywhere). Shows the
+  // university's own reason line when we're on the dispatch page, a
+  // reload button that re-checks after the break ends, and an escape hatch
+  // to the classic dispatch page. Reached two ways: a fresh load landing
+  // on the dispatch (isMaintenancePage in mountRedesign), or a refresh/
+  // autorefresh collect that came back 100% 503s (data.maintenance) — the
+  // mid-session case, where the live DOM is a healthy stale page and only
+  // the fetches reveal the outage.
+  function mountMaintenanceNotice(reason) {
+    const dark = !!(currentSettings && currentSettings.darkMode);
+    hideNative();
+    const el = ensureContainer();
+    el.innerHTML = '';
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'max-width:520px;margin:80px auto;padding:28px;font-family:system-ui,sans-serif;text-align:left;',
+      `border:1px solid ${dark ? '#3a332a' : '#e5e0d8'};border-radius:16px;`,
+      `background:${dark ? '#211c17' : '#fdfcf9'};color:${dark ? '#efe9df' : '#2b2118'};`,
+    ].join('');
+    const h2 = document.createElement('h2');
+    h2.textContent = 'USOSweb tymczasowo niedostępny';
+    h2.style.cssText = 'margin:0 0 10px 0;font-size:1.3rem;';
+    card.appendChild(h2);
+    const reasonP = document.createElement('p');
+    reasonP.textContent = reason || 'Przepraszamy. USOSweb jest chwilowo niedostępny.';
+    reasonP.style.cssText = 'font-size:1.05rem;margin:0 0 10px 0;';
+    card.appendChild(reasonP);
+    const expl = document.createElement('p');
+    expl.textContent = 'To nie jest błąd USOS++ — serwer uczelni odsyła tę stronę na każde zapytanie. Po zakończeniu przerwy wróci normalny widok.';
+    expl.style.cssText = 'opacity:0.75;line-height:1.5;margin:0 0 20px 0;';
+    card.appendChild(expl);
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:16px;align-items:center;flex-wrap:wrap;';
+    const retry = document.createElement('button');
+    retry.textContent = 'Spróbuj ponownie';
+    retry.style.cssText = 'padding:10px 18px;border:0;border-radius:10px;background:#241c14;color:#fff;font-weight:600;font-size:14px;cursor:pointer;';
+    retry.addEventListener('click', () => location.reload());
+    actions.appendChild(retry);
+    const classicUrl = new URL(location.href);
+    classicUrl.searchParams.set('usospp_off', '1');
+    const classic = document.createElement('a');
+    classic.href = classicUrl.toString();
+    classic.textContent = 'Klasyczny USOSweb →';
+    classic.style.cssText = 'color:inherit;opacity:0.8;font-size:14px;text-decoration:none;';
+    actions.appendChild(classic);
+    card.appendChild(actions);
+    el.appendChild(card);
+  }
+
   // ---- independent small features (work with or without the full redesign) ----
 
   function ensureQuickbar() {
     if (quickbarEl) return;
     quickbarEl = document.createElement('div');
     quickbarEl.id = 'usospp-quickbar';
-    quickbarEl.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:99999;display:flex;gap:6px;background:#241c14;border-radius:14px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);font-family:system-ui,sans-serif;';
+    quickbarEl.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:99999;display:flex;gap:6px;background:#241c14;border-radius:14px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);font-family:system-ui,sans-serif;align-items:center;';
+
+    // Toggle button to enable USOS++ redesign
+    const toggle = document.createElement('div');
+    toggle.title = 'Włącz panel USOS++';
+    toggle.style.cssText = 'width:24px;height:24px;border-radius:12px;background:#d9773a;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform 0.1s,background 0.15s;flex-shrink:0;margin-left:4px;margin-right:8px;';
+    toggle.innerHTML = '<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v6"></path><path d="M5.5 5.8a6.5 6.5 0 1 0 9 0"></path></svg>';
+    toggle.addEventListener('mouseenter', () => { toggle.style.background = 'oklch(52% 0.15 45)'; });
+    toggle.addEventListener('mouseleave', () => { toggle.style.background = '#d9773a'; });
+    toggle.addEventListener('mousedown', () => { toggle.style.transform = 'scale(0.9)'; });
+    toggle.addEventListener('mouseup', () => { toggle.style.transform = 'scale(1)'; });
+    toggle.addEventListener('click', async () => {
+      await window.USOSPP_STATE.setState({ enabled: true });
+    });
+    quickbarEl.appendChild(toggle);
+
     const links = [
       ['Plan', 'home/plan'],
       ['Oceny', 'dla_stud/studia/oceny/index'],
@@ -437,6 +560,15 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return undefined;
+    // Alive-check for popup.js's toggleEnabled (pingTab there): answered from
+    // this top-level listener, which exists as soon as the script loads,
+    // regardless of whether the panel is currently on. No response means no
+    // content script in the tab at all — a missing/lost dynamic registration
+    // that the popup must rebuild (register + reload) before enabling.
+    if (msg.type === 'usospp:ping') {
+      sendResponse(true);
+      return undefined;
+    }
     if (msg.type === 'usospp:navigate' && app) {
       app.navigate(msg.view);
       return undefined;

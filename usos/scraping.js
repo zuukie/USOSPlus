@@ -18,10 +18,28 @@
     plan: 'kontroler.php?_action=home/plan',
     egzaminy: 'kontroler.php?_action=dla_stud/rejestracja/egzaminy',
     // University-wide announcements — also the site's own landing page
-    // (news/default), verified against real markup: a repeating sequence of
-    // sibling .title-wrapper-section / plain content divs inside .wrtext
-    // (see adapter.getNews).
+    // (news/default). Server-rendered markup varies per installation
+    // (universities restyle these pages themselves): adapter.getNews
+    // feature-detects the observed shapes in order (.title-wrapper-section
+    // at PWr, <hr>-separated heading segments at UJD, div.pole items at
+    // PB), and when none of them matches — e.g. PW ships its own news
+    // client-side and the DOM carries nothing — collectNews below probes
+    // the pwnews JSON add-on (see PATHS.newsFallback).
     news: 'kontroler.php?_action=news/default',
+    // Announcements fallback for installations whose news/default renders
+    // NO announcements server-side and instead ships them through a local
+    // dodatki add-on: an inline jQuery script XHRs this JSON endpoint and
+    // client-side injects the items straight into the DOM (which our
+    // fetch+parse scraping never sees — no JS execution on our side).
+    // Verified live (2026-09-16, anonymous) at usosweb.usos.pw.edu.pl,
+    // whose news/default carries only the data-migration status table:
+    // kontroler.php?_action=dodatki/pwnews&langset=pl answers with a JSON
+    // array [{id, nazwa, opis, grupa_odbiorcow, data: "YYYY-MM-DD"}] (see
+    // adapter.parseNewsJson). Other installations are expected to answer
+    // 404/plain HTML — the probe only fires when the news/default DOM
+    // parse came back empty, so PWr/PB (standard server-rendered news)
+    // never pay for it.
+    newsFallback: 'kontroler.php?_action=dodatki/pwnews&langset=pl',
     // Płatności — one nav view merges what USOS spreads across five
     // sub-pages plus a hub. "należności rozliczone" (settled dues) is
     // deliberately left out: for a student, "was this paid" is already
@@ -84,6 +102,34 @@
     programDetail(kod) {
       return `kontroler.php?_action=katalog2/programy/pokazProgram&kod=${encodeURIComponent(kod)}`;
     },
+    // Building list for one jednostka AND all of its sub-units, recursively
+    // — see adapter.getBuildingsForUnit. Passing the whole university's own
+    // root jed_org_kod (found via getUnitDetail's ancestors chain) returns
+    // every mappable building campus-wide in one request.
+    buildingsForUnit(jedOrgKod) {
+      return `kontroler.php?_action=katalog2/jednostki/budynkiJednostki&jed_org_kod=${encodeURIComponent(jedOrgKod)}`;
+    },
+    // The unit page's own "Prowadzone przedmioty" service (verified live,
+    // PWr and PB): every subject OFFERED BY this exact unit — USOS filters
+    // strictly by the owning unit, not recursively, so at both universities
+    // wydziały hold the subjects while katedry return the empty marker
+    // ("Brak przedmiotów oferowanych przez tę jednostkę"). Only the first
+    // page (30 rows) comes back from this URL; further pages follow the
+    // ready-built next-page-url in the response's <table-nav-bar> (see
+    // adapter.getUnitSubjects). The cp_ params are display settings the
+    // classic UI keeps per-user: cdydsDisplayLevel=3 adds the per-cycle
+    // ("2024/25-Z"…) columns whose cells link rejestracjaNaPrzedmiotCyklu
+    // with a cdyd_kod param, and showGroupsColumn=1 adds the course-group
+    // column — both verified live on both universities.
+    unitSubjects(kod) {
+      return `kontroler.php?_action=katalog2/przedmioty/szukajPrzedmiotu&jed_org_kod=${encodeURIComponent(kod)}&method=faculty_organized&cp_cdydsDisplayLevel=3&cp_showGroupsColumn=1`;
+    },
+    // "Oferowane programy studiów" — same page-shape family as unitSubjects,
+    // verified live at PWr (W3: 63 programs) and PB (Wydział Informatyki:
+    // 46); empty units get "Brak programów studiów w tej jednostce.".
+    unitPrograms(kod) {
+      return `kontroler.php?_action=katalog2/programy/szukajProgramu&method=by_faculty&jed_org_kod=${encodeURIComponent(kod)}`;
+    },
     // Four small "Moje studia" pages, all verified live against an empty
     // account (semester just started — no scholarship decisions, checkpoint
     // rules, petitions or open surveys yet): each one renders either a plain
@@ -96,9 +142,26 @@
     ankiety: 'kontroler.php?_action=dla_stud/studia/ankiety/index',
   };
 
+  // Maintenance mode (przerwa techniczna / synchronizacja danych): USOSweb
+  // serves its "USOSweb tymczasowo niedostępny" dispatch page on EVERY
+  // path — including the JSON endpoints below — with HTTP 503 (verified
+  // live at usosweb.pb.edu.pl during a data sync: root, news/default and
+  // jsonSzukajJednostki all returned the same 503 dispatch; the normal
+  // shell shows none of those markers, so no false positives). One fetch
+  // failing doesn't mean the system is down, but a run where EVERY fetch
+  // got a 503 does — collectAll/collectAnon compare the two counters to
+  // flag exactly that, and inject.js turns the flag into a clear "godzina
+  // przerwy" notice instead of an all-empty panel. HTTP-503-only by
+  // design: other failure modes (5xx, network) keep the per-view error
+  // cards, which is the honest message there.
+  let trackedCount = 0;
+  let unavailableCount = 0;
+
   async function fetchJson(path) {
     try {
       const res = await fetch(path, { credentials: 'same-origin' });
+      trackedCount++;
+      if (res.status === 503) unavailableCount++;
       if (!res.ok) return null;
       return await res.json();
     } catch (e) {
@@ -134,6 +197,8 @@
   async function fetchDoc(path) {
     try {
       const res = await fetch(path, { credentials: 'same-origin' });
+      trackedCount++;
+      if (res.status === 503) unavailableCount++;
       if (!res.ok) return null;
       const html = await res.text();
       return new DOMParser().parseFromString(html, 'text/html');
@@ -180,7 +245,32 @@
     });
   }
 
+  // Announcements, with the add-on fallback (see PATHS.newsFallback):
+  // adapter.getNews's markup-shape parsers run first and win outright
+  // whenever news/default carries server-rendered items (title-wrapper
+  // sections at PWr, hr segments at UJD, .pole divs at PB — see
+  // adapters.js). Only when they find nothing (or the page failed to
+  // fetch) do we probe the JSON endpoint and let adapter.parseNewsJson
+  // shape the answer (PW). Either way a failed probe falls back to the
+  // DOM result's ordinary "unsupported" state — an installation with
+  // neither renderer keeps exactly the behavior it had before this
+  // fallback existed. The probe goes through fetchJson, so during a
+  // maintenance window its 503 counts toward the maintenance verdict
+  // like every other fetch.
+  async function collectNews(adapter, newsDoc) {
+    const domNews = newsDoc ? adapter.getNews(newsDoc) : null;
+    if (domNews && domNews.supported) return domNews;
+    const json = await fetchJson(PATHS.newsFallback);
+    if (json) {
+      const jsonNews = adapter.parseNewsJson(json);
+      if (jsonNews.supported) return jsonNews;
+    }
+    return domNews || { supported: false, verified: false, items: [] };
+  }
+
   async function collectAll(adapter) {
+    trackedCount = 0;
+    unavailableCount = 0;
     const [
       homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc,
       platnosciNierozDoc, planyRatalneDoc, wplatyDoc, wplatyNierozDoc, kontaBankoweDoc,
@@ -219,9 +309,7 @@
     const ownProgrammesResult = zapisyHubDoc
       ? adapter.getOwnProgrammes(zapisyHubDoc)
       : { supported: false, verified: false, programmes: [] };
-    const newsResult = newsDoc
-      ? adapter.getNews(newsDoc)
-      : { supported: false, verified: false, items: [] };
+    const newsResult = await collectNews(adapter, newsDoc);
 
     const EMPTY_GROUPS = { supported: false, verified: false, groups: [], grandTotal: null };
     const paymentsResult = {
@@ -288,8 +376,52 @@
       user, etapyResult, gradesResult, planResult, examsResult, registrationsResult,
       ownProgrammesResult, stageSubjectsResult, newsResult, paymentsResult,
       scholarshipsResult, testsResult, petitionsResult, surveysResult,
+      // True when every single fetch of this run was a 503 dispatch — USOSweb
+      // is down (see the counters' block comment above). Partial failure keeps
+      // the ordinary per-view supported:false degradation instead.
+      maintenance: trackedCount > 0 && trackedCount === unavailableCount,
     };
   }
 
-  window.USOSPP_SCRAPE = { collectAll, fetchDoc, PATHS, searchCatalog };
+  // Logged-out counterpart of collectAll — see app.js's PUBLIC_VIEWS for
+  // which views USOSweb itself serves to anonymous visitors. At mount time
+  // the shell only needs the ONE page it always renders from (Aktualności —
+  // which also feeds the notification center), since the rest of the public
+  // family (search + katalog2 pages, campus buildings) is fetched lazily on
+  // view entry. Every other key keeps collectAll's empty/unsupported default
+  // shape, so no getter or renderer that reads a personal section can crash
+  // on the anonymous data model.
+  async function collectAnon(adapter) {
+    trackedCount = 0;
+    unavailableCount = 0;
+    const newsDoc = await fetchDoc(PATHS.news);
+    const newsResult = await collectNews(adapter, newsDoc);
+    return {
+      user: null,
+      etapyResult: { supported: false, verified: false, etapy: [] },
+      gradesResult: { supported: false, verified: false, rows: [] },
+      planResult: { supported: false, verified: false, raw: null },
+      examsResult: { supported: false, verified: false, exams: [] },
+      registrationsResult: { supported: false, verified: false, groups: [] },
+      ownProgrammesResult: { supported: false, verified: false, programmes: [] },
+      stageSubjectsResult: { supported: false, verified: false, stages: [] },
+      newsResult,
+      paymentsResult: {
+        supported: false,
+        verified: true,
+        unpaid: { supported: false, verified: false, groups: [], grandTotal: null },
+        installments: { supported: false, verified: false, groups: [], grandTotal: null },
+        payments: { supported: false, verified: false, groups: [], grandTotal: null },
+        unsettledPayments: { supported: false, verified: false, groups: [], grandTotal: null },
+        bankAccounts: { supported: false, verified: false, accounts: [] },
+      },
+      scholarshipsResult: { supported: false, verified: false, rows: [] },
+      testsResult: { supported: false, verified: false, rows: [] },
+      petitionsResult: { supported: false, verified: false, rows: [] },
+      surveysResult: { supported: false, verified: false, rows: [] },
+      maintenance: trackedCount > 0 && trackedCount === unavailableCount,
+    };
+  }
+
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog };
 })();

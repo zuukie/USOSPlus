@@ -21,6 +21,7 @@ a:hover { color: oklch(48% 0.16 45); }
   --ink-2: oklch(45% 0.012 55);
   --ink-3: oklch(55% 0.01 55);
   --accent-soft-bg: oklch(95% 0.04 55);
+  --ink-critical: oklch(55% 0.18 30);
 
   width: 376px;
   box-sizing: border-box;
@@ -39,6 +40,7 @@ a:hover { color: oklch(48% 0.16 45); }
   --ink-2: oklch(78% 0.008 55);
   --ink-3: oklch(62% 0.01 55);
   --accent-soft-bg: oklch(30% 0.03 45);
+  --ink-critical: oklch(60% 0.15 25);
 }
 
 .pp-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 14px 18px; }
@@ -111,4 +113,21 @@ a:hover { color: oklch(48% 0.16 45); }
 .pp-unsupported-banner {
   display: flex; gap: 10px; align-items: flex-start; background: var(--accent-soft-bg); border-radius: 12px; padding: 10px 12px;
   font-size: 12px; color: var(--ink); line-height: 1.4;
+}
+
+.pp-my-uni-hint {
+  font-size: 11px; color: var(--ink-critical); text-align: center; margin-bottom: 8px; font-weight: 500;
+}
+.pp-my-uni-hint a { color: var(--ink-critical); text-decoration: underline; font-weight: 700; }
+
+.pp-quick-home {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px; border-radius: 11px; background: var(--bg-card); border: 1px solid var(--border);
+  cursor: pointer; color: var(--ink); font-size: 12px; font-weight: 700; margin-bottom: 6px;
+  transition: background 0.15s;
+}
+.pp-quick-home:hover { background: var(--bg-subtle); }
+
+.pp-quick-action.disabled {
+  opacity: 0.5; cursor: not-allowed; filter: grayscale(1);
 }

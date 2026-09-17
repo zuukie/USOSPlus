@@ -90,3 +90,36 @@
 .usospp-radio-row.selected .usospp-radio-dot { border-color: oklch(60% 0.15 45); background: oklch(60% 0.15 45); }
 
 .usospp-tt-entry--conflict { box-shadow: inset 0 0 0 2px oklch(55% 0.19 25); }
+
+/* ---- planner: "podgląd w planie" group candidates (see renderPlannerCandDay
+   in app.js). A lit class type draws EVERY one of its groups on the grid as
+   a hoverable ghost; hovering a group hides all other ghosts so the grid
+   reads as if that group were already part of the plan (plannerHover). No
+   re-render ever happens on hover — everything below is class-toggling. ---- */
+.usospp-tt-entry--cand { cursor: pointer; opacity: 0.55; }
+.usospp-cand-neutral { cursor: default; }
+/* In-stack boxes sit exactly behind the cluster's neutral box (same slot,
+   many parallel groups) — invisible until their group is hovered via the
+   popover or a sibling session's box. */
+.usospp-cand-in-stack { visibility: hidden; }
+.usospp-cand-off { visibility: hidden; }
+.usospp-tt-entry--cand.usospp-cand-on { visibility: visible; opacity: 0.92; }
+.usospp-tt-entry--cand.usospp-cand-risk { box-shadow: inset 0 0 0 2px oklch(55% 0.19 25); }
+
+.usospp-cand-pop {
+  display: none; position: absolute; z-index: 40; width: 235px;
+  max-height: 320px; overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px;
+  box-shadow: 0 12px 28px rgba(20, 15, 10, 0.2); padding: 5px;
+}
+.usospp-cand-pop-open { display: block; }
+.usospp-cand-pop-title { font-size: 10.5px; font-weight: 600; color: var(--ink-3); padding: 6px 8px; }
+.usospp-cand-row { padding: 7px 9px; border-radius: 8px; cursor: pointer; }
+.usospp-cand-row:hover { background: var(--bg-subtle); }
+.usospp-cand-row-main { font-size: 12px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 7px; }
+.usospp-cand-row-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 1px; }
+.usospp-cand-risk-dot { width: 7px; height: 7px; border-radius: 999px; background: oklch(55% 0.19 25); flex-shrink: 0; }
+
+.usospp-cand-toggle { font-size: 11px; font-weight: 600; color: var(--ink-3); cursor: pointer; white-space: nowrap; }
+.usospp-cand-toggle:hover { color: var(--ink-2); }
+.usospp-cand-toggle.active { color: oklch(58% 0.16 45); }

@@ -83,6 +83,145 @@
     return window.USOSPP_CORE_SANITIZE.sanitizeHtml(nodes, doc);
   }
 
+  // Same sanitizer, for a raw HTML string (the pwnews JSON endpoint's
+  // "opis" field) instead of already-parsed document nodes: DOMParser
+  // builds an inert document from the string (no scripts run, links
+  // don't resolve), then the allowlist walk rebuilds it like any other
+  // fetched body before it may enter our DOM.
+  function sanitizeNewsHtmlString(html) {
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    return window.USOSPP_CORE_SANITIZE.sanitizeHtml(Array.from(parsed.body.childNodes), parsed);
+  }
+
+  // The pwnews add-on's own inline renderer reads its data through a
+  // getField(entry, [name variants]) indirection (read from its source on
+  // the live news/default page) — normalize the same way instead of
+  // hardcoding one spelling and breaking on entries the add-on itself
+  // still accepts.
+  function newsJsonField(entry, names) {
+    for (let i = 0; i < names.length; i++) {
+      const v = entry[names[i]];
+      if (typeof v === 'string' && v !== '') return v;
+    }
+    return '';
+  }
+
+  // News/default's server-rendered HTML is NOT uniform across USOSweb
+  // installations — each observed shape lives in its own feature-detected
+  // parser below and getNews tries them in order (plus the pwnews JSON
+  // probe in scraping.js's collectNews when all of these come back
+  // empty). Never keyed by hostname: universities restyle these pages
+  // on their own schedule (PB's page was "ostatnia modyfikacja: ~1,5
+  // dnia" when discovered), so detection has to follow the markup that's
+  // actually on screen today. All slices below share the {title, html}
+  // news item shape (and no date — only the pwnews JSON has one).
+  const NEWS_HEADING_TAG = /^H[2-6]$/;
+
+  // Shape A (verified live at web.usos.pwr.edu.pl, 2026-09-16): a flat
+  // sibling sequence inside <div class="wrtext"> where each
+  // announcement's heading is a <div class="title-wrapper-section">…
+  // <h4>…</h4></div> immediately followed by plain <div> wrappers with
+  // its <p> body. The page's own greeting ("Witaj w systemie USOSweb")
+  // uses the plain "title-wrapper" class instead — naturally excluded by
+  // matching only the "-section" suffix.
+  function parseTitleSectionNews(doc) {
+    const anyHeading = doc.querySelector('.title-wrapper-section');
+    const wrtext = anyHeading ? anyHeading.closest('.wrtext') : null;
+    if (!wrtext) return [];
+    const items = [];
+    let current = null;
+    Array.from(wrtext.children).forEach((child) => {
+      if (child.classList.contains('title-wrapper-section')) {
+        if (current) items.push(current);
+        const h = child.querySelector('h1,h2,h3,h4,h5,h6');
+        current = { title: textOf(h) || textOf(child), bodyNodes: [] };
+      } else if (current) {
+        current.bodyNodes.push(...Array.from(child.childNodes));
+      }
+    });
+    if (current) items.push(current);
+    return items
+      .filter((it) => it.title)
+      .map((it) => ({ title: it.title, html: sanitizeNewsHtml(it.bodyNodes, doc) }));
+  }
+
+  // Shape B (verified live at usosweb.ujd.edu.pl 2026-09-16, anonymous):
+  // one <div class="wrtext"> holding the whole announcement archive as
+  // flat heading + body siblings, with <hr> elements as the only
+  // separators. Each segment's title is its FIRST h2-h6; the greeting is
+  // the page-level <h1> ("Witaj w systemie…" — same role as shape A's
+  // plain title-wrapper block, single live sample so far), so h1-titled
+  // segments are dropped. Headings nested INSIDE a segment's body
+  // (sub-blocks like per-course registration lists) stay body. HTML
+  // comments holding retired announcements never become headings (they
+  // aren't elements) and die in sanitization.
+  function parseHrSegmentNews(doc) {
+    for (const wrtext of doc.querySelectorAll('.wrtext')) {
+      const kids = Array.from(wrtext.children);
+      // Both markers must be DIRECT children: other installations float
+      // note tables (data-migration status, "ostatnia modyfikacja") in
+      // their own bare wrtext divs with neither headings nor separators.
+      if (!kids.some((el) => NEWS_HEADING_TAG.test(el.tagName))) continue;
+      if (!kids.some((el) => el.tagName === 'HR')) continue;
+
+      const segmentItems = [];
+      let current = null;
+      const flush = () => { if (current) { segmentItems.push(current); current = null; } };
+      Array.from(wrtext.childNodes).forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'HR') {
+          flush();
+          return;
+        }
+        if (!current) current = { title: null, bodyNodes: [] };
+        if (current.title === null && node.nodeType === Node.ELEMENT_NODE) {
+          if (NEWS_HEADING_TAG.test(node.tagName)) {
+            current.title = textOf(node);
+            return; // the heading itself is not part of the body
+          }
+          if (node.tagName === 'H1') {
+            current.title = false; // page greeting segment — dropped by the filter below
+            return;
+          }
+        }
+        current.bodyNodes.push(node);
+      });
+      flush();
+
+      const news = segmentItems
+        .filter((it) => it.title)
+        .map((it) => ({ title: it.title, html: sanitizeNewsHtml(it.bodyNodes, doc) }));
+      if (news.length > 0) return news;
+    }
+    return [];
+  }
+
+  // Shape C (verified live at usosweb.pb.edu.pl 2026-09-16, anonymous):
+  // announcements as consecutive <div class="pole …"> siblings, one
+  // heading each (h3 observed), the rest of the pole's nodes its body.
+  // The class token after "pole" is just a color category (informacja /
+  // uwaga / red — red ones were only seen inside a comment holding a
+  // retired maintenance notice, but they clearly intend to use it for
+  // live urgent ones), so every .pole with a heading is kept rather than
+  // trusting one category. The greeting ("Witamy w systemie…", in the
+  // first pole) is dropped by a first-item-only text check — no
+  // structural marker separates it there (verified at PB; Polish-only
+  // pattern, non-Polish installations would at worst show their
+  // greeting as one extra announcement, which degrades gracefully).
+  function parsePoleNews(doc) {
+    const poles = doc.querySelectorAll('div.pole');
+    const news = [];
+    poles.forEach((pole, index) => {
+      const heading = Array.from(pole.children).find((el) => /^H[1-6]$/.test(el.tagName));
+      if (!heading) return;
+      const title = textOf(heading);
+      if (!title) return;
+      if (index === 0 && /^(witaj|witamy)\b/i.test(title)) return;
+      const bodyNodes = Array.from(pole.childNodes).filter((n) => n !== heading);
+      news.push({ title, html: sanitizeNewsHtml(bodyNodes, doc) });
+    });
+    return news;
+  }
+
   function hasModernShell() {
     return !!document.querySelector('usos-layout, usos-frame, cas-bar');
   }
@@ -513,6 +652,168 @@
       return { supported: !!name, verified: true, name, fields, ancestors, children };
     },
 
+    // Verified against real markup+data at .../katalog2/jednostki/
+    // budynkiJednostki?jed_org_kod=<...> — one row per building of this unit
+    // AND all of its sub-units, recursively (passing the whole university's
+    // root jed_org_kod, found via getUnitDetail's ancestors chain, returns
+    // every mappable building campus-wide). Coordinates only exist for rows
+    // whose "Na mapie?" column says "TAK" — they live in a separate inline
+    // createMap(...)/initializeMap() script, in the SAME top-to-bottom order
+    // as the TAK rows (confirmed live: 54 TAK rows == 54 markers == 0
+    // mismatches, cross-checked by name prefix on a 92-row, whole-campus
+    // fetch). Rows without a resolved coordinate ("NIE" / "(adres nieznany)")
+    // are dropped outright — a building we can't place on a map isn't useful
+    // here, and the caller (the Mapa view) only ever wants placeable ones.
+    getBuildingsForUnit(doc = document) {
+      function budKodFromHref(href) {
+        try { return new URL(href).searchParams.get('bud_kod'); } catch (e) { return null; }
+      }
+      function jedKodFromHref(href) {
+        try { return new URL(href).searchParams.get('kod'); } catch (e) { return null; }
+      }
+      const rows = [...doc.querySelectorAll('.usos-ui table.grey tbody tr')];
+      const takRows = [];
+      rows.forEach((tr) => {
+        const tds = tr.querySelectorAll('td');
+        if (tds.length < 3) return;
+        const link = tds[0].querySelector('a');
+        const onMap = textOf(tds[2]) === 'TAK';
+        if (!link || !onMap) return;
+        // The owning-unit sub-link's `kod` — needed alongside its display
+        // text because several *different* units across a whole-campus
+        // fetch legitimately share the exact same name (e.g. 4 separate
+        // wydziały each have their own "Kierownik Administracji
+        // Wydziałowej"), so the name alone isn't a safe filter key.
+        const unitLink = tds[0].querySelector('.note a');
+        takRows.push({
+          kod: budKodFromHref(link.href),
+          name: textOf(link),
+          unitName: textOf(tds[0].querySelector('.note')),
+          unitKod: unitLink ? jedKodFromHref(unitLink.href) : null,
+          address: textOf(tds[1]),
+        });
+      });
+
+      // The marker script's `name` is a raw JS string literal — USOS HTML-
+      // escapes quotes inside it (`&quot;`) even though it isn't rendered as
+      // HTML, and doesn't collapse the double spaces some building names
+      // apparently have in the source data. The table's own text (via
+      // textOf/textContent above) has neither issue, so without decoding
+      // here the startsWith check below would reject genuine matches —
+      // confirmed live: 6 of 54 real PWr buildings only matched after this
+      // normalization (double-spaced or quote-containing names).
+      function decodeEntities(str) {
+        const ta = doc.createElement('textarea');
+        ta.innerHTML = str;
+        return ta.value.replace(/\s+/g, ' ').trim();
+      }
+      const scriptText = [...doc.querySelectorAll('script')]
+        .map((s) => s.textContent)
+        .find((t) => /createMap\(|initializeMap\(/.test(t || '')) || '';
+      const markers = [];
+      const re = /name:\s*"([^"]*)",\s*lat:\s*([\d.]+),\s*lng:\s*([\d.]+)/g;
+      let m;
+      while ((m = re.exec(scriptText))) markers.push({ name: decodeEntities(m[1]), lat: parseFloat(m[2]), lng: parseFloat(m[3]) });
+
+      const buildings = [];
+      takRows.forEach((row, i) => {
+        const marker = markers[i];
+        // Defensive, not just optimistic: only accept the positional match
+        // if the marker's name actually starts with this row's — if USOS
+        // ever changes the template so the two lists drift apart, drop the
+        // row instead of silently mis-pairing coordinates to the wrong
+        // building.
+        if (!row.kod || !marker || !marker.name.startsWith(row.name)) return;
+        buildings.push({ kod: row.kod, name: row.name, unitName: row.unitName, unitKod: row.unitKod, address: row.address, lat: marker.lat, lng: marker.lng });
+      });
+
+      return { supported: buildings.length > 0, verified: true, buildings };
+    },
+
+    // Verified against real markup+data at .../katalog2/przedmioty/
+    // szukajPrzedmiotu?method=faculty_organized&jed_org_kod=… (PWr W3:
+    // 3576 rows, PB Wydział Informatyki: 2015). One <tr> per subject, but
+    // each subject also has a second description row (<td colspan=…>)
+    // without any subject link, so rows are found by their subject-details
+    // <a> rather than by position. Cycle info lives in per-year cells whose
+    // rejestracjaNaPrzedmiotCyklu links carry cdyd_kod — "2024/25-Z" at PWr,
+    // "2018Z" at PB — so the year is read from the link param, never from
+    // header alignment. The non-first pages of a listing nest in
+    // <table-nav-bar next-page-url=…> (elements-count holds the exact
+    // total, present on every page of a multi-page listing), which keeps
+    // this working on any university's tab-id (PWr tab8296, PB tabcd6d)
+    // without hardcoding either.
+    getUnitSubjects(doc = document) {
+      const bodyText = doc.body ? (doc.body.textContent || '') : '';
+      if (bodyText.includes('Brak przedmiotów oferowanych przez tę jednostkę')) {
+        return { supported: true, verified: true, subjects: [], total: 0, nextUrl: null };
+      }
+      const nav = doc.querySelector('table-nav-bar');
+      const total = nav ? (parseInt(nav.getAttribute('elements-count'), 10) || 0) : 0;
+      const nextUrl = nav && nav.getAttribute('next-page-url') ? nav.getAttribute('next-page-url') : null;
+
+      function cdydParam(href) {
+        const m = /[?&]cdyd_kod=([^&'"]+)/.exec(href);
+        return m ? decodeURIComponent(m[1]) : null;
+      }
+      const subjects = [];
+      const seen = new Set();
+      doc.querySelectorAll("a[href*='pokazPrzedmiot&prz_kod=']").forEach((link) => {
+        const tr = link.closest('tr');
+        if (!tr) return;
+        let kod = null;
+        try { kod = new URL(link.href).searchParams.get('prz_kod'); } catch (e) { return; }
+        if (!kod || seen.has(kod)) return;
+        seen.add(kod);
+        // The link URL carries a per-request callback token that pages can't
+        // be re-fetched through later; the base URL without it is the exact
+        // page the topbar search opens (verified)
+        let url = link.href.replace(/([?&])callback=[^&]*/, '');
+        const groupLink = tr.querySelector("a[href*='method=faculty_group']");
+        let grupa = groupLink ? textOf(groupLink.closest('td')).replace(/\s+/g, ' ').replace(/^-\s*/, '').trim() : '';
+        const cycles = new Set();
+        const years = new Set();
+        tr.querySelectorAll("a[href*='rejestracjaNaPrzedmiotCyklu']").forEach((a) => {
+          const cdyd = cdydParam(a.href);
+          if (!cdyd) return;
+          cycles.add(cdyd);
+          const year = parseInt(cdyd.slice(0, 4), 10);
+          if (year) years.add(year);
+        });
+        subjects.push({ kod, name: textOf(link), url, grupa: grupa || null, cycles: [...cycles], years: [...years] });
+      });
+
+      return { supported: subjects.length > 0, verified: true, subjects, total, nextUrl };
+    },
+
+    // Verified against real markup+data at .../katalog2/programy/
+    // szukajProgramu?method=by_faculty&jed_org_kod=… (PWr W3, PB W9). One
+    // <tr> per kierunek (pokazKierunek link) whose cell lists that
+    // kierunek's program instances as pokazProgram&prg_kod= links — a
+    // kierunek commonly has several (full-time/Erasmus…), so every program
+    // keeps its kierunek's display name to group by.
+    getUnitPrograms(doc = document) {
+      const bodyText = doc.body ? (doc.body.textContent || '') : '';
+      if (bodyText.includes('Brak programów studiów w tej jednostce')) {
+        return { supported: true, verified: true, programs: [], nextUrl: null };
+      }
+      const nav = doc.querySelector('table-nav-bar');
+      const nextUrl = nav && nav.getAttribute('next-page-url') ? nav.getAttribute('next-page-url') : null;
+      const programs = [];
+      const seen = new Set();
+      doc.querySelectorAll("a[href*='pokazProgram&prg_kod=']").forEach((link) => {
+        const tr = link.closest('tr');
+        let prgKod = null;
+        try { prgKod = new URL(link.href).searchParams.get('prg_kod'); } catch (e) { return; }
+        if (!prgKod || seen.has(prgKod)) return;
+        seen.add(prgKod);
+        const kierunekLink = tr ? tr.querySelector("a[href*='pokazKierunek&kod=']") : null;
+        programs.push({ kod: prgKod, name: textOf(link), kierunek: kierunekLink ? textOf(kierunekLink) : null });
+      });
+
+      return { supported: programs.length > 0, verified: true, programs, nextUrl };
+    },
+
     // Verified against real markup+data at .../katalog2/programy/pokazProgram
     // ?kod=<...> — the program-instance page a "Programy studiów" search
     // result opens (distinct from a "kierunek" page, which groups several
@@ -577,39 +878,51 @@
       return { supported: !!name, verified: true, name, fields, kierunki, units, stages };
     },
 
-    // Verified against real markup at .../news/default (also the site's own
-    // landing page once logged in). Announcements render as a flat sequence
-    // of siblings inside a <div class="wrtext">: each one's heading is a
-    // <div class="title-wrapper-section">…<h4>…</h4></div>, immediately
-    // followed by one or more plain <div> wrappers holding its <p> body —
-    // there's no shared container per-announcement, so we walk the sibling
-    // list ourselves and split on the heading markers. The very first
-    // heading on the page ("Witaj w systemie USOSweb") uses the plain
-    // "title-wrapper" class instead (no "-section" suffix) — that's the
-    // page's own generic greeting, not a real announcement, so it's
-    // naturally excluded by matching only "title-wrapper-section".
+    // Announcements from news/default (also the site's own landing page
+    // once logged in). Every server-rendered markup variant is
+    // feature-detected per parser (see the three shapes above), tried in
+    // a fixed order; the pwnews JSON probe in scraping.js's collectNews
+    // only fires when ALL of these come back empty. Detection is by
+    // markup, never by hostname — see the comment above the shape
+    // parsers for why that matters.
     getNews(doc = document) {
-      const anyHeading = doc.querySelector('.title-wrapper-section');
-      const wrtext = anyHeading ? anyHeading.closest('.wrtext') : null;
-      if (!wrtext) return { supported: false, verified: false, items: [] };
+      const parsers = [parseTitleSectionNews, parseHrSegmentNews, parsePoleNews];
+      for (const parse of parsers) {
+        const items = parse(doc);
+        if (items.length > 0) return { supported: true, verified: true, items };
+      }
+      return { supported: false, verified: false, items: [] };
+    },
 
+    // Fallback news source for installations whose news/default renders no
+    // server-side announcements: the "dodatki/pwnews" add-on ships them as
+    // a JSON array that its own inline jQuery script injects client-side
+    // (which fetch+parse scraping can't see; see scraping.js's
+    // collectNews). Verified live (2026-09-16, anonymous) at
+    // usosweb.usos.pw.edu.pl: array entries carry id, nazwa (title), opis
+    // (HTML body — the add-on itself injects it unescaped into
+    // .more-full), grupa_odbiorcow (audience code, meaning UNVERIFIED —
+    // deliberately not used to filter; the add-on's own page shows
+    // everything too) and data ("YYYY-MM-DD"; the DOM-rendered news have
+    // no date, so this field stays null for them and the UI hides it).
+    // The per-field name variants mirror the add-on's own getField lists
+    // read from its source (see newsJsonField) — the renderer's skip
+    // condition (all three fields empty) is tightened here to requiring a
+    // title, matching the DOM getNews's .filter((it) => it.title).
+    // Array order is the add-on's own display order (newest first at PW)
+    // and is passed through unsorted.
+    parseNewsJson(json) {
+      if (!Array.isArray(json)) return { supported: false, verified: false, items: [] };
       const items = [];
-      let current = null;
-      Array.from(wrtext.children).forEach((child) => {
-        if (child.classList.contains('title-wrapper-section')) {
-          if (current) items.push(current);
-          const h = child.querySelector('h1,h2,h3,h4,h5,h6');
-          current = { title: textOf(h) || textOf(child), bodyNodes: [] };
-        } else if (current) {
-          current.bodyNodes.push(...Array.from(child.childNodes));
-        }
+      json.forEach((entry) => {
+        if (!entry || typeof entry !== 'object') return;
+        const title = newsJsonField(entry, ['nazwa', 'NAZWA', 'tytul', 'TYTUL', 'title', 'Title']);
+        if (!title) return;
+        const opis = newsJsonField(entry, ['opis', 'OPIS', 'tresc', 'TRESC', 'content', 'Content', 'description', 'Description']);
+        const date = newsJsonField(entry, ['data', 'DATA', 'date', 'Date']) || null;
+        items.push({ title, html: opis ? sanitizeNewsHtmlString(opis) : '', date });
       });
-      if (current) items.push(current);
-
-      const news = items
-        .filter((it) => it.title)
-        .map((it) => ({ title: it.title, html: sanitizeNewsHtml(it.bodyNodes, doc) }));
-      return { supported: news.length > 0, verified: true, items: news };
+      return { supported: items.length > 0, verified: true, items };
     },
 
     // Verified against real markup at .../katalog2/programy/pokazEtapProgramu
@@ -986,6 +1299,7 @@
     getRegistrationRounds() { return { supported: false, verified: false, groups: [] }; },
     getOwnProgrammes() { return { supported: false, verified: false, programmes: [] }; },
     getNews() { return { supported: false, verified: false, items: [] }; },
+    parseNewsJson() { return { supported: false, verified: false, items: [] }; },
     getPaymentGroups() { return { supported: false, verified: false, groups: [], grandTotal: null }; },
     getBankAccounts() { return { supported: false, verified: false, accounts: [] }; },
     getPaymentDetails() { return { supported: false, verified: false, generalInfo: [], tables: [] }; },
@@ -994,6 +1308,9 @@
     getPetitions() { return { supported: false, verified: false, rows: [] }; },
     getSurveys() { return { supported: false, verified: false, rows: [] }; },
     getUnitDetail() { return { supported: false, verified: false, name: null, fields: [], ancestors: [], children: [] }; },
+    getUnitSubjects() { return { supported: false, verified: false, subjects: [], total: 0, nextUrl: null }; },
+    getUnitPrograms() { return { supported: false, verified: false, programs: [], nextUrl: null }; },
+    getBuildingsForUnit() { return { supported: false, verified: false, buildings: [] }; },
     getProgramDetail() { return { supported: false, verified: false, name: null, fields: [], kierunki: [], units: [], stages: [] }; },
     getStageSubjects() { return { supported: false, verified: false, sections: [] }; },
     getSubjectPage() { return { supported: false, verified: false, generalInfo: [], cycles: [] }; },

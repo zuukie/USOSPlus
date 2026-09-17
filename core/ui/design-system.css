@@ -58,14 +58,19 @@
   position: sticky;
   top: 0;
   height: 100vh;
-  overflow-y: auto;
 }
-.usospp-brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 24px 10px; }
+.usospp-brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 24px 10px; flex-shrink: 0; }
 .usospp-logo { width: 32px; height: 32px; flex-shrink: 0; display: flex; }
 .usospp-brand-text { color: oklch(97% 0.004 55); font-weight: 700; font-size: 17px; letter-spacing: -0.02em; }
 .usospp-brand-text span { color: #d9773a; font-weight: 700; }
 
-.usospp-nav { display: flex; flex-direction: column; gap: 2px; }
+/* The nav is the sidebar's scroll region: when the "Więcej" drawer (or a
+   long sidebar on a short viewport) would push the user card off-screen,
+   the nav shrinks (`min-height: 0` is what lets a flex child shrink below
+   its content) and scrolls alone — brand above and user card below stay
+   in place. overscroll-behavior keeps that wheel from chaining into the
+   main content's scroll. */
+.usospp-nav { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 /* Separates nav items usable without logging in from ones that need a
    candidate/student session (e.g. IRK's Zgłoszenia) — sits inside the dark
    sidebar background, not the light card background. */
@@ -81,8 +86,8 @@
 .usospp-nav-dot { width: 7px; height: 7px; border-radius: 50%; background: #d9773a; margin-left: auto; flex-shrink: 0; }
 .usospp-nav-chevron { display: flex; flex-shrink: 0; transition: transform 0.15s ease; }
 .usospp-nav-chevron.open { transform: rotate(90deg); }
-.usospp-spacer { flex: 1; }
-.usospp-user-card { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 12px; background: oklch(24% 0.016 55); cursor: pointer; }
+.usospp-spacer { flex: 1; min-height: 16px; }
+.usospp-user-card { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 12px; background: oklch(24% 0.016 55); cursor: pointer; flex-shrink: 0; }
 .usospp-user-card:hover { background: oklch(28% 0.018 55); }
 .usospp-user-meta { min-width: 0; }
 .usospp-user-name { color: oklch(95% 0.004 55); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -105,6 +110,16 @@
 .usospp-subtitle { font-size: 12.5px; color: var(--ink-3); margin-top: 1px; }
 .usospp-topbar-actions { display: flex; align-items: center; gap: 16px; }
 
+/* Any embedded Leaflet map (the Mapa view's campus map, the unit-page
+   preview). The container MUST form its own stacking context: Leaflet
+   assigns its panes and controls z-indexes of 200–1000, and without a
+   boundary those escape into the app shell's stacking context and paint
+   over the sticky topbar (z-index: 20) and the sidebar whenever the map
+   passes under them mid-scroll. Scoping the whole map at 0 puts every
+   Leaflet layer back below the topbar, which is the stacking the shell
+   expects. */
+.usospp-map-container { position: relative; z-index: 0; }
+
 /* ---- search box (generic — e.g. USOS's Katalog search, a future IRK
    kierunki search) ---- */
 .usospp-search-wrap { position: relative; width: 300px; }
@@ -116,9 +131,12 @@
 .usospp-search-input:focus { background: var(--bg-card); border-color: #d9773a; outline: none; }
 .usospp-search-input::placeholder { font-family: inherit; }
 .usospp-search-dropdown {
-  /* Anchored to the input's right edge, not its left — fine as long as the
-     input sits near its container's right end. */
-  position: absolute; top: 44px; right: 0; width: 340px; background: var(--bg-card);
+  /* Stretches to the full width of its (position:relative) wrap: the
+     topbar's fixed 300px wrap gets a dropdown exactly matching its input,
+     while the full-width wraps (Mapa's building search, the planner's
+     subject search) span the whole search bar instead of hugging its
+     right edge. */
+  position: absolute; top: 44px; left: 0; right: 0; width: auto; background: var(--bg-card);
   border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 12px 32px rgba(20,15,10,0.14);
   padding: 8px; max-height: 60vh; overflow-y: auto; z-index: 30;
 }

@@ -200,13 +200,6 @@
     { id: 'plan', label: 'Plan zajęć', icon: 'calendar' },
     { id: 'oceny', label: 'Oceny', icon: 'bars' },
     { id: 'przedmioty', label: 'Przedmioty', icon: 'book' },
-    // USOSmail's own UI is 100% client-rendered against an internal,
-    // CSRF-walled endpoint whose own error message says not to use it as an
-    // API — and every USOSweb page sends X-Frame-Options: deny, so it can't
-    // even be embedded in an iframe. No legitimate way to show it in our own
-    // UI, so this is a pure link-out (see renderSidebar) rather than a real
-    // nav view: it never becomes the active view and isn't in VALID_VIEWS.
-    { id: 'wiadomosci', label: 'Wiadomości', icon: 'mail', external: 'kontroler.php?_action=home/usos_mail/nowaWiadomosc&usospp_off=1' },
     { id: 'egzaminy', label: 'Egzaminy', icon: 'check' },
     { id: 'sprawdziany', label: 'Sprawdziany', icon: 'clipboard' },
     { id: 'ects', label: 'ECTS / Postęp', icon: 'ring' },
@@ -214,12 +207,21 @@
 
   // Lower-traffic sections tucked behind the collapsible "Więcej" row in the
   // sidebar (see renderSidebar) instead of each getting a permanent
-  // top-level slot.
+  // top-level slot. Mapa leads this group: it's reachable by search as
+  // often as by the sidebar, and it works logged out unlike the rest.
   const MORE_NAV_ITEMS = [
+    { id: 'mapa', label: 'Mapa', icon: 'pin' },
     { id: 'platnosci', label: 'Płatności', icon: 'card' },
     { id: 'stypendia', label: 'Stypendia', icon: 'coins' },
     { id: 'podania', label: 'Podania', icon: 'send' },
     { id: 'ankiety', label: 'Ankiety', icon: 'star' },
+    // USOSmail's own UI is 100% client-rendered against an internal,
+    // CSRF-walled endpoint whose own error message says not to use it as an
+    // API — and every USOSweb page sends X-Frame-Options: deny, so it can't
+    // even be embedded in an iframe. No legitimate way to show it in our own
+    // UI, so this is a pure link-out (see renderSidebar) rather than a real
+    // nav view: it never becomes the active view and isn't in VALID_VIEWS.
+    { id: 'wiadomosci', label: 'Wiadomości', icon: 'mail', external: 'kontroler.php?_action=home/usos_mail/nowaWiadomosc&usospp_off=1' },
   ];
 
   // "przedmioty" is a hub tile screen — Przegląd/Zapisy/Generator planu live
@@ -259,9 +261,16 @@
   const VIEW_STORAGE_KEY = 'usospp_lastView';
   const VALID_VIEWS = new Set([
     ...NAV_ITEMS.filter((item) => !item.external).map((item) => item.id),
-    ...MORE_NAV_ITEMS.map((item) => item.id),
+    ...MORE_NAV_ITEMS.filter((item) => !item.external).map((item) => item.id),
     'przedmiotyLista', 'zapisy', 'planer', 'ustawienia', 'subjectPage', 'catalogPage',
   ]);
+
+  // Views that render entirely from pages USOSweb also serves to anonymous
+  // visitors (news; the search→katalog2 subject/unit/program pages; campus
+  // buildings), so they keep working while logged out — everything else in
+  // this.data is personal and falls back to the login prompt (renderView).
+  // The topbar's search overlay isn't a view and needs no entry here.
+  const PUBLIC_VIEWS = new Set(['aktualnosci', 'subjectPage', 'catalogPage', 'mapa']);
 
   // "Is there a new announcement since I last opened Aktualności" — chrome
   // .storage.local (device-local, not synced, survives tab close unlike
@@ -307,6 +316,7 @@
     star: '<path d="M10 2.8l2.2 4.6 5 .7-3.6 3.6.9 5-4.5-2.4-4.5 2.4.9-5-3.6-3.6 5-.7L10 2.8z"></path>',
     more: '<circle cx="5" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="15" cy="10" r="1.3" fill="currentColor" stroke="none"></circle>',
     chevron: '<path d="M7.5 5l5.5 5-5.5 5" stroke-width="2"></path>',
+    pin: '<path d="M10 2.6c-3.3 0-6 2.6-6 5.9 0 4.4 6 9.1 6 9.1s6-4.7 6-9.1c0-3.3-2.7-5.9-6-5.9z"></path><circle cx="10" cy="8.3" r="2.1"></circle>',
   };
 
   function icon(name, size = 19) {
@@ -426,6 +436,7 @@
     ustawienia: ['Ustawienia', 'Profil, wygląd i powiadomienia'],
     subjectPage: ['Przedmiot', 'Szczegóły z katalogu USOS'],
     catalogPage: ['Katalog', 'Szczegóły z katalogu USOS'],
+    mapa: ['Mapa kampusu', 'Budynki na mapie — dane z USOS'],
   };
 
   class App {
@@ -442,6 +453,8 @@
       let initialCatalogKod = null;
       let initialCatalogEtpKod = null;
       let initialCatalogBackView = 'dashboard';
+      let initialCatalogPrevKind = null;
+      let initialCatalogPrevKod = null;
       if (saved && VALID_VIEWS.has(saved.view)) {
         if (saved.view === 'subjectPage') {
           if (saved.subjectUrl) {
@@ -462,6 +475,15 @@
             initialCatalogBackView = (saved.catalogBackView && VALID_VIEWS.has(saved.catalogBackView) && saved.catalogBackView !== 'catalogPage')
               ? saved.catalogBackView
               : 'dashboard';
+            // A page opened from another catalog page remembers where
+            // "Wróć" should land — the live snapshot (see openCatalogPage)
+            // can't survive a reload, but {kind, kod} does, enough to
+            // re-open that page.
+            if ((saved.catalogKind === 'unit' || saved.catalogKind === 'program')
+              && (saved.catalogBackPrevKind === 'unit' || saved.catalogBackPrevKind === 'program')) {
+              initialCatalogPrevKind = saved.catalogBackPrevKind;
+              initialCatalogPrevKod = saved.catalogBackPrevKod || null;
+            }
           }
         } else {
           initialView = saved.view;
@@ -505,6 +527,25 @@
         catalogLoading: initialView === 'catalogPage',
         catalogError: false,
         catalogData: null,
+        catalogBuildings: [],
+        catalogSubjects: [],
+        catalogSubjectsTotal: 0,
+        catalogSubjectsNextUrl: null,
+        catalogSubjectsLoading: false,
+        catalogSubjectQuery: '',
+        catalogSubjectsCurrentOnly: false,
+        catalogPrograms: [],
+        catalogProgramsNextUrl: null,
+        catalogProgramsLoading: false,
+        catalogBackSnapshot: null,
+        catalogBackPrevKind: initialCatalogPrevKind,
+        catalogBackPrevKod: initialCatalogPrevKod,
+        mapaLoading: false,
+        mapaError: false,
+        mapaBuildings: [],
+        mapaUnitFilter: '', // a unitKod, not display text — several units share a display name (see getBuildingsForUnit)
+        mapaFocusKod: null, // pending "pan the campus map to this building" request from the topbar search — see openMapaFocused
+        mapaSearchQuery: '',
         searchQuery: '',
         searchLoading: false,
         searchResults: null,
@@ -513,6 +554,12 @@
         plannerSubjectLoading: null,
         plannerGroupsCache: {},
         plannerDraftSelection: {},
+        // classTypeKey -> { groupsUrl, classTypeLabel }: class types of the
+        // currently-expanded subject whose EVERY group is drawn on the grid
+        // as a hoverable "what if" ghost ("podgląd w planie"), see
+        // plannerTogglePreview/renderPlannerGrid. Scoped to the expanded
+        // subject — cleared whenever the configurator closes/switches.
+        plannerPreviewKeys: {},
         plannerPicks: [],
         plannerPlans: [],
         plannerActivePlanId: null,
@@ -542,6 +589,8 @@
       this._onInput = this.handleInput.bind(this);
       this._onKeydown = this.handleKeydown.bind(this);
       this._onPopState = this.handlePopState.bind(this);
+      this._onMouseover = this.handleMouseover.bind(this);
+      this._onMouseout = this.handleMouseout.bind(this);
       this.root.addEventListener('click', this._onClick);
       // Only `change` (fires on blur/select, not per keystroke) — a full
       // re-render on every keystroke would replace the focused <input> node
@@ -552,6 +601,13 @@
       this.root.addEventListener('change', this._onChange);
       this.root.addEventListener('input', this._onInput);
       this.root.addEventListener('keydown', this._onKeydown);
+      // Hover previewing for the planner's group candidates: mouseover/
+      // mouseout are captured with the same root delegation as clicks so
+      // they survive the [data-planner-root] innerHTML patches. The
+      // handlers themselves only ever toggle CSS classes — a state round-
+      // trip per mouse move would rebuild the whole planner.
+      this.root.addEventListener('mouseover', this._onMouseover);
+      this.root.addEventListener('mouseout', this._onMouseout);
       window.addEventListener('popstate', this._onPopState);
       // Anchors the bottom of the back/forward stack to whatever we're
       // about to show (dashboard, or a subjectPage/catalogPage restored
@@ -573,13 +629,20 @@
           this.fetchCatalogPage(initialCatalogKind, initialCatalogKod);
         }
       }
+      if (initialView === 'mapa') {
+        this.ensureMapaData();
+      }
     }
 
     destroy() {
+      if (this._leafletMap) { this._leafletMap.remove(); this._leafletMap = null; }
+      if (this._unitMap) { this._unitMap.remove(); this._unitMap = null; this._unitMapMarkersByKod = null; }
       this.root.removeEventListener('click', this._onClick);
       this.root.removeEventListener('change', this._onChange);
       this.root.removeEventListener('input', this._onInput);
       this.root.removeEventListener('keydown', this._onKeydown);
+      this.root.removeEventListener('mouseover', this._onMouseover);
+      this.root.removeEventListener('mouseout', this._onMouseout);
       window.removeEventListener('popstate', this._onPopState);
       if (this._titleObserver) this._titleObserver.disconnect();
     }
@@ -629,6 +692,8 @@
         catalogKod: this.state.view === 'catalogPage' ? this.state.catalogKod : null,
         catalogEtpKod: this.state.view === 'catalogPage' && this.state.catalogKind === 'stage' ? this.state.catalogEtpKod : null,
         catalogBackView: this.state.view === 'catalogPage' ? this.state.catalogBackView : null,
+        catalogBackPrevKind: this.state.view === 'catalogPage' && (this.state.catalogKind === 'unit' || this.state.catalogKind === 'program') ? (this.state.catalogBackPrevKind || null) : null,
+        catalogBackPrevKod: this.state.view === 'catalogPage' && (this.state.catalogKind === 'unit' || this.state.catalogKind === 'program') ? (this.state.catalogBackPrevKod || null) : null,
       };
     }
 
@@ -683,20 +748,35 @@
         const backView = (p.catalogBackView && VALID_VIEWS.has(p.catalogBackView) && p.catalogBackView !== 'catalogPage')
           ? p.catalogBackView
           : 'dashboard';
+        // Restored mid-chain ("Wróć" should re-open the previous catalog
+        // page even though the live snapshot is gone) — see
+        // openCatalogPage/catalogBack for the chain mechanism.
+        const prevKind = (p.catalogKind === 'unit' || p.catalogKind === 'program')
+          && p.catalogBackView === 'catalogPage'
+          && (p.catalogBackPrevKind === 'unit' || p.catalogBackPrevKind === 'program')
+          ? p.catalogBackPrevKind
+          : null;
         this.setState({
           view: 'catalogPage',
           notifPanelOpen: false,
           avatarMenuOpen: false,
           catalogBackView: backView,
+          catalogBackSnapshot: null,
+          catalogBackPrevKind: prevKind,
+          catalogBackPrevKod: prevKind ? (p.catalogBackPrevKod || null) : null,
           catalogKind: p.catalogKind,
           catalogKod: p.catalogKod,
           catalogEtpKod: p.catalogKind === 'stage' ? p.catalogEtpKod : null,
           catalogLoading: true,
           catalogError: false,
           catalogData: null,
+          catalogBuildings: [],
         });
         if (p.catalogKind === 'stage') this.fetchStagePage(p.catalogKod, p.catalogEtpKod, null);
         else this.fetchCatalogPage(p.catalogKind, p.catalogKod);
+      } else if (view === 'mapa') {
+        this.setState({ view: 'mapa', notifPanelOpen: false, avatarMenuOpen: false });
+        this.ensureMapaData();
       } else {
         this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
       }
@@ -838,6 +918,51 @@
       if (el) el.innerHTML = this.renderPlannerCustomSearchResults();
     }
 
+    // Typing in the unit page's subject mini-search — same reasoning as
+    // setSearchState above: only the list/body below the input is patched,
+    // never the <input> itself, so the cursor never jumps.
+    setCatalogSubjectsState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'catalogPage') return;
+      const el = this.root.querySelector('[data-catalog-subjects-root]');
+      if (el) el.innerHTML = this.renderCatalogSubjectsSectionBody();
+    }
+
+    // Everything that updates the "Przedmioty" section AFTER the unit page
+    // is on screen: the offer list arriving, "Wczytaj więcej", the
+    // current-year toggle. A plain setState here rebuilds the whole
+    // .usospp-root — replaying the view's fade-in and re-mounting the unit
+    // map preview over content the user is already reading, which read as
+    // the page loading itself a second time. Instead the section card's
+    // count title, its toggle and its rows are patched in place, so the
+    // <input> sitting between them keeps its value and focus. A section
+    // that turns fully hidden (failed/empty fetch, e.g. on katedry) is
+    // removed by the same rule renderView hides it with.
+    setCatalogSubjectsSectionState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'catalogPage') return;
+      const card = this.root.querySelector('[data-catalog-subjects-card]');
+      if (!card) return;
+      if (!this.renderCatalogSubjectsSection()) { card.outerHTML = ''; return; }
+      const title = this.root.querySelector('[data-catalog-subjects-title]');
+      if (title) title.innerHTML = this.renderCatalogSubjectsTitle();
+      const toggle = this.root.querySelector('[data-catalog-subjects-toggle-wrap]');
+      if (toggle) toggle.innerHTML = this.renderCatalogSubjectsToggle();
+      const body = this.root.querySelector('[data-catalog-subjects-root]');
+      if (body) body.innerHTML = this.renderCatalogSubjectsSectionBody();
+    }
+
+    // Same reasoning for the "Programy studiów" card — but with no <input>
+    // inside, so the whole card can be swapped in one piece (outerHTML,
+    // like setMapaFilter): the freshly rendered section, or removal when
+    // it turned hidden.
+    setCatalogProgramsState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'catalogPage') return;
+      const el = this.root.querySelector('[data-catalog-programs-card]');
+      if (el) el.outerHTML = this.renderCatalogProgramsSection();
+    }
+
     updateSettings(settings) {
       this.settings = settings;
       this.render();
@@ -851,6 +976,7 @@
       }
       this.setState(patch);
       this.persistViewState();
+      if (view === 'mapa') this.ensureMapaData();
     }
 
     persistNewsSeen() {
@@ -943,6 +1069,18 @@
         case 'openSubjectPage':
           this.openSubjectPage(el.dataset.url);
           break;
+        case 'catalogBack':
+          this.catalogBack();
+          break;
+        case 'catalogSubjectsLoadMore':
+          this.loadMoreCatalogSubjects();
+          break;
+        case 'catalogProgramsLoadMore':
+          this.loadMoreCatalogPrograms();
+          break;
+        case 'toggleCatalogSubjectsCurrentOnly':
+          this.setCatalogSubjectsSectionState((s) => ({ catalogSubjectsCurrentOnly: !s.catalogSubjectsCurrentOnly }));
+          break;
         case 'searchOpenSubject':
           this.state.searchQuery = '';
           this.state.searchResults = null;
@@ -960,6 +1098,21 @@
           break;
         case 'openStage':
           this.openStagePage(el.dataset.prgKod, el.dataset.etpKod, el.dataset.label);
+          break;
+        case 'unitMapGoToBuilding':
+          this.unitMapGoToBuilding(el.dataset.kod);
+          break;
+        case 'openMapaFocused':
+          this.openMapaFocused(el.dataset.kod);
+          break;
+        case 'mapaSetFilter':
+          this.setMapaFilter(el.dataset.unit || '');
+          break;
+        case 'mapaRefresh':
+          this.mapaRefresh();
+          break;
+        case 'mapaGoToBuilding':
+          this.mapaGoToBuilding(el.dataset.kod);
           break;
         case 'openPaymentDetails':
           this.openPaymentDetails(el.dataset.url);
@@ -992,6 +1145,12 @@
           break;
         case 'plannerLoadGroups':
           this.plannerLoadGroups(el.dataset.url);
+          break;
+        case 'plannerTogglePreview':
+          this.plannerTogglePreview(el.dataset.key, el.dataset.groupsUrl, el.dataset.classTypeLabel);
+          break;
+        case 'plannerTogglePreviewAll':
+          this.plannerTogglePreviewAll(el.dataset.url);
           break;
         case 'plannerSelectGroup':
           this.plannerSelectGroup(el.dataset.key, el.dataset.groupsUrl, el.dataset.nr, el.dataset.classTypeLabel);
@@ -1050,6 +1209,72 @@
         default:
           break;
       }
+    }
+
+    // ---- planner: hover-preview for group candidates ("podgląd w planie")
+    // These two listeners (wired in the constructor on this.root, so they
+    // survive the planner's [data-planner-root] innerHTML patches) drive the
+    // purely visual part of the candidates: hovering a candidate group makes
+    // the grid read as if that group were already part of the plan — every
+    // other candidate disappears for as long as the mouse stays on it.
+    // No state is ever touched: hover is transient by definition and going
+    // through setPlannerState would rebuild the whole planner on every
+    // mouse move.
+
+    handleMouseover(e) {
+      if (this.state.view !== 'planer' || this.state.plannerMode !== 'manual') return;
+      const cand = e.target.closest('[data-cand-group]');
+      if (cand) {
+        // Hovering a popover ROW previews that group AND keeps the popover
+        // itself open (passing a bare gid would close it instantly, making
+        // comparison-flicking between rows impossible). A standalone box
+        // (singleton candidate) has no cluster ancestor — null is right.
+        const cluster = cand.closest('[data-cand-cluster]');
+        this.plannerHover(cand.dataset.candGroup, cluster ? cluster.dataset.candCluster : null);
+        return;
+      }
+      // Not a group itself — but maybe a "N grup" neutral box or an open
+      // candidate popover, which keeps its cluster active.
+      const cluster = e.target.closest('[data-cand-cluster]');
+      if (cluster) { this.plannerHover(null, cluster.dataset.candCluster); return; }
+      this.plannerHover(null, null);
+    }
+
+    handleMouseout(e) {
+      if (!this._plannerHoverActive) return;
+      if (this.state.view !== 'planer' || this.state.plannerMode !== 'manual') { this.plannerHover(null, null); return; }
+      // Only a REAL exit clears the preview: hops between candidate boxes,
+      // popover rows and the popover itself fire mouseout first, but the
+      // mouseover that follows re-asserts the right state anyway.
+      const grid = this.root.querySelector('[data-planner-grid]');
+      if (grid && e.relatedTarget && grid.contains(e.relatedTarget)) return;
+      this.plannerHover(null, null);
+    }
+
+    // Applies the hover-preview state to the grid's candidate elements via
+    // classes only. `gid` — the hovered candidate group (all of its sessions
+    // across the week stay visible, everything else candidate-shaped hides,
+    // so the schedule reads as final). `clusterId` — the "N grup" cluster
+    // whose popover should be open (its neutral box hides too); without a
+    // `gid` hovering it, the other clusters keep their neutral boxes.
+    plannerHover(gid, clusterId) {
+      if (this._plannerHoverGid === gid && this._plannerHoverCluster === clusterId) return;
+      this._plannerHoverGid = gid;
+      this._plannerHoverCluster = clusterId;
+      this._plannerHoverActive = !!(gid || clusterId);
+      const grid = this.root.querySelector('[data-planner-grid]');
+      if (!grid) return;
+      grid.querySelectorAll('[data-cand-group]:not([data-cand-row])').forEach((el) => {
+        const mine = el.dataset.candGroup === gid;
+        el.classList.toggle('usospp-cand-on', !!gid && mine);
+        el.classList.toggle('usospp-cand-off', !!gid && !mine);
+      });
+      grid.querySelectorAll('[data-cand-neutral]').forEach((el) => {
+        el.classList.toggle('usospp-cand-off', !!gid || (!!clusterId && el.dataset.candCluster === clusterId));
+      });
+      grid.querySelectorAll('[data-cand-pop]').forEach((el) => {
+        el.classList.toggle('usospp-cand-pop-open', !!clusterId && el.dataset.candPop === clusterId);
+      });
     }
 
     // The "szczegóły" link on a payment/due row points at a page classic
@@ -1291,17 +1516,113 @@
     // back-link to wherever the user actually came from).
     openCatalogPage(kind, kod) {
       if (!kod) return;
-      this.setState((s) => ({
-        view: 'catalogPage',
-        catalogBackView: s.view === 'catalogPage' ? s.catalogBackView : s.view,
-        catalogKind: kind,
-        catalogKod: kod,
-        catalogLoading: true,
-        catalogError: false,
-        catalogData: null,
-      }));
+      this.setState((s) => {
+        // Opening catalog page B while catalog page A is showing makes
+        // "Wróć" on B step back to A itself — one hop, like every other
+        // back link in the app — instead of the OLD behavior of keeping
+        // A's own back target (which skipped A entirely and landed back
+        // on whatever view preceded the whole catalog chain). The plain
+        // view-name link can't express "the wydział I just left", so A's
+        // whole rendered state — its loaded subject rows included, which
+        // a re-fetch would throw away — is snapshotted here and restored
+        // by catalogBack(); catalogBackPrev* keeps {kind, kod} around
+        // for the snapshot-less paths (reload, popstate).
+        const fromCatalog = s.view === 'catalogPage' && !!s.catalogData
+          && (s.catalogKind === 'unit' || s.catalogKind === 'program');
+        return {
+          view: 'catalogPage',
+          catalogBackView: fromCatalog ? 'catalogPage' : (s.view === 'catalogPage' ? s.catalogBackView : s.view),
+          catalogBackPrevKind: fromCatalog ? s.catalogKind : null,
+          catalogBackPrevKod: fromCatalog ? s.catalogKod : null,
+          catalogBackSnapshot: fromCatalog ? {
+            kind: s.catalogKind,
+            kod: s.catalogKod,
+            data: s.catalogData,
+            buildings: s.catalogBuildings,
+            subjects: s.catalogSubjects,
+            subjectsTotal: s.catalogSubjectsTotal,
+            subjectsNextUrl: s.catalogSubjectsNextUrl,
+            subjectsCurrentOnly: s.catalogSubjectsCurrentOnly,
+            subjectsQuery: s.catalogSubjectQuery,
+            programs: s.catalogPrograms,
+            programsNextUrl: s.catalogProgramsNextUrl,
+            backView: s.catalogBackView,
+            prevKind: s.catalogBackPrevKind || null,
+            prevKod: s.catalogBackPrevKod || null,
+          } : null,
+          catalogKind: kind,
+          catalogKod: kod,
+          catalogLoading: true,
+          catalogError: false,
+          catalogData: null,
+          catalogBuildings: [],
+        };
+      });
       this.persistViewState();
       this.fetchCatalogPage(kind, kod);
+    }
+
+    // "← Wróć" on a unit/program page that was opened from another unit/
+    // program page. With a live snapshot this is instant — the previous
+    // page's data, loaded subject rows, filters and pagination carry over
+    // untouched; without one (reload/popstate in between) the page is
+    // simply re-opened from its {kind, kod}. Both paths then behave like
+    // every other back link: exactly one screen back.
+    catalogBack() {
+      const s = this.state;
+      const kind = s.catalogBackPrevKind;
+      const kod = s.catalogBackPrevKod;
+      const snap = s.catalogBackSnapshot;
+      if (kind !== 'unit' && kind !== 'program') {
+        const target = s.catalogBackView && VALID_VIEWS.has(s.catalogBackView) && s.catalogBackView !== 'catalogPage'
+          ? s.catalogBackView
+          : 'dashboard';
+        this.navigate(target);
+        return;
+      }
+      if (!kod) {
+        this.navigate('dashboard');
+        return;
+      }
+      if (snap && snap.kind === kind && snap.kod === kod && snap.data) {
+        this.setState({
+          view: 'catalogPage',
+          notifPanelOpen: false,
+          avatarMenuOpen: false,
+          catalogBackView: snap.backView,
+          catalogBackPrevKind: snap.prevKind,
+          catalogBackPrevKod: snap.prevKod,
+          catalogBackSnapshot: null,
+          catalogKind: kind,
+          catalogKod: kod,
+          catalogEtpKod: null,
+          catalogLoading: false,
+          catalogError: false,
+          catalogData: snap.data,
+          catalogBuildings: snap.buildings || [],
+          catalogSubjects: snap.subjects || [],
+          catalogSubjectsTotal: snap.subjectsTotal || 0,
+          catalogSubjectsNextUrl: snap.subjectsNextUrl || null,
+          catalogSubjectQuery: snap.subjectsQuery || '',
+          catalogSubjectsCurrentOnly: !!snap.subjectsCurrentOnly,
+          catalogPrograms: snap.programs || [],
+          catalogProgramsNextUrl: snap.programsNextUrl || null,
+        });
+        this.persistViewState();
+      } else {
+        this.openCatalogPage(kind, kod);
+      }
+    }
+
+    // Back link for the unit/program catalog pages — the dedicated one-hop
+    // action when this page was opened from another catalog page, the plain
+    // view link otherwise.
+    catalogBackHeader() {
+      const s = this.state;
+      if ((s.catalogBackPrevKind === 'unit' || s.catalogBackPrevKind === 'program') && s.catalogBackPrevKod) {
+        return `<a data-action="catalogBack" class="usospp-back-link">← Wróć</a>`;
+      }
+      return backLink(s.catalogBackView || 'dashboard');
     }
 
     fetchCatalogPage(kind, kod) {
@@ -1312,20 +1633,153 @@
         return;
       }
       const url = kind === 'unit' ? scrape.PATHS.unitDetail(kod) : scrape.PATHS.programDetail(kod);
-      scrape.fetchDoc(url)
-        .then((doc) => {
+      // The unit page also shows supplementary sections that each fetch on
+      // their own (subjects the unit offers — see adapter.getUnitSubjects —
+      // and its study programmes): they reset here so a re-fetch (opening
+      // another unit, a popstate back into this page) never shows the
+      // previous unit's rows, and they never turn the page into an error
+      // view when their request fails — the sections just stay hidden.
+      if (kind === 'unit') {
+        this.setState({
+          catalogBuildings: [],
+          catalogSubjects: [],
+          catalogSubjectsTotal: 0,
+          catalogSubjectsNextUrl: null,
+          catalogSubjectsLoading: true,
+          catalogSubjectQuery: '',
+          catalogSubjectsCurrentOnly: false,
+          catalogPrograms: [],
+          catalogProgramsNextUrl: null,
+          catalogProgramsLoading: true,
+        });
+      }
+      // A unit page also shows its own "Budynki jednostki" list (see
+      // renderUnitPage) — one cheap request tacked on in parallel, not
+      // gated behind the main detail fetch succeeding, and never turns this
+      // into an error page on its own (buildings are supplementary here,
+      // unlike on the dedicated "Mapa" view).
+      const buildingsPromise = kind === 'unit' ? scrape.fetchDoc(scrape.PATHS.buildingsForUnit(kod)) : Promise.resolve(null);
+      Promise.all([scrape.fetchDoc(url), buildingsPromise])
+        .then(([doc, buildingsDoc]) => {
           const adapter = adapters.selectAdapter();
           const details = doc && adapter
             ? (kind === 'unit' ? adapter.getUnitDetail(doc) : adapter.getProgramDetail(doc))
             : null;
+          const buildingsResult = kind === 'unit' && buildingsDoc && adapter ? adapter.getBuildingsForUnit(buildingsDoc) : null;
           if (!details || !details.supported) {
             this.setState({ catalogLoading: false, catalogError: true });
           } else {
-            this.setState({ catalogLoading: false, catalogData: details });
+            this.setState({
+              catalogLoading: false,
+              catalogData: details,
+              catalogBuildings: (buildingsResult && buildingsResult.supported) ? buildingsResult.buildings : [],
+            });
           }
         })
         .catch(() => {
           this.setState({ catalogLoading: false, catalogError: true });
+        });
+
+      if (kind !== 'unit') return;
+      // Section fetches below never block the card above. The subject
+      // listing's nav-bar next-page-url points at 30-row pages (the classic
+      // UI default) — its limit segment is swapped for 300, a page size the
+      // classic UI itself offers (verified live), so "Wczytaj więcej" walks
+      // a 3500-row wydział in a handful of requests.
+      const stillOnPage = () => this.state.view === 'catalogPage' && this.state.catalogKind === 'unit' && this.state.catalogKod === kod;
+      scrape.fetchDoc(scrape.PATHS.unitSubjects(kod))
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitSubjects(doc) : null;
+          if (!stillOnPage()) return;
+          this.setCatalogSubjectsSectionState({
+            catalogSubjects: res ? res.subjects : [],
+            catalogSubjectsTotal: res ? res.total : 0,
+            catalogSubjectsNextUrl: res && res.nextUrl ? res.nextUrl.replace(/(tab[0-9a-z]+_limit)=\d+/, '$1=300') : null,
+            catalogSubjectsLoading: false,
+          });
+        })
+        .catch(() => {
+          if (stillOnPage()) this.setCatalogSubjectsSectionState({ catalogSubjectsLoading: false });
+        });
+      scrape.fetchDoc(scrape.PATHS.unitPrograms(kod))
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitPrograms(doc) : null;
+          if (!stillOnPage()) return;
+          this.setCatalogProgramsState({
+            catalogPrograms: res ? res.programs : [],
+            catalogProgramsNextUrl: res ? res.nextUrl : null,
+            catalogProgramsLoading: false,
+          });
+        })
+        .catch(() => {
+          if (stillOnPage()) this.setCatalogProgramsState({ catalogProgramsLoading: false });
+        });
+    }
+
+    // "Wczytaj więcej" for the subject-offer listing — follows the current
+    // page's own nav-bar next-page-url (already limit-boosted to 300 rows by
+    // fetchCatalogPage) until a page comes back without one, merging rows by
+    // kod so the list can't duplicate if USOS re-sorts between requests.
+    loadMoreCatalogSubjects() {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const url = this.state.catalogSubjectsNextUrl;
+      if (!scrape || !adapters || !url || this.state.catalogSubjectsLoading) return;
+      const kod = this.state.catalogKod;
+      this.setCatalogSubjectsSectionState({ catalogSubjectsLoading: true });
+      scrape.fetchDoc(url)
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitSubjects(doc) : null;
+          if (this.state.view !== 'catalogPage' || this.state.catalogKind !== 'unit' || this.state.catalogKod !== kod) return;
+          const known = new Set(this.state.catalogSubjects.map((r) => r.kod));
+          const fresh = res ? res.subjects.filter((r) => !known.has(r.kod)) : [];
+          this.setCatalogSubjectsSectionState({
+            catalogSubjects: this.state.catalogSubjects.concat(fresh),
+            catalogSubjectsTotal: (res && res.total) || this.state.catalogSubjectsTotal,
+            // A page with nothing new ends the walk even if it still carries
+            // a next-page-url — otherwise the button would re-fetch the same
+            // tail forever.
+            catalogSubjectsNextUrl: (res && res.nextUrl && fresh.length) ? res.nextUrl.replace(/(tab[0-9a-z]+_limit)=\d+/, '$1=300') : null,
+            catalogSubjectsLoading: false,
+          });
+        })
+        .catch(() => {
+          if (this.state.view === 'catalogPage' && this.state.catalogKind === 'unit') {
+            this.setCatalogSubjectsSectionState({ catalogSubjectsLoading: false, catalogSubjectsNextUrl: null });
+          }
+        });
+    }
+
+    // Same walk for the programmes section — both verified listings render
+    // in one page, but the nav-bar link is parsed generically so a bigger
+    // university would simply get the button too.
+    loadMoreCatalogPrograms() {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const url = this.state.catalogProgramsNextUrl;
+      if (!scrape || !adapters || !url || this.state.catalogProgramsLoading) return;
+      const kod = this.state.catalogKod;
+      this.setCatalogProgramsState({ catalogProgramsLoading: true });
+      scrape.fetchDoc(url)
+        .then((doc) => {
+          const adapter = adapters.selectAdapter();
+          const res = doc && adapter ? adapter.getUnitPrograms(doc) : null;
+          if (this.state.view !== 'catalogPage' || this.state.catalogKind !== 'unit' || this.state.catalogKod !== kod) return;
+          const known = new Set(this.state.catalogPrograms.map((r) => r.kod));
+          const fresh = res ? res.programs.filter((r) => !known.has(r.kod)) : [];
+          this.setCatalogProgramsState({
+            catalogPrograms: this.state.catalogPrograms.concat(fresh),
+            catalogProgramsNextUrl: (res && res.nextUrl && fresh.length) ? res.nextUrl : null,
+            catalogProgramsLoading: false,
+          });
+        })
+        .catch(() => {
+          if (this.state.view === 'catalogPage' && this.state.catalogKind === 'unit') {
+            this.setCatalogProgramsState({ catalogProgramsLoading: false, catalogProgramsNextUrl: null });
+          }
         });
     }
 
@@ -1373,6 +1827,358 @@
         .catch(() => {
           this.setState({ catalogLoading: false, catalogError: true });
         });
+    }
+
+    // Loads the WHOLE campus's buildings in one shot, the first time "Mapa"
+    // is opened — see adapter.getBuildingsForUnit's comment for why one
+    // request against the university's own root jednostka is enough
+    // (buildings of every sub-unit are already included recursively),
+    // rather than crawling every jednostka individually. The root is found
+    // by walking up getUnitDetail's `ancestors` from the student's own
+    // faculty — this.data.user.facultyCode, scraped at startup with zero
+    // extra requests (see adapter.getUser) — or, when logged out, from any
+    // unit the public search can find (inline fallback below). Cached in
+    // chrome.storage.local (buildings essentially never change) so a later
+    // visit/reload doesn't re-fetch; see mapaRefresh() for the manual
+    // override.
+    // ensureMapaData/fetchMapaData also run while the Mapa view isn't the
+    // active one — the building section of the topbar search warms the
+    // campus list on first keystrokes (onSearchInput). A full render() from
+    // there would rebuild the topbar and yank focus out of the search
+    // input mid-typing, and no other view reads the mapa state, so only a
+    // visible Mapa view needs re-rendering when these async flips land.
+    renderMapaStateIfNeeded() {
+      if (this.state.view === 'mapa') this.render();
+    }
+
+    async ensureMapaData() {
+      if (this.state.mapaBuildings.length || this.state.mapaLoading) return;
+      this.state.mapaLoading = true;
+      this.state.mapaError = false;
+      this.renderMapaStateIfNeeded();
+      const cacheKey = 'usospp:campusBuildings:' + location.origin;
+      try {
+        const stored = await chrome.storage.local.get(cacheKey);
+        const cached = stored[cacheKey];
+        if (cached && Array.isArray(cached.buildings) && cached.buildings.length) {
+          this.state.mapaLoading = false;
+          this.state.mapaBuildings = cached.buildings;
+          this.renderMapaStateIfNeeded();
+          return;
+        }
+      } catch (e) { /* private mode etc. — fall through to a live fetch */ }
+      await this.fetchMapaData(cacheKey);
+    }
+
+    async fetchMapaData(cacheKey) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters ? adapters.selectAdapter() : null;
+      if (!scrape || !adapter) {
+        this.state.mapaLoading = false;
+        this.state.mapaError = true;
+        this.renderMapaStateIfNeeded();
+        return;
+      }
+      try {
+        const facultyCode = this.data.user && this.data.user.facultyCode;
+        let rootKod = facultyCode || null;
+        if (facultyCode) {
+          const unitDoc = await scrape.fetchDoc(scrape.PATHS.unitDetail(facultyCode));
+          const detail = unitDoc ? adapter.getUnitDetail(unitDoc) : null;
+          if (detail && detail.ancestors && detail.ancestors.length) rootKod = detail.ancestors[0].kod;
+        }
+        // Anonymous session (or a facultyCode whose ancestors didn't
+        // resolve): no personal data to walk up from, so find ANY unit via
+        // the same public search the wyszukiwarka uses and walk up ITS
+        // ancestors instead — the search endpoint is as public as the news
+        // page (see collectAnon). Patterns ordered by what any Polish
+        // university practically always has among its jednostki. UNVERIFIED
+        // live: the jsonSzukajJednostki endpoint for an anonymous session —
+        // if it refuses, this loop just yields nothing and the Mapa shows
+        // its ordinary error + "Spróbuj ponownie" card.
+        if (!rootKod) {
+          for (const pattern of ['instytut', 'wydzia', 'zakład']) {
+            const found = await scrape.searchCatalog(pattern);
+            if (!found.units.length) continue;
+            const anyKod = found.units[0].kod;
+            const unitDoc = await scrape.fetchDoc(scrape.PATHS.unitDetail(anyKod));
+            const detail = unitDoc ? adapter.getUnitDetail(unitDoc) : null;
+            if (detail && detail.ancestors && detail.ancestors.length) rootKod = detail.ancestors[0].kod;
+            else if (detail && detail.supported) rootKod = anyKod; // top of what we can reach — its own subtree is the best we can place
+            if (rootKod) break;
+          }
+        }
+        if (!rootKod) {
+          this.state.mapaLoading = false;
+          this.state.mapaError = true;
+          this.renderMapaStateIfNeeded();
+          return;
+        }
+        const buildingsDoc = await scrape.fetchDoc(scrape.PATHS.buildingsForUnit(rootKod));
+        const result = buildingsDoc ? adapter.getBuildingsForUnit(buildingsDoc) : null;
+        this.state.mapaLoading = false;
+        if (!result || !result.supported) {
+          this.state.mapaError = true;
+          this.renderMapaStateIfNeeded();
+          return;
+        }
+        this.state.mapaBuildings = result.buildings;
+        this.renderMapaStateIfNeeded();
+        try {
+          await chrome.storage.local.set({ [cacheKey]: { rootKod, buildings: result.buildings, fetchedAt: Date.now() } });
+        } catch (e) { /* ignore — cache is a pure optimization */ }
+      } catch (e) {
+        this.state.mapaLoading = false;
+        this.state.mapaError = true;
+        this.renderMapaStateIfNeeded();
+      }
+    }
+
+    // Manual "odśwież" link in renderMapa() — buildings are cached
+    // indefinitely (see ensureMapaData), so this is the only way to pick up
+    // a change without waiting for the cache to be cleared some other way.
+    async mapaRefresh() {
+      const cacheKey = 'usospp:campusBuildings:' + location.origin;
+      try { await chrome.storage.local.remove(cacheKey); } catch (e) { /* ignore */ }
+      this.state.mapaBuildings = [];
+      this.state.mapaLoading = true;
+      this.state.mapaError = false;
+      this.render();
+      await this.fetchMapaData(cacheKey);
+    }
+
+    // "Pokaż na mapie" on a unit page's building list — instead of
+    // navigating away to the dedicated Mapa view, pans/zooms the inline
+    // preview map (mounted by mountUnitMapPreview) to that building and
+    // opens its popup. scrollIntoView first because the map sits ABOVE the
+    // list, which can run long enough for the clicked row to be off-screen.
+    unitMapGoToBuilding(budKod) {
+      if (!this._unitMap || !this._unitMapMarkersByKod) return;
+      const marker = this._unitMapMarkersByKod[budKod];
+      if (!marker) return;
+      const container = this.root.querySelector('[data-unit-map]');
+      if (container) container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      this._unitMap.setView(marker.getLatLng(), 17);
+      marker.openPopup();
+    }
+
+    // Called by setMapaFilter AND by the initial mount — updates which
+    // markers are shown on the ALREADY-MOUNTED map (add/removeFrom, not
+    // recreate) and re-fits the view to whatever ends up visible, so
+    // picking a wydział zooms in on just its buildings, and clearing the
+    // filter naturally zooms back out to the whole campus (the visible set
+    // becomes everything again). Keyed by unitKod, not display text — see
+    // adapter.getBuildingsForUnit's comment: several distinct units
+    // (different wydziały's own "Kierownik Administracji Wydziałowej",
+    // for one) share the exact same name, so text equality would wrongly
+    // show buildings from more than one unit at once.
+    applyMapaFilter() {
+      if (!this._mapaMarkersByKod || !this._leafletMap) return;
+      const filter = this.state.mapaUnitFilter;
+      const visible = [];
+      Object.values(this._mapaMarkersByKod).forEach(({ marker, building }) => {
+        const show = !filter || building.unitKod === filter;
+        const onMap = this._leafletMap.hasLayer(marker);
+        if (show && !onMap) marker.addTo(this._leafletMap);
+        else if (!show && onMap) marker.remove();
+        if (show) visible.push(marker.getLatLng());
+      });
+      if (visible.length === 1) this._leafletMap.setView(visible[0], 16);
+      else if (visible.length > 1) this._leafletMap.fitBounds(window.L.latLngBounds(visible).pad(0.15));
+    }
+
+    // Deliberately bypasses setState/render() — see mountMapaIfNeeded's
+    // comment for why a full render would destroy and recreate the whole
+    // Leaflet map (losing pan/zoom) on every filter change, exactly the
+    // "page reload" flash this codebase's other setXState methods (see
+    // setTopbarState et al.) already exist to avoid elsewhere.
+    setMapaFilter(unitKod) {
+      this.state.mapaUnitFilter = unitKod;
+      this.applyMapaFilter();
+      const el = this.root.querySelector('[data-mapa-filter-root]');
+      if (el) el.outerHTML = this.renderMapaFilterChips();
+    }
+
+    // Live, purely client-side filter over the already-loaded mapaBuildings
+    // (no fetch, no debounce needed) — see setSearchState/
+    // setPlannerSearchState for the same "patch only the results subtree"
+    // reasoning, so typing never drops focus/cursor from the <input>.
+    onMapaSearchInput(value) {
+      this.state.mapaSearchQuery = value;
+      const el = this.root.querySelector('[data-mapa-search-results-root]');
+      if (el) el.innerHTML = this.renderMapaSearchResults();
+    }
+
+    renderMapaSearchResults() {
+      const q = this.state.mapaSearchQuery.trim().toLowerCase();
+      if (q.length < 2) return '';
+      const matches = this.state.mapaBuildings
+        .filter((b) => b.kod && (b.name.toLowerCase().includes(q) || (b.address && b.address.toLowerCase().includes(q))))
+        .slice(0, 8);
+      if (!matches.length) {
+        return `<div class="usospp-search-dropdown"><div class="usospp-empty-hint" style="padding:16px;">Brak wyników.</div></div>`;
+      }
+      return `
+        <div class="usospp-search-dropdown">
+          ${matches.map((b) => `
+            <div class="usospp-search-item" data-action="mapaGoToBuilding" data-kod="${esc(b.kod)}">
+              <div class="usospp-search-item-title">${esc(b.name)}</div>
+              <div class="usospp-search-item-sub">${esc(b.address || b.unitName || '')}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // Pans/zooms the ALREADY-MOUNTED campus map to one building and opens
+    // its popup — used by the Mapa view's own search dropdown. If the
+    // building is hidden behind the current wydział filter, clears the
+    // filter first so
+    // it's actually visible rather than silently focusing on nothing.
+    mapaGoToBuilding(budKod) {
+      const entry = this._mapaMarkersByKod && this._mapaMarkersByKod[budKod];
+      if (!entry || !this._leafletMap) return;
+      if (this.state.mapaUnitFilter && entry.building.unitKod !== this.state.mapaUnitFilter) {
+        this.state.mapaUnitFilter = '';
+        this.applyMapaFilter();
+        const filterEl = this.root.querySelector('[data-mapa-filter-root]');
+        if (filterEl) filterEl.outerHTML = this.renderMapaFilterChips();
+      }
+      this._leafletMap.setView(entry.marker.getLatLng(), 17);
+      entry.marker.openPopup();
+      this.mapaClearSearch();
+    }
+
+    // A building hit in the topbar search ("Budynki" section of
+    // renderSearchResults) — jump to the Mapa view and, once its markers
+    // are created, pan to that building and open its popup. The pending kod
+    // lives in state (not a plain field) because the user can land on the
+    // view while buildings are still loading — mountMapaIfNeeded then
+    // consumes it on the first render that actually has markers. One-shot:
+    // cleared when consumed so an unrelated later re-render doesn't zoom
+    // the map again.
+    openMapaFocused(budKod) {
+      if (!budKod) return;
+      this.state.mapaFocusKod = budKod;
+      // Clear any wydział filter BEFORE navigating: the user asked for one
+      // specific building, which may belong to a unit outside it (and a
+      // filter-hidden marker's popup would be a confusing no-op). Doing it
+      // here — pre-render — means the chip strip just draws filterless,
+      // no DOM patching like mapaGoToBuilding needs mid-view.
+      this.state.mapaUnitFilter = '';
+      this.navigate('mapa'); // navigate() itself calls ensureMapaData() — a no-op if already loading/loaded
+    }
+
+    // Bypasses render() same as setMapaFilter — also has to reach into the
+    // DOM directly for the <input>'s own value, since (unlike state) that
+    // isn't something a scoped innerHTML patch of the results dropdown
+    // alone would ever touch.
+    mapaClearSearch() {
+      this.state.mapaSearchQuery = '';
+      const input = this.root.querySelector('[data-mapa-search-input]');
+      if (input) input.value = '';
+      const resultsEl = this.root.querySelector('[data-mapa-search-results-root]');
+      if (resultsEl) resultsEl.innerHTML = '';
+    }
+
+    // Leaflet keeps a live L.Map bound to a specific DOM node. render()
+    // (see its call to this method at the end) replaces `.usospp-root`'s
+    // entire innerHTML on every call, so any previous map instance is left
+    // attached to an already-detached element and must be torn down before
+    // a fresh one is created here — this runs after EVERY render(), not
+    // just the first time "Mapa" is opened. Filter changes (setMapaFilter)
+    // deliberately never call render() for exactly this reason.
+    mountMapaIfNeeded() {
+      if (this.state.view !== 'mapa') {
+        if (this._leafletMap) { this._leafletMap.remove(); this._leafletMap = null; this._mapaMarkersByKod = null; }
+        return;
+      }
+      const container = this.root.querySelector('[data-mapa-map]');
+      if (!container) return; // loading/error/empty state currently shown — nothing to mount yet
+      if (this._leafletMap) { this._leafletMap.remove(); this._leafletMap = null; }
+      const map = window.L.map(container, { center: [51.11, 17.03], zoom: 12 });
+      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      }).addTo(map);
+      const markerIcon = this.mapaMarkerIcon();
+      this._leafletMap = map;
+      this._mapaMarkersByKod = {};
+      this.state.mapaBuildings.forEach((b) => {
+        const marker = window.L.marker([b.lat, b.lng], { icon: markerIcon })
+          .bindPopup(`<b>${esc(b.name)}</b>${b.address ? `<br>${esc(b.address)}` : ''}`);
+        this._mapaMarkersByKod[b.kod] = { marker, building: b };
+      });
+      this.applyMapaFilter(); // also fits the view to whatever ends up visible under the current filter
+      // Pending focus from the topbar's building search (openMapaFocused)
+      // — after applyMapaFilter, so the fit-to-visible wouldn't immediately
+      // undo the pan. animate:false skips the whole-campus → building
+      // transition, landing directly on a tight, unmistakably-this-one
+      // framing. Consumed exactly once.
+      if (this.state.mapaFocusKod) {
+        const entry = this._mapaMarkersByKod[this.state.mapaFocusKod];
+        if (entry) {
+          map.setView(entry.marker.getLatLng(), 18, { animate: false });
+          entry.marker.openPopup();
+        }
+        this.state.mapaFocusKod = null;
+      }
+    }
+
+    // Shared by the full Mapa view and the unit-page preview — explicit
+    // chrome.runtime.getURL icon paths instead of leaflet.css's own relative
+    // `images/marker-icon.png`, needed because that CSS is injected into
+    // USOSweb's own document, not served from our own origin, so a relative
+    // path would resolve against USOSweb's URL.
+    mapaMarkerIcon() {
+      return window.L.icon({
+        iconUrl: chrome.runtime.getURL('vendor/leaflet/images/marker-icon.png'),
+        iconRetinaUrl: chrome.runtime.getURL('vendor/leaflet/images/marker-icon-2x.png'),
+        shadowUrl: chrome.runtime.getURL('vendor/leaflet/images/marker-shadow.png'),
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41],
+      });
+    }
+
+    // Inline map preview on a unit page (renderUnitPage's "Budynki jednostki"
+    // card) — just this unit's buildings (which buildingsForUnit already
+    // includes with all sub-units', recursively), no building search and no
+    // wydział filter chips: the dedicated Mapa view is one "Zobacz na mapie"
+    // click away for pan/zoom beyond this or campus-wide context. Same
+    // teardown-before-remount discipline as mountMapaIfNeeded(): render()
+    // replaces this container on every call, so any live instance would be
+    // stranded on a detached node.
+    mountUnitMapPreview() {
+      if (this._unitMap) { this._unitMap.remove(); this._unitMap = null; this._unitMapMarkersByKod = null; }
+      if (this.state.view !== 'catalogPage' || this.state.catalogKind !== 'unit') return;
+      const buildings = this.state.catalogBuildings;
+      if (!buildings || !buildings.length) return;
+      const container = this.root.querySelector('[data-unit-map]');
+      if (!container) return; // still loading / errored — card (so the div) isn't rendered
+      const map = window.L.map(container, { center: [51.11, 17.03], zoom: 12, scrollWheelZoom: false });
+      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      }).addTo(map);
+      const markerIcon = this.mapaMarkerIcon();
+      // Kept keyed by building kod so unitMapGoToBuilding (the "Pokaż na
+      // mapie" links in the list below the map) can find one marker without
+      // scanning the DOM for it.
+      this._unitMapMarkersByKod = {};
+      const points = [];
+      buildings.forEach((b) => {
+        const marker = window.L.marker([b.lat, b.lng], { icon: markerIcon })
+          .bindPopup(`<b>${esc(b.name)}</b>${b.address ? `<br>${esc(b.address)}` : ''}`);
+        marker.addTo(map);
+        this._unitMapMarkersByKod[b.kod] = marker;
+        points.push(marker.getLatLng());
+      });
+      if (points.length === 1) map.setView(points[0], 17);
+      else map.fitBounds(window.L.latLngBounds(points).pad(0.2));
+      this._unitMap = map;
     }
 
     // The mini timetable embedded directly in the subject page only has a
@@ -1750,7 +2556,7 @@
     plannerToggleSubject(url) {
       if (!url) return;
       if (this.state.plannerExpandedUrl === url) {
-        this.setPlannerState({ plannerExpandedUrl: null });
+        this.setPlannerState({ plannerExpandedUrl: null, plannerPreviewKeys: {} });
         return;
       }
       const existing = {};
@@ -1765,6 +2571,11 @@
       this.setPlannerState({
         plannerExpandedUrl: url,
         plannerDraftSelection: existing,
+        // A brand-new configurator starts with a clean preview state — the
+        // previous subject's "podgląd w planie" ghosts would otherwise linger
+        // on the grid with no visible way to switch them off (their toggle
+        // buttons just left the panel together with the old subject).
+        plannerPreviewKeys: {},
         plannerSubjectLoading: needsFetch ? url : this.state.plannerSubjectLoading,
       });
       if (!needsFetch) return;
@@ -1834,7 +2645,61 @@
         });
         return;
       }
-      this.setPlannerState((s) => ({ plannerDraftSelection: { ...s.plannerDraftSelection, [key]: { ...group, classTypeLabel } } }));
+      this.setPlannerState((s) => {
+        // Committing to a concrete group ends the visual browsing for that
+        // class type: with the preview left on, the freshly-chosen draft
+        // ghost would keep hiding under the pile of remaining candidate
+        // boxes at the same slot.
+        const preview = { ...s.plannerPreviewKeys };
+        delete preview[key];
+        return { plannerDraftSelection: { ...s.plannerDraftSelection, [key]: { ...group, classTypeLabel } }, plannerPreviewKeys: preview };
+      });
+    }
+
+    // Toggles one class type's "podgląd w planie". While on, EVERY group of
+    // that class type is drawn on the preview grid as a hoverable ghost
+    // (renderPlannerGrid) next to the picks already made — the student can
+    // try each group on for size visually before committing to one.
+    // Toggling on also fetches the group list if it isn't cached yet
+    // (plannerLoadGroups is idempotent when it is), so entering visual mode
+    // is a single click — no need to press "Pokaż grupy" first.
+    plannerTogglePreview(key, groupsUrl, classTypeLabel) {
+      if (!key || !groupsUrl) return;
+      const on = !this.state.plannerPreviewKeys[key];
+      this.setPlannerState((s) => {
+        const next = { ...s.plannerPreviewKeys };
+        if (on) next[key] = { groupsUrl, classTypeLabel };
+        else delete next[key];
+        return { plannerPreviewKeys: next };
+      });
+      if (on) this.plannerLoadGroups(groupsUrl);
+    }
+
+    // "Podgląd wszystkich grup" for the whole active cycle at once — the
+    // same operation as plannerTogglePreview, applied to every class type
+    // that has a groups list. Turning everything off only clears THIS
+    // subject's flags.
+    plannerTogglePreviewAll(url) {
+      if (!url) return;
+      const details = this.state.plannerSubjectCache[url];
+      if (!details || !details.supported) return;
+      const relevantCycles = details.cycles.filter((c) => !/zakończon/i.test(c.cycleState || ''));
+      const cycle = (relevantCycles.length ? relevantCycles : details.cycles)[0];
+      if (!cycle) return;
+      const pairs = (cycle.classTypes || [])
+        .filter((ct) => ct.groupsUrl)
+        .map((ct) => [classTypeKey(url, cycle.cycleName, ct.label), { groupsUrl: ct.groupsUrl, classTypeLabel: ct.label }]);
+      if (!pairs.length) return;
+      const allOn = pairs.every(([key]) => this.state.plannerPreviewKeys[key]);
+      this.setPlannerState((s) => {
+        const next = { ...s.plannerPreviewKeys };
+        pairs.forEach(([key, meta]) => {
+          if (allOn) delete next[key];
+          else next[key] = meta;
+        });
+        return { plannerPreviewKeys: next };
+      });
+      if (!allOn) pairs.forEach(([, meta]) => this.plannerLoadGroups(meta.groupsUrl));
     }
 
     // Commits every class-type choice made for the currently-expanded
@@ -1865,7 +2730,7 @@
           };
         });
       const otherPicks = this.state.plannerPicks.filter((p) => !keys.includes(p.key));
-      this.savePlannerPicks([...otherPicks, ...newPicks], { plannerExpandedUrl: null });
+      this.savePlannerPicks([...otherPicks, ...newPicks], { plannerExpandedUrl: null, plannerPreviewKeys: {} });
     }
 
     plannerRemovePick(key) {
@@ -1965,11 +2830,16 @@
     handleInput(e) {
       if (e.target.dataset.action === 'searchInput') this.onSearchInput(e.target.value);
       else if (e.target.dataset.action === 'plannerSearchInput') this.onPlannerSearchInput(e.target.value);
+      else if (e.target.dataset.action === 'mapaSearchInput') this.onMapaSearchInput(e.target.value);
+      else if (e.target.dataset.action === 'catalogSubjectQueryInput') this.setCatalogSubjectsState({ catalogSubjectQuery: e.target.value });
     }
 
     handleKeydown(e) {
       if (e.target.dataset.action === 'searchInput' && e.key === 'Escape') {
         this.clearSearch();
+        e.target.blur();
+      } else if (e.target.dataset.action === 'mapaSearchInput' && e.key === 'Escape') {
+        this.mapaClearSearch();
         e.target.blur();
       }
     }
@@ -1984,8 +2854,17 @@
       const q = value.trim();
       if (q.length < 3) {
         this.setSearchState({ searchResults: null, searchLoading: false });
+        // Two characters are already enough to resolve a campus building
+        // (renderSearchResults matches buildings locally) — warm the
+        // campus list at that point so those queries can answer too.
+        if (q.length === 2) this.ensureMapaData();
         return;
       }
+      // Katalog search is about to fire; buildings meanwhile answer from
+      // the campus list client-side, so warm it if not loaded yet.
+      // ensureMapaData() is idempotent and mostly serves from cache, and
+      // its loading state only ever affects the Mapa view's rendering.
+      this.ensureMapaData();
       this.setSearchState({ searchLoading: true });
       this._searchDebounce = setTimeout(() => this.runSearch(q), 300);
     }
@@ -2053,6 +2932,8 @@
         </div>
       `;
       this.updateDocumentTitle();
+      this.mountMapaIfNeeded();
+      this.mountUnitMapPreview();
     }
 
     // Unlike the Aktualności dot, this has no "seen" state to persist — it's
@@ -2224,13 +3105,42 @@
     // out of scope the same way USOSmail itself did.
     renderSearchResults() {
       const q = this.state.searchQuery.trim();
-      if (q.length < 3) return '';
+      if (q.length < 2) return '';
+      const ql = q.toLowerCase();
+      // Campus buildings come from the already-loaded campus list (warmed
+      // by onSearchInput) and are matched client-side — no server query —
+      // so they can answer at 2 characters, before the 3-char katalog
+      // search has even fired. Empty when the list isn't loaded yet or its
+      // fetch failed; the section then simply doesn't appear.
+      // b.kod required: buildings whose USOS row carried no bud_kod (rare —
+      // 1 of 93 rows on a live PWr fetch) can't be focused by kod after the
+      // click, so offering them as search results would be a silent no-op.
+      const buildings = this.state.mapaBuildings
+        .filter((b) => b.kod && (
+          (b.name && b.name.toLowerCase().includes(ql))
+          || String(b.kod).toLowerCase().includes(ql)
+          || (b.address && b.address.toLowerCase().includes(ql))))
+        .slice(0, 4);
+      const buildingItem = (b) => `
+        <div class="usospp-search-item" data-action="openMapaFocused" data-kod="${esc(b.kod)}">
+          <div class="usospp-search-item-title">${esc(b.name)}</div>
+          <div class="usospp-search-item-sub">${esc(b.address || b.unitName || '')}</div>
+        </div>
+      `;
       if (this.state.searchLoading) {
-        return `<div class="usospp-search-dropdown"><div class="usospp-empty-hint" style="padding:16px;">Szukanie…</div></div>`;
+        if (!buildings.length) {
+          return `<div class="usospp-search-dropdown"><div class="usospp-empty-hint" style="padding:16px;">Szukanie…</div></div>`;
+        }
+        return `
+          <div class="usospp-search-dropdown">
+            <div class="usospp-search-section-title">Budynki</div>
+            ${buildings.map(buildingItem).join('')}
+            <div class="usospp-empty-hint" style="padding:8px 16px 12px 16px;">Szukanie w katalogu…</div>
+          </div>
+        `;
       }
-      const r = this.state.searchResults;
-      if (!r) return '';
-      const total = r.subjects.length + r.units.length + r.programs.length;
+      const r = this.state.searchResults || { subjects: [], units: [], programs: [] };
+      const total = r.subjects.length + r.units.length + r.programs.length + buildings.length;
       if (total === 0) {
         return `
           <div class="usospp-search-dropdown">
@@ -2248,6 +3158,7 @@
       ` : '');
       return `
         <div class="usospp-search-dropdown">
+          ${section('Budynki', buildings, buildingItem)}
           ${section('Przedmioty', r.subjects.slice(0, 6), (subj) => `
             <div class="usospp-search-item" data-action="searchOpenSubject" data-url="${esc(location.origin)}/kontroler.php?_action=katalog2/przedmioty/pokazPrzedmiot&prz_kod=${esc(subj.kod)}">
               <div class="usospp-search-item-title">${esc(subj.nazwa)}</div>
@@ -2271,11 +3182,13 @@
     }
 
     renderView() {
-      // Logged out of USOSweb: no per-page data exists to show regardless
-      // of which nav item is active, so every view falls back to the same
-      // login prompt instead of rendering its normal (empty) content — the
-      // sidebar/topbar stay fully usable, only the content pane changes.
-      if (this.data.loggedOut) return this.renderLoggedOut();
+      // Logged out of USOSweb, the view split matters: sections built from
+      // pages USOSweb itself serves to anonymous visitors (PUBLIC_VIEWS —
+      // Aktualności, wyszukiwarka→katalog pages, campus Mapa) render
+      // normally on public data alone, while every personal view falls back
+      // to the same login prompt instead of its normal (empty) content —
+      // the sidebar/topbar stay fully usable either way.
+      if (this.data.loggedOut && !PUBLIC_VIEWS.has(this.state.view)) return this.renderLoggedOut();
       switch (this.state.view) {
         case 'dashboard': return this.renderDashboard();
         case 'aktualnosci': return this.renderAktualnosci();
@@ -2294,6 +3207,7 @@
         case 'ankiety': return this.renderAnkiety();
         case 'ustawienia': return this.renderUstawienia();
         case 'subjectPage': return this.renderSubjectPage();
+        case 'mapa': return this.renderMapa();
         case 'catalogPage': {
           if (this.state.catalogKind === 'unit') return this.renderUnitPage();
           if (this.state.catalogKind === 'stage') return this.renderStagePage();
@@ -2375,7 +3289,7 @@
           <div class="usospp-loggedout">
             <div class="usospp-loggedout-logo">${logoSvg(false)}</div>
             <div class="usospp-loggedout-title">Zaloguj się do USOSweb</div>
-            <p class="usospp-loggedout-text">Nie jesteś obecnie zalogowany/a, więc USOS++ nie ma skąd wziąć danych.</p>
+            <p class="usospp-loggedout-text">Nie jesteś obecnie zalogowany/a, więc ten widok nie ma skąd wziąć danych. Aktualności, Mapa kampusu i wyszukiwarka (przedmioty, jednostki, programy studiów) działają też bez logowania — wybierz je z menu po lewej.</p>
             ${loginUrl ? `
               <a class="usospp-btn-primary" style="display:inline-block;text-decoration:none;" href="${esc(loginUrl)}">Zaloguj się →</a>
             ` : `
@@ -2455,6 +3369,7 @@
         <div class="usospp-view">
           ${items.map((item) => `
             <div class="usospp-card">
+              ${item.date ? `<div class="usospp-muted-text" style="margin-bottom:6px;">${esc(item.date)}</div>` : ''}
               <div class="usospp-card-title" style="margin-bottom:10px;">${esc(item.title)}</div>
               <div class="usospp-news-body">${item.html}</div>
             </div>
@@ -2644,7 +3559,7 @@
     // stay a link-out for now rather than replicating those full pages too.
     renderUnitPage() {
       const s = this.state;
-      const header = backLink(s.catalogBackView || 'dashboard');
+      const header = this.catalogBackHeader();
       if (s.catalogLoading) {
         return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie…</div></div></div>`;
       }
@@ -2670,17 +3585,249 @@
               </div>
             ` : ''}
           </div>
-          ${d.children.length ? `
+          ${d.children.length ? this.renderUnitChildrenCards(d.children) : ''}
+          ${this.renderCatalogProgramsSection()}
+          ${this.renderCatalogSubjectsSection()}
+          ${s.catalogBuildings.length ? `
             <div class="usospp-card">
-              <div class="usospp-card-title" style="margin-bottom:14px;">Jednostki podległe</div>
-              ${d.children.map((c) => `
-                <div class="usospp-list-row" data-action="searchOpenUnit" data-kod="${esc(c.kod)}" style="cursor:pointer;">
-                  <div style="font-size:13.5px;font-weight:500;">${esc(c.name)}</div>
-                  <div style="color:var(--ink-3);">→</div>
+              <div class="usospp-card-title" style="margin-bottom:14px;">Budynki jednostki</div>
+              <div class="usospp-map-container" data-unit-map style="height:260px;border-radius:12px;overflow:hidden;margin-bottom:14px;"></div>
+              ${s.catalogBuildings.map((b) => `
+                <div class="usospp-list-row" style="align-items:flex-start;">
+                  <div>
+                    <div style="font-size:13.5px;font-weight:500;">${esc(b.name)}</div>
+                    ${b.address ? `<div style="color:var(--ink-3);font-size:12px;margin-top:2px;">${esc(b.address)}</div>` : ''}
+                  </div>
+                  <div style="flex-shrink:0;">${b.kod ? `<a data-action="unitMapGoToBuilding" data-kod="${esc(b.kod)}" style="font-size:12px;font-weight:600;color:#d9773a;cursor:pointer;">Pokaż na mapie ↑</a>` : ''}</div>
                 </div>
               `).join('')}
             </div>
           ` : ''}
+        </div>
+      `;
+    }
+
+    // A wydział's direct children mix teaching units (katedry, instytuty)
+    // with administrative/support ones (Dziekanat, Zespół…, Centralne
+    // Laboratorium…) — verified live on PWr W3 (9 katedry + 1 instytut vs
+    // 20 pomocnicze) and PB. Only name prefixes seen live at BOTH
+    // universities count as teaching here; everything else falls into the
+    // neutral "Pozostałe jednostki" bucket, which is what made the old flat
+    // "Jednostki podległe" list look like a random grab bag.
+    renderUnitChildrenCards(children) {
+      const isTeaching = (name) => /^(Katedra|Instytut)\b/.test(name || '');
+      const row = (c) => `
+        <div class="usospp-list-row" data-action="searchOpenUnit" data-kod="${esc(c.kod)}" style="cursor:pointer;">
+          <div style="font-size:13.5px;font-weight:500;">${esc(c.name)}</div>
+          <div style="color:var(--ink-3);">→</div>
+        </div>`;
+      const teaching = children.filter((c) => isTeaching(c.name));
+      const other = children.filter((c) => !isTeaching(c.name));
+      return `
+          ${teaching.length ? `
+            <div class="usospp-card">
+              <div class="usospp-card-title" style="margin-bottom:14px;">Katedry i instytuty</div>
+              ${teaching.map(row).join('')}
+            </div>
+          ` : ''}
+          ${other.length ? `
+            <div class="usospp-card">
+              <div class="usospp-card-title" style="margin-bottom:14px;">Pozostałe jednostki</div>
+              ${other.map(row).join('')}
+            </div>
+          ` : ''}
+      `;
+    }
+
+    // The newest cycle year seen across the loaded rows — cdyd_kod values
+    // look like "2024/25-Z" (PWr) or "2018Z" (PB), so the leading 4 digits
+    // normalize both. This is deliberately data-driven rather than derived
+    // from today's date: whatever the listing itself considers the newest
+    // year IS the "aktualny rok" the toggle keeps.
+    catalogSubjectsCurrentYear() {
+      const years = new Set();
+      this.state.catalogSubjects.forEach((r) => r.years.forEach((y) => years.add(y)));
+      return years.size ? Math.max(...years) : null;
+    }
+
+    // "Przedmioty" — the unit's own subject offering (wydziały hold the
+    // subjects at both verified universities; katedry return none, so the
+    // section just doesn't render for them). Three patch zones — count
+    // title, current-year toggle, rows — are kept apart from each other on
+    // purpose (see setCatalogSubjectsSectionState): the <input> between
+    // them never gets rebuilt, so neither section updates arriving while
+    // the user types nor the patchers can drop its value or focus.
+    renderCatalogSubjectsSection() {
+      const s = this.state;
+      if (!s.catalogSubjects.length && !s.catalogSubjectsLoading && !s.catalogSubjectsTotal) return '';
+      return `
+        <div class="usospp-card" data-catalog-subjects-card>
+          <div class="usospp-card-head">
+            <div class="usospp-card-title" data-catalog-subjects-title>${this.renderCatalogSubjectsTitle()}</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">
+            <input
+              class="usospp-search-input"
+              data-action="catalogSubjectQueryInput"
+              type="text"
+              placeholder="Szukaj po nazwie lub kodzie…"
+              autocomplete="off"
+              value="${esc(s.catalogSubjectQuery)}"
+              style="flex:1;"
+            >
+            <span data-catalog-subjects-toggle-wrap style="flex:0 0 auto;">${this.renderCatalogSubjectsToggle()}</span>
+          </div>
+          <div data-catalog-subjects-root>${this.renderCatalogSubjectsSectionBody()}</div>
+        </div>
+      `;
+    }
+
+    // Patchable bits of the section above — see setCatalogSubjectsSectionState.
+    renderCatalogSubjectsTitle() {
+      const s = this.state;
+      return `Przedmioty${s.catalogSubjects.length ? ` (${s.catalogSubjects.length}${s.catalogSubjectsTotal > s.catalogSubjects.length ? ` z ${s.catalogSubjectsTotal}` : ''})` : ''}`;
+    }
+
+    renderCatalogSubjectsToggle() {
+      const s = this.state;
+      const currentYear = this.catalogSubjectsCurrentYear();
+      if (!currentYear || !s.catalogSubjects.length) return '';
+      const yearLabel = `${currentYear}/${String((currentYear + 1) % 100).padStart(2, '0')}`;
+      return `<a data-action="toggleCatalogSubjectsCurrentOnly" style="font-size:12px;font-weight:600;color:${s.catalogSubjectsCurrentOnly ? '#d9773a' : 'var(--ink-3)'};white-space:nowrap;cursor:pointer;">${s.catalogSubjectsCurrentOnly ? '●' : '○'} tylko ${yearLabel}</a>`;
+    }
+
+    // Patched part of the section above — see setCatalogSubjectsState. Rows
+    // are click-through to our existing subject page via the subject's own
+    // details URL. The 400-row render ceiling keeps a 3500+-row wydział
+    // (verified live: W3 = 3576) from freezing the panel document; the
+    // mini-search narrows within the loaded batch, "Wczytaj więcej" extends
+    // it, and mass-scrolling is what the classic UI's pagination is for.
+    renderCatalogSubjectsSectionBody() {
+      const s = this.state;
+      const currentYear = this.catalogSubjectsCurrentYear();
+      const q = s.catalogSubjectQuery.trim().toLowerCase();
+      const rows = s.catalogSubjects.filter((r) => {
+        if (s.catalogSubjectsCurrentOnly && currentYear && !r.years.includes(currentYear)) return false;
+        if (!q) return true;
+        return (r.name || '').toLowerCase().includes(q) || (r.kod || '').toLowerCase().includes(q);
+      });
+      const visible = Math.min(rows.length, 400);
+      return `
+          ${rows.slice(0, 400).map((r) => `
+            <div class="usospp-list-row" data-action="openSubjectPage" data-url="${esc(r.url)}" style="cursor:pointer;align-items:flex-start;">
+              <div>
+                <div style="font-size:13.5px;font-weight:500;">${esc(r.name)}</div>
+                ${r.grupa ? `<div style="color:var(--ink-3);font-size:12px;margin-top:2px;">${esc(r.grupa)}</div>` : ''}
+              </div>
+              <div style="color:var(--ink-3);font-size:11.5px;font-family:ui-monospace,Menlo,monospace;flex-shrink:0;">${esc(r.kod)}</div>
+            </div>
+          `).join('')}
+          ${rows.length > 400 ? `<div class="usospp-empty-hint">Pokazuję pierwszych 400 — doprecyzuj wyszukiwanie, aby zawęzić.</div>` : ''}
+          ${!rows.length && !s.catalogSubjectsLoading ? `<div class="usospp-empty-hint">Brak przedmiotów${q || (s.catalogSubjectsCurrentOnly && currentYear) ? ' spełniających filtr' : ''}.</div>` : ''}
+          ${s.catalogSubjectsLoading ? `<div class="usospp-empty-hint">Wczytywanie…</div>` : ''}
+          ${!s.catalogSubjectsLoading ? `
+            ${(rows.length && (s.catalogSubjectsTotal > s.catalogSubjects.length || q || (s.catalogSubjectsCurrentOnly && currentYear))) ? `<div style="font-size:12px;color:var(--ink-3);margin-top:10px;">${visible} z ${s.catalogSubjects.length}${s.catalogSubjectsTotal > s.catalogSubjects.length ? ` wczytanych (ogółem ${s.catalogSubjectsTotal})` : ' pasujących'}</div>` : ''}
+            ${s.catalogSubjectsNextUrl ? `<a data-action="catalogSubjectsLoadMore" style="display:inline-block;margin-top:10px;font-size:13px;font-weight:600;color:#d9773a;cursor:pointer;">Wczytaj więcej →</a>` : ''}
+          ` : ''}
+      `;
+    }
+
+    // "Programy studiów" — every kierunek this unit offers, each listing its
+    // program instances (full-time/Erasmus/…) as chips that open our own
+    // program page. Hidden entirely while the first page loads empty or for
+    // units without programmes (verified marker), same graceful rules as the
+    // subjects section. Loaded chips stay visible while "Wczytaj więcej"
+    // fetches — only the first, still-empty load shows "Wczytywanie…" — so
+    // the in-place card swap (setCatalogProgramsState) doesn't flash.
+    renderCatalogProgramsSection() {
+      const s = this.state;
+      if (!s.catalogPrograms.length && !s.catalogProgramsLoading) return '';
+      const byKierunek = new Map();
+      s.catalogPrograms.forEach((p) => {
+        const key = p.kierunek || '—';
+        if (!byKierunek.has(key)) byKierunek.set(key, []);
+        byKierunek.get(key).push(p);
+      });
+      const chip = (p) => `<button class="usospp-mode-btn" style="flex:0 0 auto;border-radius:99px;padding:6px 13px;font-size:12.5px;" data-action="searchOpenProgram" data-kod="${esc(p.kod)}">${esc(p.name)}</button>`;
+      return `
+        <div class="usospp-card" data-catalog-programs-card>
+          <div class="usospp-card-title" style="margin-bottom:14px;">Programy studiów (${s.catalogPrograms.length})</div>
+          ${(s.catalogProgramsLoading && !s.catalogPrograms.length) ? `<div class="usospp-empty-hint">Wczytywanie…</div>` : `
+            ${[...byKierunek.entries()].map(([kierunek, programs]) => `
+              <div style="margin-bottom:10px;">
+                ${kierunek !== '—' ? `<div style="font-size:12px;font-weight:600;color:var(--ink-3);margin-bottom:4px;">${esc(kierunek)}</div>` : ''}
+                <div style="display:flex;flex-wrap:wrap;gap:6px;">${programs.map(chip).join('')}</div>
+              </div>
+            `).join('')}
+            ${s.catalogProgramsNextUrl ? `<a data-action="catalogProgramsLoadMore" style="display:inline-block;margin-top:10px;font-size:13px;font-weight:600;color:#d9773a;cursor:pointer;">Wczytaj więcej →</a>` : ''}
+          `}
+        </div>
+      `;
+    }
+
+    // Campus-wide building map — see ensureMapaData/mountMapaIfNeeded for
+    // how data is fetched and how the Leaflet instance is (re)mounted.
+    renderMapa() {
+      const s = this.state;
+      if (s.mapaLoading) {
+        return `<div class="usospp-view"><div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie budynków kampusu…</div></div></div>`;
+      }
+      if (s.mapaError) {
+        return `
+          <div class="usospp-view">
+            <div class="usospp-card">
+              <div class="usospp-empty-hint">Nie udało się wczytać mapy budynków.</div>
+              <div style="margin-top:10px;"><a data-action="mapaRefresh" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div>
+            </div>
+          </div>
+        `;
+      }
+      if (!s.mapaBuildings.length) {
+        return `<div class="usospp-view"><div class="usospp-card"><div class="usospp-empty-hint">Brak budynków z dostępnymi współrzędnymi.</div></div></div>`;
+      }
+      return `
+        <div class="usospp-view">
+          <div class="usospp-card">
+            <div class="usospp-card-head">
+              <div class="usospp-card-title">Budynki kampusu (${s.mapaBuildings.length})</div>
+              <a data-action="mapaRefresh" style="font-size:12px;color:var(--ink-3);text-decoration:underline;cursor:pointer;">odśwież</a>
+            </div>
+            <div class="usospp-search-wrap" style="width:100%;margin-bottom:12px;">
+              <input
+                class="usospp-search-input"
+                data-action="mapaSearchInput"
+                data-mapa-search-input
+                type="text"
+                placeholder="Szukaj budynku…"
+                autocomplete="off"
+                value="${esc(s.mapaSearchQuery)}"
+              >
+              <div data-mapa-search-results-root>${this.renderMapaSearchResults()}</div>
+            </div>
+            ${this.renderMapaFilterChips()}
+            <div class="usospp-map-container" data-mapa-map style="height:520px;border-radius:12px;overflow:hidden;margin-top:12px;"></div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Its own top-level element carries data-mapa-filter-root so setMapaFilter
+    // can replace just this chip strip (outerHTML) without touching the map
+    // container next to it — same reasoning as setTopbarState et al. Chips
+    // are keyed (data-unit) by unitKod, not display name — see
+    // applyMapaFilter's comment for why name equality would be wrong.
+    renderMapaFilterChips() {
+      const s = this.state;
+      const seen = new Map();
+      s.mapaBuildings.forEach((b) => {
+        if (b.unitKod && !seen.has(b.unitKod)) seen.set(b.unitKod, b.unitName || b.unitKod);
+      });
+      const units = [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1], 'pl'));
+      const chipStyle = 'flex:0 0 auto;border-radius:99px;padding:6px 13px;font-size:12.5px;';
+      return `
+        <div data-mapa-filter-root style="display:flex;flex-wrap:wrap;gap:6px;">
+          <button class="usospp-mode-btn${!s.mapaUnitFilter ? ' active' : ''}" style="${chipStyle}" data-action="mapaSetFilter" data-unit="">Wszystkie</button>
+          ${units.map(([kod, name]) => `<button class="usospp-mode-btn${s.mapaUnitFilter === kod ? ' active' : ''}" style="${chipStyle}" data-action="mapaSetFilter" data-unit="${esc(kod)}">${esc(name)}</button>`).join('')}
         </div>
       `;
     }
@@ -2690,7 +3837,7 @@
     // openStagePage/renderStagePage) instead of bouncing out to USOS.
     renderProgramPage() {
       const s = this.state;
-      const header = backLink(s.catalogBackView || 'dashboard');
+      const header = this.catalogBackHeader();
       if (s.catalogLoading) {
         return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie…</div></div></div>`;
       }
@@ -3424,13 +4571,23 @@
       if (!cycle.classTypes.length) {
         return `<div class="usospp-empty-hint" style="padding:10px 0;">Brak zdefiniowanych typów zajęć dla tego cyklu.</div>`;
       }
+      const previewable = cycle.classTypes.filter((ct) => ct.groupsUrl);
+      const allPreviewed = previewable.length > 0
+        && previewable.every((ct) => this.state.plannerPreviewKeys[classTypeKey(url, cycle.cycleName, ct.label)]);
       return `
         <div style="padding:2px 0 12px 0;">
           <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${esc(cycle.cycleName)}${cycle.period ? ` · ${esc(cycle.period)}` : ''}</div>
           ${cycle.classTypes.map((ct) => this.renderPlannerClassType(url, cycle.cycleName, ct)).join('')}
-          <button class="usospp-btn-primary" style="margin-top:6px;" data-action="plannerAddSubject" data-url="${esc(url)}" data-subject-name="${esc(details.subjectName)}" data-cycle-name="${esc(cycle.cycleName)}">
-            Dodaj do planu
-          </button>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
+            <button class="usospp-btn-primary" data-action="plannerAddSubject" data-url="${esc(url)}" data-subject-name="${esc(details.subjectName)}" data-cycle-name="${esc(cycle.cycleName)}">
+              Dodaj do planu
+            </button>
+            ${previewable.length ? `
+              <button class="usospp-btn-ghost" data-action="plannerTogglePreviewAll" data-url="${esc(url)}">
+                ${allPreviewed ? 'Ukryj podgląd w planie' : 'Podgląd wszystkich grup'}
+              </button>
+            ` : ''}
+          </div>
         </div>
       `;
     }
@@ -3448,12 +4605,17 @@
       }
       const cached = this.state.plannerGroupsCache[ct.groupsUrl];
       const pendingRemoval = !!(selection && selection.removed);
+      const previewed = !!this.state.plannerPreviewKeys[key];
       return `
         <div style="margin-bottom:14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;">
             <div style="font-size:12.5px;font-weight:600;">${esc(ct.label)}</div>
-            ${selection && !pendingRemoval ? `<span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:11px;">grupa ${esc(selection.nr)}</span>` : ''}
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+              ${selection && !pendingRemoval ? `<span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:11px;">grupa ${esc(selection.nr)}</span>` : ''}
+              <a class="usospp-cand-toggle${previewed ? ' active' : ''}" data-action="plannerTogglePreview" data-key="${esc(key)}" data-groups-url="${esc(ct.groupsUrl)}" data-class-type-label="${esc(ct.label)}">${previewed ? 'ukryj podgląd' : 'podgląd w planie'}</a>
+            </div>
           </div>
+          ${previewed ? `<div style="font-size:11px;color:var(--ink-3);margin-bottom:6px;">Wszystkie grupy tego typu są widoczne w planie jako propozycje — najedź na termin, żeby zobaczyć plan z konkretną grupą; kliknij go, żeby ją wybrać.</div>` : ''}
           ${pendingRemoval ? `<div style="font-size:11.5px;color:oklch(55% 0.19 25);margin-bottom:6px;">Grupa ${esc(selection.nr)} zostanie usunięta z planu po zapisaniu — kliknij ją ponownie, aby to odwołać.</div>` : ''}
           ${!cached ? `
             <button class="usospp-btn-ghost" data-action="plannerLoadGroups" data-url="${esc(ct.groupsUrl)}">Pokaż grupy</button>
@@ -3526,7 +4688,7 @@
           flat.push({
             day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
             subjectName: p.subjectName, classTypeShort: p.classTypeShort, teacher: p.teacher,
-            seed: this.plannerColorSeed(p.subjectName), pickKey: `${p.key}::${i}`, draft: false, pendingRemoval,
+            seed: this.plannerColorSeed(p.subjectName), pickKey: `${p.key}::${i}`, key: p.key, draft: false, pendingRemoval,
           });
         });
       });
@@ -3555,7 +4717,41 @@
             flat.push({
               day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
               subjectName, classTypeShort: shortClassType(g.classTypeLabel), teacher: g.teacher,
-              seed: this.plannerColorSeed(subjectName), pickKey: `${key}::draft::${i}`, draft: true,
+              seed: this.plannerColorSeed(subjectName), pickKey: `${key}::draft::${i}`, key, draft: true,
+            });
+          });
+        });
+
+        // Previewed class types ("podgląd w planie", see
+        // plannerTogglePreview): every not-yet-chosen group becomes a
+        // lightweight ghost box for each of its sessions (renderPlannerCandDay).
+        // They feed the hour range like real entries — the time axis has to
+        // stretch to show them — but are deliberately excluded from the
+        // conflict computation below: trying every group on for size is the
+        // whole point of the preview.
+        Object.entries(this.state.plannerPreviewKeys).forEach(([key, meta]) => {
+          const groupsEntry = this.state.plannerGroupsCache[meta.groupsUrl];
+          if (!groupsEntry || groupsEntry.loading || !groupsEntry.data || !groupsEntry.data.supported) return;
+          const draft = this.state.plannerDraftSelection[key];
+          groupsEntry.data.groups.forEach((g) => {
+            // The class type's draft/committed choice is already on the
+            // grid (dashed ghost / solid box) — ghosting the same group a
+            // second time would just double-draw it on top of itself. An
+            // exception: while the committed choice is pending removal
+            // (draft.removed), it renders struck-through and the student
+            // is re-picking, so its group belongs back in the candidates.
+            if (draft && !draft.removed && draft.nr === g.nr) return;
+            const removalPending = !!(draft && draft.removed);
+            if (!removalPending && this.state.plannerPicks.some((p) => p.key === key && p.nr === g.nr)) return;
+            (g.sessions || []).forEach((s) => {
+              if (!s.start || !s.end) return;
+              flat.push({
+                day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
+                subjectName, classTypeShort: shortClassType(meta.classTypeLabel), teacher: g.teacher,
+                seed: this.plannerColorSeed(subjectName), pickKey: `cand::${key}::${g.nr}`, key,
+                draft: false, pendingRemoval: false, candidate: true, candGroup: `${key}::${g.nr}`,
+                candRef: { key, groupsUrl: meta.groupsUrl, classTypeLabel: meta.classTypeLabel, nr: g.nr, teacher: g.teacher },
+              });
             });
           });
         });
@@ -3584,6 +4780,7 @@
           for (let j = i + 1; j < list.length; j++) {
             const a = list[i];
             const b = list[j];
+            if (a.candidate || b.candidate) continue;
             if (sessionsOverlap(a, b)) {
               conflicts.add(a.pickKey);
               conflicts.add(b.pickKey);
@@ -3592,20 +4789,38 @@
         }
       });
 
+      // Which candidate groups would collide with the schedule as it
+      // stands. Same-key entries are exempt — a different group of the
+      // same class type REPLACES the current choice, it doesn't stack on
+      // it — as are picks pending removal (the student is already
+      // re-choosing there). Purely candidate-vs-candidate overlap never
+      // counts: parallel groups sharing one slot are the normal case.
+      const riskyGids = new Set();
+      Object.values(byDay).forEach((list) => {
+        list.forEach((c) => {
+          if (!c.candidate) return;
+          list.forEach((r) => {
+            if (r.candidate || r.pendingRemoval || r.key === c.key) return;
+            if (sessionsOverlap(c, r)) riskyGids.add(c.candGroup);
+          });
+        });
+      });
+
       const dayGroups = DAY_KEYS.map((dk) => ({ day: dk, entries: byDay[dk] || [] })).filter((d) => d.entries.length);
 
       return `
         ${conflicts.size ? `<div style="font-size:12px;font-weight:600;color:oklch(55% 0.19 25);margin-bottom:10px;">⚠ Wybrane zajęcia nakładają się w czasie — zaznaczone poniżej.</div>` : ''}
-        <div class="usospp-timetable">
+        <div class="usospp-timetable" data-planner-grid>
           <div class="usospp-tt-hours" style="height:${totalHeight}px;">
             ${hours.map((h) => `<div class="usospp-tt-hour" style="top:${(h - hourStart) * ROW_H}px;">${h}:00</div>`).join('')}
           </div>
           <div class="usospp-tt-days">
-            ${dayGroups.map((d) => `
+            ${dayGroups.map((d, di) => `
               <div class="usospp-tt-daycol">
                 <div class="usospp-tt-daylabel">${esc(d.day)}</div>
                 <div class="usospp-tt-daybody" style="height:${totalHeight}px;background-size:100% ${ROW_H}px;">
-                  ${d.entries.map((e) => {
+                  ${this.renderPlannerCandDay(d.day, d.entries.filter((e) => e.candidate), hourStart, dark, riskyGids, di, dayGroups.length)}
+                  ${d.entries.filter((e) => !e.candidate).map((e) => {
                     const startMin = toMin(e.start);
                     const endMin = toMin(e.end);
                     const top = (startMin - hourStart * 60) * (ROW_H / 60);
@@ -3636,6 +4851,104 @@
               </div>
             `).join('')}
           </div>
+        </div>
+      `;
+    }
+
+    // Candidate ghosts for one day column of the preview grid — entries
+    // from previewed class types ("podgląd w planie"), clustered by
+    // (start, end, weeks). Parallel groups almost always share one
+    // identical slot, and a stack of exact-duplicate boxes would only ever
+    // let the top one be hovered, so a multi-group cluster renders as a
+    // single neutral "N grup" box: hovering it opens a popover with one
+    // row per group (row hover = live preview in the grid, row click =
+    // choose), backed by one hidden per-group box so the hovered group can
+    // materialize exactly where the neutral box sits. A cluster of one is
+    // the simple case from the feature description — its box is directly
+    // hoverable/clickable.
+    renderPlannerCandDay(dayKey, candEntries, hourStart, dark, riskyGids, dayIndex, dayCount) {
+      if (!candEntries.length) return '';
+      const ROW_H = 60;
+      const bySlot = new Map();
+      candEntries.forEach((e) => {
+        const cid = `${dayKey}::${e.start}::${e.end}::${e.weeks || ''}`;
+        if (!bySlot.has(cid)) bySlot.set(cid, []);
+        bySlot.get(cid).push(e);
+      });
+      // The rightmost day columns anchor the popover to the right edge, so
+      // it grows inward instead of widening the timetable's horizontal
+      // scroll to nothing.
+      const anchorRight = dayIndex >= dayCount - 2;
+      return [...bySlot.entries()].map(([cid, entries]) => {
+        const first = entries[0];
+        const top = (toMin(first.start) - hourStart * 60) * (ROW_H / 60);
+        const height = Math.max(36, (toMin(first.end) - toMin(first.start)) * (ROW_H / 60));
+        if (entries.length === 1) {
+          return this.renderPlannerCandBox(first, { top, height, dark, stacked: false, risky: riskyGids.has(first.candGroup) });
+        }
+        const boxes = entries
+          .map((e) => this.renderPlannerCandBox(e, { top, height, dark, stacked: true, risky: riskyGids.has(e.candGroup) }))
+          .join('');
+        const byGid = new Map();
+        entries.forEach((e) => { if (!byGid.has(e.candGroup)) byGid.set(e.candGroup, e); });
+        const rows = [...byGid.values()].map((e) => `
+          <div class="usospp-cand-row${riskyGids.has(e.candGroup) ? ' usospp-cand-row--risk' : ''}" data-cand-row="1"
+               data-cand-group="${esc(e.candGroup)}" data-action="plannerSelectGroup"
+               data-key="${esc(e.candRef.key)}" data-groups-url="${esc(e.candRef.groupsUrl)}"
+               data-nr="${esc(e.candRef.nr)}" data-class-type-label="${esc(e.candRef.classTypeLabel)}">
+            <div class="usospp-cand-row-main">
+              Grupa ${esc(e.candRef.nr)}
+              <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:10px;padding:1px 7px;">${esc(e.classTypeShort)}</span>
+              ${riskyGids.has(e.candGroup) ? '<span class="usospp-cand-risk-dot" title="Nachodzi na zajęcia już wybrane w planie"></span>' : ''}
+            </div>
+            <div class="usospp-cand-row-sub">${esc(e.candRef.teacher || 'brak danych o prowadzącym')}${e.place ? ` · ${esc(shortPlace(e.place))}` : ''}</div>
+          </div>
+        `).join('');
+        const labels = [...new Set(entries.map((e) => e.classTypeShort))];
+        const color = subjectColor(this.plannerColorSeed(first.subjectName), dark);
+        const weeksTag = weeksLabel(first.weeks);
+        return `
+          <div class="usospp-tt-entry usospp-tt-entry--cand usospp-cand-neutral" data-cand-neutral="1" data-cand-cluster="${esc(cid)}"
+               style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:0.45;"
+               title="${esc(`${byGid.size} równoległych grup na ten termin — najedź, aby je porównać`)}">
+            <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(first.start)}–${esc(first.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
+            <div class="usospp-tt-entry-label" style="color:${color.label};">${labels.length === 1 ? `${esc(labels[0])} · ` : ''}${byGid.size} grup — wybierz</div>
+            <div class="usospp-tt-entry-meta" style="color:${color.meta};">najedź, aby porównać terminy</div>
+          </div>
+          ${boxes}
+          <div class="usospp-cand-pop" data-cand-pop="${esc(cid)}" data-cand-cluster="${esc(cid)}" style="top:${top + height + 2}px;${anchorRight ? 'right:2px;' : 'left:2px;'}">
+            <div class="usospp-cand-pop-title">Najedź na grupę, aby zobaczyć ją w planie — kliknij, aby wybrać:</div>
+            ${rows}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // One candidate group's ghost box. Same visual family as a draft ghost
+    // (dashed, subject colour) but visibly lighter — a "maybe", not a
+    // choice. Clicking runs the very same plannerSelectGroup the radio rows
+    // in the subject list use, so a group picked from the grid is
+    // indistinguishable from one picked from the list afterwards.
+    renderPlannerCandBox(e, { top, height, dark, stacked, risky }) {
+      const color = subjectColor(e.seed, dark);
+      const weeksTag = weeksLabel(e.weeks);
+      const full = `${e.subjectName} — ${e.candRef.classTypeLabel} — grupa ${e.candRef.nr}`
+        + (e.teacher ? ` — ${e.teacher}` : '')
+        + (e.place ? ` — ${e.place}` : '')
+        + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '')
+        + (risky ? ' — nachodzi na zajęcia już wybrane w planie' : '')
+        + ' — propozycja, kliknij, aby wybrać';
+      return `
+        <div class="usospp-tt-entry usospp-tt-entry--cand${stacked ? ' usospp-cand-in-stack' : ''}${risky ? ' usospp-cand-risk' : ''}"
+             data-cand-group="${esc(e.candGroup)}" data-action="plannerSelectGroup"
+             data-key="${esc(e.candRef.key)}" data-groups-url="${esc(e.candRef.groupsUrl)}"
+             data-nr="${esc(e.candRef.nr)}" data-class-type-label="${esc(e.candRef.classTypeLabel)}"
+             style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:0.55;"
+             title="${esc(full)}">
+          <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
+          <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)}${risky ? ' ⚠' : ''}</div>
+          ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(e.teacher)}</div>` : ''}
+          ${e.place ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(shortPlace(e.place))}</div>` : ''}
         </div>
       `;
     }

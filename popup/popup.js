@@ -79,6 +79,20 @@ let looksLikeUsos = false;
 let looksLikeIrk = false;
 let snapshot = null;
 let busy = false;
+// Set when a previous addUniversity/toggleIrkEnabled attempt's
+// usospp:registerUniversity round-trip came back { ok: false } — background.js's
+// registerModule can genuinely fail (a permission grant it doesn't see yet,
+// moments after chrome.permissions.request resolved — see its own retry
+// comment) and used to do so in total silence, with neither side checking the
+// result: the tab would just reload back into classic USOS with nothing
+// having changed and no error anywhere the user would think to look.
+let actionError = null;
+// Which action the "Spróbuj ponownie" link re-runs — the one that originally
+// failed (addUniversity for a failed "Dodaj obsługę…", toggleEnabled when
+// enabling failed deeper in its own flow), so retrying reproduces what the
+// user actually clicked for instead of a look-alike action that would end in
+// a slightly different state.
+let actionErrorRetry = 'addUniversity';
 
 function originPatternFor(url) {
   try {
@@ -119,6 +133,22 @@ function fetchSnapshot() {
     chrome.tabs.sendMessage(tab.id, { type: 'usospp:getSnapshot' }, (resp) => {
       if (chrome.runtime.lastError) resolve(null);
       else resolve(resp || null);
+    });
+  });
+}
+
+// True only when this tab is actually running our content script — the
+// end-side listener (usos/inject.js's 'usospp:ping') answers regardless of
+// the panel being on or off, so a response cleanly separates "script is
+// there, just disabled" from "script never injected at all".
+// toggleEnabled uses that split to keep the verified live-toggle path (PWr's
+// static content scripts, and any dynamically-added university whose
+// registration survived) reload-free, and to re-register + reload only on a
+// tab whose registration is genuinely missing.
+function pingTab(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { type: 'usospp:ping' }, (resp) => {
+      resolve(!chrome.runtime.lastError && !!resp);
     });
   });
 }
@@ -208,7 +238,17 @@ function renderMainBody() {
   const enabled = state.enabled;
 
   let banner = '';
-  if (tab && !hasHostPermission && looksLikeUsos) {
+  if (actionError) {
+    banner = `
+      <div class="pp-unsupported-banner">
+        <span>⚠️</span>
+        <div>
+          ${esc(actionError)}
+          <div style="margin-top:6px;"><a data-action="${actionErrorRetry}" data-module="usos">Spróbuj ponownie →</a></div>
+        </div>
+      </div>
+    `;
+  } else if (tab && !hasHostPermission && looksLikeUsos) {
     banner = `
       <div class="pp-unsupported-banner">
         <span>🎓</span>
@@ -218,8 +258,6 @@ function renderMainBody() {
         </div>
       </div>
     `;
-  } else if (tab && !hasHostPermission && !looksLikeUsos) {
-    banner = `<div class="pp-empty">Otwórz stronę USOSweb swojej uczelni, aby zobaczyć dane i włączyć redesign.</div>`;
   }
 
   const stats = snapshot
@@ -263,16 +301,25 @@ function renderMainBody() {
         </span>
         ${enabled ? 'Wyłącz panel USOS++' : 'Włącz panel USOS++'}
       </button>
-      <div class="pp-main-hint">${enabled ? 'Klasyczny USOSweb jest zastąpiony nowym interfejsem' : 'Przełącz aktualną stronę USOSweb na nowy interfejs'}</div>
 
       ${stats}
       ${nextInfo}
 
-      <div>
+      <div style="margin-top:8px;">
         <div class="pp-section-heading">Szybki dostęp</div>
+        ${!state.myUniversity ? `
+          <div class="pp-my-uni-hint">
+            Wejdź na stronę swojej uczelni i kliknij <a data-action="setMyUniversity">tutaj</a>, aby ustawić ją jako Moja Uczelnia
+          </div>
+        ` : `
+          <div class="pp-quick-home" data-action="quickHome">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12"></polyline></svg>
+            <span>Strona główna mojej uczelni</span>
+          </div>
+        `}
         <div class="pp-quick-grid">
           ${QUICK_ACTIONS.map((qa) => `
-            <div class="pp-quick-action" data-action="quick" data-view="${qa.view}" data-path="${qa.path}">
+            <div class="pp-quick-action ${!state.myUniversity ? 'disabled' : ''}" data-action="quick" data-view="${qa.view}" data-path="${qa.path}">
               <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7"></circle></svg>
               <span>${qa.label}</span>
             </div>
@@ -293,9 +340,19 @@ function renderMainBody() {
 // registerModule) instead of 'usos'. After that, a real toggle — irk/app.js
 // now has an actual dashboard (Oferta/Aktualności) to show or hide.
 function renderIrkBody() {
+  const errorBanner = actionError ? `
+    <div class="pp-unsupported-banner">
+      <span>⚠️</span>
+      <div>
+        ${esc(actionError)}
+        <div style="margin-top:6px;"><a data-action="${actionErrorRetry}" data-module="irk">Spróbuj ponownie →</a></div>
+      </div>
+    </div>
+  ` : '';
   if (!hasHostPermission) {
     return `
       <div class="pp-body">
+        ${errorBanner}
         <div class="pp-unsupported-banner">
           <span>🎓</span>
           <div>
@@ -310,6 +367,7 @@ function renderIrkBody() {
   const enabled = state.irkEnabled;
   return `
     <div class="pp-body">
+      ${errorBanner}
       <button class="pp-main-btn ${enabled ? 'on' : 'off'}" data-action="toggleIrkEnabled">
         <span style="display:flex;">
           <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 3v6"></path><path d="M5.5 5.8a6.5 6.5 0 1 0 9 0"></path></svg>
@@ -326,6 +384,15 @@ function renderFeaturesBody() {
   const f = state.features;
   return `
     <div class="pp-body">
+      ${state.myUniversity ? `
+        <div style="margin-bottom:14px;">
+          <div class="pp-section-heading">Moja Uczelnia</div>
+          <div class="pp-manage-row">
+            <span style="font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(state.myUniversity)}</span>
+            <div class="pp-dark-toggle" data-action="removeMyUniversity" style="color:var(--ink-critical); font-weight:600; font-size:11px;">Usuń</div>
+          </div>
+        </div>
+      ` : ''}
       <div>
         <div class="pp-section-heading">Rozszerzenie</div>
         <div class="pp-features-list">
@@ -401,6 +468,20 @@ async function onAction(el) {
   if (action === 'goFeatures') { view = 'features'; render(); return; }
   if (action === 'goMain') { view = 'main'; render(); return; }
   if (action === 'toggleDark') { state = await setState({ darkMode: !state.darkMode }); render(); return; }
+  if (action === 'removeMyUniversity') { state = await setState({ myUniversity: null }); render(); return; }
+  if (action === 'setMyUniversity') {
+    if (!tab || !tab.url) return;
+    const origin = new URL(tab.url).origin;
+    state = await setState({ myUniversity: origin });
+    render();
+    return;
+  }
+  if (action === 'quickHome') {
+    if (!state.myUniversity) return;
+    chrome.tabs.create({ url: `${state.myUniversity}/` });
+    window.close();
+    return;
+  }
 
   if (action === 'openExtensionPage') {
     chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
@@ -409,18 +490,69 @@ async function onAction(el) {
 
   if (action === 'toggleEnabled') {
     if (!tab) return;
+    const next = !state.enabled;
+    if (!next) {
+      state = await setState({ enabled: false });
+      snapshot = null;
+      render();
+      return;
+    }
     busy = true;
-    state = await setState({ enabled: !state.enabled });
-    render();
-    if (state.enabled) {
+    const alive = await pingTab(tab.id);
+    // Happy path — our content script is already running in this tab (PWr's
+    // static install, or a dynamically-added university whose registration
+    // is live): inject.js reacts to the storage change alone and mounts
+    // without a reload, same as before this handler grew the recovery path.
+    if (alive) {
+      state = await setState({ enabled: true });
+      render();
       setTimeout(async () => {
         snapshot = await fetchSnapshot();
         busy = false;
         render();
       }, 700);
-    } else {
-      snapshot = null;
+      return;
+    }
+    const pattern = tab.url ? originPatternFor(tab.url) : null;
+    if (!looksLikeUsos || !pattern) {
+      // Not a USOSweb-looking tab: the toggle is only the stored preference
+      // here (nothing on this tab could ever react to it right now), so it
+      // stays the plain live flip it always was.
+      state = await setState({ enabled: true });
       busy = false;
+      render();
+      return;
+    }
+    // USOSweb-looking tab with NO content script answering: this university
+    // was never added, or it was added but its dynamic registration is gone
+    // or never actually happened (registerModule's permission-race failure
+    // was silent, and once the host permission IS granted, "Dodaj obsługę"
+    // can't come back — hasHostPermission gates it — leaving the toggle a
+    // permanent no-op). So: (re-)request the permission (no prompt when
+    // already granted), (re-)register via the background worker, and only
+    // then flip the flag and reload the tab. Anything that fails keeps the
+    // popup open with a "Spróbuj ponownie" banner instead of the old silence.
+    actionError = null;
+    actionErrorRetry = 'toggleEnabled';
+    render();
+    try {
+      const granted = await chrome.permissions.request({ origins: [pattern] });
+      if (!granted) {
+        actionError = 'Nie udzielono pozwolenia dla tej strony.';
+        return;
+      }
+      hasHostPermission = true; // see addUniversity: keep the popup's state in step with the grant
+      const result = await chrome.runtime.sendMessage({ type: 'usospp:registerUniversity', originPattern: pattern, module: 'usos' });
+      if (!result || !result.ok) {
+        actionError = 'Nie udało się włączyć panelu USOS++.';
+        return;
+      }
+      state = await setState({ enabled: true });
+      await chrome.tabs.reload(tab.id);
+      window.close();
+    } finally {
+      busy = false;
+      render();
     }
     return;
   }
@@ -443,27 +575,52 @@ async function onAction(el) {
     // the tab needs a reload regardless for a freshly (re-)registered
     // content script to actually run.
     busy = true;
+    actionError = null;
     render();
     try {
       const pattern = originPatternFor(tab.url);
-      if (pattern) await chrome.runtime.sendMessage({ type: 'usospp:registerUniversity', originPattern: pattern, module: 'irk' });
+      if (pattern) {
+        const result = await chrome.runtime.sendMessage({ type: 'usospp:registerUniversity', originPattern: pattern, module: 'irk' });
+        if (!result || !result.ok) {
+          state = await setState({ irkEnabled: false });
+          actionError = 'Nie udało się włączyć panelu IRK. Spróbuj ponownie.';
+          actionErrorRetry = 'toggleIrkEnabled';
+          return;
+        }
+      }
       await chrome.tabs.reload(tab.id);
       window.close();
     } finally {
       busy = false;
+      render();
     }
     return;
   }
 
   if (action === 'quick') {
     if (!tab) return;
+    const qa = QUICK_ACTIONS.find(q => q.view === el.dataset.view);
+    if (!qa) return;
+
+    if (state.myUniversity) {
+      chrome.tabs.create({ url: `${state.myUniversity}/${qa.path}` });
+      window.close();
+      return;
+    }
+
     if (hasHostPermission && looksLikeUsos && state.enabled) {
       chrome.tabs.sendMessage(tab.id, { type: 'usospp:navigate', view: el.dataset.view });
       window.close();
-    } else if (tab.url) {
+    } else if (tab.url && looksLikeUsos) {
       const origin = new URL(tab.url).origin;
-      chrome.tabs.update(tab.id, { url: `${origin}/${el.dataset.path}` });
+      state = await setState({ myUniversity: origin });
+      render();
+      chrome.tabs.create({ url: `${origin}/${qa.path}` });
       window.close();
+    } else {
+      actionError = 'Wejdź na stronę swojej uczelni, kliknij jeszcze raz aby ustawić daną uczelnię jako Moja Uczelnia';
+      actionErrorRetry = 'quick';
+      render();
     }
     return;
   }
@@ -474,15 +631,34 @@ async function onAction(el) {
     if (!pattern) return;
     const module = el.dataset.module || 'usos';
     busy = true;
+    actionError = null;
+    render();
     try {
       const granted = await chrome.permissions.request({ origins: [pattern] });
-      if (granted) {
-        await chrome.runtime.sendMessage({ type: 'usospp:registerUniversity', originPattern: pattern, module });
-        await chrome.tabs.reload(tab.id);
-        window.close();
+      if (!granted) return;
+      // Keep this popup's own view in step with what was just granted —
+      // detectTab() only ran at init, so without this, a registration failure
+      // right after a grant would render UI for a "not-yet-granted" state
+      // that is no longer true (and renderIrkBody's banner used to pick its
+      // retry action off exactly this stale flag, see below).
+      hasHostPermission = true;
+      // registerModule's result used to be ignored here while its failures
+      // were silent on its side too (see background.js's retry comment): the
+      // tab reloaded as plain classic USOS, the granted permission kept the
+      // "Dodaj obsługę" banner from ever coming back (hasHostPermission gates
+      // it first), and the user was left stuck with a toggle nothing
+      // responds to. A failure now keeps the popup open with a retry banner.
+      const result = await chrome.runtime.sendMessage({ type: 'usospp:registerUniversity', originPattern: pattern, module });
+      if (!result || !result.ok) {
+        actionError = 'Nie udało się dodać obsługi tej uczelni.';
+        actionErrorRetry = 'addUniversity';
+        return;
       }
+      await chrome.tabs.reload(tab.id);
+      window.close();
     } finally {
       busy = false;
+      render();
     }
   }
 }
