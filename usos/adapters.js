@@ -80,7 +80,7 @@
   // shared with irk/adapters.js's own Aktualności) rebuilds it using only an
   // allowlist of safe formatting tags instead.
   function sanitizeNewsHtml(nodes, doc) {
-    return window.USOSPP_CORE_SANITIZE.sanitizeHtml(nodes, doc);
+    return window.USOSPP_CORE_SANITIZE.sanitizeHtml(nodes, doc, window.USOSPP_CORE_SANITIZE.NEWS_ALLOWED_TAGS);
   }
 
   // Same sanitizer, for a raw HTML string (the pwnews JSON endpoint's
@@ -90,7 +90,7 @@
   // fetched body before it may enter our DOM.
   function sanitizeNewsHtmlString(html) {
     const parsed = new DOMParser().parseFromString(html, 'text/html');
-    return window.USOSPP_CORE_SANITIZE.sanitizeHtml(Array.from(parsed.body.childNodes), parsed);
+    return window.USOSPP_CORE_SANITIZE.sanitizeHtml(Array.from(parsed.body.childNodes), parsed, window.USOSPP_CORE_SANITIZE.NEWS_ALLOWED_TAGS);
   }
 
   // The pwnews add-on's own inline renderer reads its data through a
@@ -557,6 +557,107 @@
       return { supported: true, verified: true, groups };
     },
 
+    // Verified live (2026-09-25) against .../dla_stud/rejestracja/kalendarz
+    // on a real student account (PWr): the PERSONAL registration calendar,
+    // already filtered to this student's programmes — 10 h2 sections, 9
+    // tables, 59 rows. Sections without a [KOD] heading ("Rejestracje na
+    // egzaminy" → przeniesDoRejestracjiNaEgzaminy, "Rejestracje żetonowe" →
+    // zetony/index) are out of scope and skipped by link target, not by
+    // title text. Every subject round carries three GET links, all scrapable
+    // with the same fetch+DOMParser pattern as everything else here:
+    //   "przejdź do rejestracji" → dla_stud/rejestracja/brdg2/wyborPrzedmiotu
+    //     &rej_kod=<KOD>&callback=g_… (subject/group listing, read-only)
+    //   "pokaż przedmioty…" → katalog2/przedmioty/szukajPrzedmiotu&method=rej
+    //     &rej_kod=<KOD>&callback=g_… (see getRejSubjects)
+    //   "Plan zajęć…" → katalog2/przedmioty/pokazPlanGrupyPrzedmiotow
+    //     &grupa_kod=<GRUPA>&cdyd_kod=<CYKL>
+    // The callback token is per page load (g_262cefcc → g_6c9b0fa0 after a
+    // reload, verified), so stored URLs are only valid until the next
+    // calendar scrape — never cache them across sessions. rej_kod is stable
+    // and identical to the [KOD] on the faculty calendar (rejJednostki), so
+    // it is the join key between the two sources. Times come from
+    // <local-time datetime="YYYY-MM-DD HH:MM:SS">; the "opis" links are bare
+    // <a href=""> with jQuery-delegated handlers, so the description is read
+    // from the row cells instead. hasAccess is derived from the presence of
+    // the registration link itself — this calendar only lists rounds
+    // relevant to this student.
+    getPersonalCalendar(doc = document) {
+      const sections = [];
+      doc.querySelectorAll('h2').forEach((h2) => {
+        const heading = textOf(h2) || '';
+        const codeMatch = heading.match(/\[([^\]]+)\]\s*$/);
+        const code = codeMatch ? codeMatch[1] : null;
+        const title = code ? heading.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : heading;
+
+        let table = null;
+        let subjectsUrl = null;
+        const planUrls = [];
+        let outOfScope = false;
+        let el = h2.nextElementSibling;
+        while (el && el.tagName !== 'H2') {
+          if (el.querySelectorAll) {
+            el.querySelectorAll('a[href]').forEach((a) => {
+              const href = a.getAttribute('href') || '';
+              if (/przeniesDoRejestracjiNaEgzaminy|zetony\/index/.test(href)) outOfScope = true;
+              if (!subjectsUrl && /szukajPrzedmiotu/.test(href) && /method=rej/.test(href)) subjectsUrl = a.href;
+              if (/pokazPlanGrupyPrzedmiotow/.test(href)) {
+                const label = textOf(a) || '';
+                if (!planUrls.some((p) => p.url === a.href)) planUrls.push({ label, url: a.href });
+              }
+            });
+            if (el.tagName === 'TABLE') table = el;
+          }
+          el = el.nextElementSibling;
+        }
+        if (outOfScope) return;
+
+        const rounds = [];
+        if (table) {
+          table.querySelectorAll('tr').forEach((tr) => {
+            const cells = tr.querySelectorAll(':scope > td');
+            if (cells.length < 4) return;
+            const rowText = textOf(tr) || '';
+            if (/^\s*Stan\s*[|]/.test(rowText)) return; // header row
+            const state = textOf(cells[0]);
+            const times = cells[1] ? [...cells[1].querySelectorAll('local-time')].map((t) => t.getAttribute('datetime')) : [];
+            const roundType = cells[2] ? textOf(cells[2].querySelector('span:not(.note)')) : null;
+            const roundNote = cells[2] ? textOf(cells[2].querySelector('span.note')) : null;
+            const descCell = cells[2] ? (textOf(cells[2]) || '') : '';
+            const attrText = cells[3] ? (textOf(cells[3]) || '') : '';
+            const regLink = tr.querySelector('a[href*="brdg2/wyborPrzedmiotu"]');
+            let rejKod = null;
+            if (regLink) {
+              try { rejKod = new URL(regLink.href).searchParams.get('rej_kod'); } catch (e) { rejKod = null; }
+            }
+            const attributes = {};
+            const dedMatch = attrText.match(/Rejestracja dedykowana:\s*(TAK|NIE)/i);
+            const gieMatch = attrText.match(/giełda włączona:\s*(TAK|NIE)/i);
+            const podMatch = attrText.match(/podpięcia wymagane[^:]*:\s*(TAK|NIE)/i);
+            if (dedMatch) attributes['Rejestracja dedykowana'] = dedMatch[1].toUpperCase();
+            if (gieMatch) attributes['Czy giełda włączona'] = gieMatch[1].toUpperCase();
+            if (podMatch) attributes['Czy podpięcia wymagane'] = podMatch[1].toUpperCase();
+            rounds.push({
+              turaId: tr.getAttribute('tura_id'),
+              rejKod,
+              state,
+              startsAt: times[0] || null,
+              endsAt: times[1] || null,
+              roundType: roundType || descCell.slice(0, 160) || null,
+              roundNote,
+              attributes,
+              attributesText: attrText || null,
+              registerUrl: regLink ? regLink.href : null,
+              hasAccess: !!regLink,
+            });
+          });
+        }
+
+        sections.push({ code, title, subjectsUrl, planUrls, rounds });
+      });
+
+      return { supported: sections.length > 0, verified: true, sections };
+    },
+
     // Verified against real markup at .../dla_stud/rejestracja/przedmioty —
     // the "Wymagania etapów studiów" block links to the student's own
     // programme stage(s). This is the only reliable "what's my kierunek"
@@ -926,6 +1027,214 @@
       });
 
       return { supported: subjects.length > 0, verified: true, subjects, total, nextUrl };
+    },
+
+    // Verified live (2026-09-25) against .../katalog2/przedmioty/
+    // szukajPrzedmiotu?method=rej&rej_kod=<KOD> — "Przedmioty w rejestracji
+    // <title> [KOD]", reached from the personal calendar's "pokaż
+    // przedmioty…" link (see getPersonalCalendar). Same row shape family as
+    // getUnitSubjects (one <tr> per subject, found by its pokazPrzedmiot
+    // link rather than by position; second description rows carry no subject
+    // link): kod in the first cell, jednostka as a neighbouring unit link,
+    // "Strona przedmiotu" link, registration-basket (koszyk) icons as
+    // rejestracjaNaPrzedmiotCyklu links carrying cdyd_kod. The rej_kod page
+    // itself is single-page for real tours (9 subjects on W04-T1) — a
+    // <table-nav-bar> next page is still honoured if USOS ever paginates it.
+    getRejSubjects(doc = document) {
+      const nav = doc.querySelector('table-nav-bar');
+      const total = nav ? (parseInt(nav.getAttribute('elements-count'), 10) || 0) : 0;
+      const nextUrl = nav && nav.getAttribute('next-page-url') ? nav.getAttribute('next-page-url') : null;
+
+      function cdydParam(href) {
+        const m = /[?&]cdyd_kod=([^&'"]+)/.exec(href);
+        return m ? decodeURIComponent(m[1]) : null;
+      }
+      const subjects = [];
+      const seen = new Set();
+      doc.querySelectorAll("a[href*='pokazPrzedmiot&prz_kod=']").forEach((link) => {
+        const tr = link.closest('tr');
+        if (!tr) return;
+        let kod = null;
+        try { kod = new URL(link.href).searchParams.get('prz_kod'); } catch (e) { return; }
+        if (!kod || seen.has(kod)) return;
+        // "Strona przedmiotu" links point at the same subject — only the
+        // row's primary subject link (whose own text is the subject name)
+        // starts a record.
+        if (/^strona przedmiotu/i.test((link.textContent || '').trim())) return;
+        seen.add(kod);
+        // Same per-request callback token as in getUnitSubjects — strip it;
+        // the base URL is the page the UI opens directly.
+        const url = link.href.replace(/([?&])callback=[^&]*/, '');
+        const unitLink = tr.querySelector("a[href*='pokazJednostke']");
+        const cycles = new Set();
+        tr.querySelectorAll("a[href*='rejestracjaNaPrzedmiotCyklu']").forEach((a) => {
+          const cdyd = cdydParam(a.href);
+          if (cdyd) cycles.add(cdyd);
+        });
+        // Registration-context links and occupancy live in the same row:
+        // "grupyPrzedmiotu" opens the per-tour group list (see
+        // getRejGroups), and "N/M (zarejestrowanych/limit)" is the
+        // subject-level fill. Either may be absent — never guess. The
+        // occupancy text is JS-rendered from HTML-encoded data-content
+        // tooltip attributes (fetch+DOMParser never runs that JS), so the
+        // row text is only the first place to look — tooltips second. The
+        // count may be wrapped in markup ("1/75</b> (…)", decoded from
+        // "&lt;b&gt;1/75&lt;/b&gt;"), hence the tag-tolerant pattern.
+        const OCC_RE = /(\d+)\s*\/\s*(\d+)\s*(<[^>]*>\s*)*\(zarejestrowanych\/limit\)/;
+        const groupsLink = tr.querySelector("a[href*='grupyPrzedmiotu']");
+        let occMatch = (textOf(tr) || '').match(OCC_RE);
+        if (!occMatch) {
+          const tip = [...tr.querySelectorAll('[data-content]')]
+            .map((el) => el.getAttribute('data-content') || '')
+            .find((t) => /\(zarejestrowanych\/limit\)/.test(t));
+          if (tip) occMatch = tip.match(OCC_RE);
+        }
+        // Per-cycle PERSONAL enrollment state (verified 2026-09-26 on the
+        // W04-T1 fixture): each cycle <td> carries its own affordances — a
+        // hidden POST form to brdg2/zarejestruj (PARSED ONLY, never
+        // submitted — read-only rule) plus an action icon whose filename IS
+        // the status vocabulary: zarejestruj.svg = you are NOT registered
+        // here (screen-reader: "Kliknij tutaj żeby się zarejestrować"),
+        // wyrejestruj.svg = you ARE registered (expected live once the tour
+        // runs; same family, mirrored wording). The same cell also holds a
+        // "Status rejestracji przedmiotu:" screen-reader line (tour-level
+        // state, e.g. "mogą składać prośby") and the fill bar backing
+        // `occupancy` above. Legacy koszyk_* gifs (see the page legend) are
+        // mapped too, in case a tour renders them in-row instead: v_green /
+        // out = registered, v_yellow = request, in = canRegister, x / grey
+        // = unavailable. Association is strictly per-cell via the cell's own
+        // cdyd_kod (hidden input or cycle link) — an icon that can't be tied
+        // to a cycle is ignored, never guessed.
+        const enrollment = {};
+        const statusText = {};
+        const ENR_RANK = { registered: 4, request: 3, canRegister: 2, unavailable: 1 };
+        function setEnrollment(cdyd, st) {
+          if (!cdyd || !st) return;
+          const prev = enrollment[cdyd];
+          if (!prev || (ENR_RANK[st] || 0) > (ENR_RANK[prev] || 0)) enrollment[cdyd] = st;
+        }
+        tr.querySelectorAll('td').forEach((td) => {
+          let cdyd = null;
+          const cdydInput = td.querySelector('input[name="cdyd_kod"]');
+          if (cdydInput && cdydInput.value) cdyd = cdydInput.value;
+          if (!cdyd) {
+            const cycleLink = td.querySelector("a[href*='rejestracjaNaPrzedmiotCyklu']");
+            if (cycleLink) cdyd = cdydParam(cycleLink.href);
+          }
+          if (!cdyd) return;
+          cycles.add(cdyd);
+          td.querySelectorAll("img[src*='img/rejestracja/']").forEach((img) => {
+            const src = img.getAttribute('src') || '';
+            const ownText = (img.closest('a, span, td') || td).textContent || '';
+            if (/wyrejestruj/i.test(src) || /wyrejestruj|wypisz/i.test(ownText)) setEnrollment(cdyd, 'registered');
+            else if (/zarejestruj/i.test(src) || /żeby się\s+zarejestrować/i.test(ownText)) setEnrollment(cdyd, 'canRegister');
+          });
+          td.querySelectorAll("img[src*='koszyk_']").forEach((img) => {
+            const src = img.getAttribute('src') || '';
+            const m = /koszyk_([a-z_]+)\.gif/.exec(src);
+            if (!m) return;
+            const kind = m[1];
+            setEnrollment(cdyd,
+              (kind === 'v_green' || kind === 'out') ? 'registered'
+              : kind === 'v_yellow' ? 'request'
+              : kind === 'in' ? 'canRegister' : 'unavailable');
+          });
+          const srLine = [...td.querySelectorAll('.screen-reader-only')]
+            .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim())
+            .find((t) => /Status rejestracji przedmiotu:/i.test(t));
+          if (srLine && !statusText[cdyd]) statusText[cdyd] = srLine;
+        });
+        subjects.push({
+          kod,
+          name: textOf(link),
+          url,
+          jednostka: unitLink ? textOf(unitLink) : null,
+          cycles: [...cycles],
+          groupsUrl: groupsLink ? groupsLink.href : null,
+          occupancy: occMatch ? { registered: parseInt(occMatch[1], 10), limit: parseInt(occMatch[2], 10) } : null,
+          // Personal enrollment per cycle ('registered' | 'request' |
+          // 'canRegister' | 'unavailable'); {} when the page shows no
+          // per-cycle affordances. statusText holds the raw tour-level
+          // "Status rejestracji przedmiotu:" line per cycle, if present.
+          enrollment,
+          statusText,
+        });
+      });
+
+      return { supported: subjects.length > 0, verified: true, subjects, total, nextUrl };
+    },
+
+    // Verified live (2026-09-25) against .../dla_stud/rejestracja/brdg2/
+    // grupyPrzedmiotu?rej_kod=<KOD>&prz_kod=<KOD>&cdyd_kod=<CYKL>&odczyt=1 —
+    // "Sprawdź aktualne zapełnienie grup zajęciowych" for one subject inside
+    // one tour (W04-T1 Algebra: 5× Ćwiczenia + 1× Wykład). One table.grey
+    // headed "Grupa | Zapisanych | Limit dolny | Limit górny | Prowadzący |
+    // Opis grupy | Termin", with single-cell section rows ("Ćwiczenia",
+    // "Wykład") splitting the group rows. Row cells: nr | zapisanych |
+    // limit-dolny (empty until USOS syncs registration — same "0/" noise
+    // family as getClassGroups, kept only when numeric) | limit-górny |
+    // prowadzący | opis | termin ("Czwartek 17:05-18:45", parsed with the
+    // same day/time idiom as getClassGroups). NOTE: the header contains both
+    // "Grupa" and "Termin", so getClassGroups would match this table and
+    // misparse it (zapisanych-count as sessions source) — this dedicated
+    // parser must be used for brdg2 pages instead. No enrolment affordances
+    // live in these rows (no links, no forms) — read-only by construction.
+    getRejGroups(doc = document) {
+      const tables = [...doc.querySelectorAll('table.grey')];
+      const groupsTable = tables.find((t) => {
+        const header = t.querySelector('tr');
+        const text = header ? textOf(header) : '';
+        return /Zapisanych/i.test(text) && /Limit/i.test(text);
+      });
+      if (!groupsTable) return { supported: false, verified: false, sections: [] };
+
+      const sections = [];
+      let current = null;
+      groupsTable.querySelectorAll('tr').forEach((tr, index) => {
+        if (index === 0) return; // header row
+        if (tr.querySelector('th')) return;
+        const cells = tr.querySelectorAll(':scope > td');
+        if (cells.length === 1) {
+          const label = textOf(cells[0]);
+          if (label) {
+            current = { type: label, groups: [] };
+            sections.push(current);
+          }
+          return;
+        }
+        if (cells.length < 6) return;
+        const nr = textOf(cells[0]);
+        if (!nr) return;
+        if (!current) {
+          current = { type: '', groups: [] };
+          sections.push(current);
+        }
+        const zapisanych = parseInt((textOf(cells[1]) || '').replace(/\s+/g, ''), 10);
+        const limitDolnyRaw = (textOf(cells[2]) || '').replace(/\s+/g, '');
+        const limitGornyRaw = (textOf(cells[3]) || '').replace(/\s+/g, '');
+        const terminText = textOf(cells[6]) || textOf(cells[cells.length - 1]) || '';
+        // No comma here ("Czwartek 17:05-18:45"), unlike the catalog
+        // "każdy poniedziałek, …" shape getClassGroups parses — comma optional.
+        const tm = (terminText || '').match(/(poniedziałek|wtorek|środa|czwartek|piątek|sobota|niedziela)\s*,?\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/i);
+        current.groups.push({
+          nr,
+          zapisanych: Number.isFinite(zapisanych) ? zapisanych : null,
+          limitDolny: /^\d+$/.test(limitDolnyRaw) ? parseInt(limitDolnyRaw, 10) : null,
+          limitGorny: /^\d+$/.test(limitGornyRaw) ? parseInt(limitGornyRaw, 10) : null,
+          prowadzacy: textOf(cells[4]) || null,
+          opis: textOf(cells[5]) || null,
+          termin: terminText || null,
+          session: tm ? {
+            day: tm[1].toLowerCase(),
+            start: `${tm[2].padStart(2, '0')}:${tm[3]}`,
+            end: `${tm[4].padStart(2, '0')}:${tm[5]}`,
+            weeks: parseWeeksParity(terminText),
+          } : null,
+        });
+      });
+
+      const total = sections.reduce((n, s) => n + s.groups.length, 0);
+      return { supported: total > 0, verified: true, sections };
     },
 
     // Verified against real markup+data at .../katalog2/programy/
@@ -1439,6 +1748,9 @@
     getGrades() { return { supported: false, verified: false, rows: [] }; },
     getExams() { return { supported: false, verified: false, exams: [] }; },
     getRegistrationRounds() { return { supported: false, verified: false, groups: [] }; },
+    getPersonalCalendar() { return { supported: false, verified: false, sections: [] }; },
+    getRejSubjects() { return { supported: false, verified: false, subjects: [], total: 0, nextUrl: null }; },
+    getRejGroups() { return { supported: false, verified: false, sections: [] }; },
     getOwnProgrammes() { return { supported: false, verified: false, programmes: [] }; },
     getNews() { return { supported: false, verified: false, items: [] }; },
     parseNewsJson() { return { supported: false, verified: false, items: [] }; },

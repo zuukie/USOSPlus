@@ -38,6 +38,7 @@
         "usos/adapters.js",
         "usos/scraping.js",
         "usos/generator.js",
+        "usos/zapisy-plan.js",
         "usos/app.js",
         "usos/inject.js"
       ],

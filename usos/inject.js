@@ -14,6 +14,29 @@
   let currentSettings = null;
   let cachedLogoutUrl = null;
 
+  // Sticky per-tab "stay native" flag. ?usospp_off=1 used to bypass only the
+  // single page load carrying it — clicking anywhere onward (or reloading)
+  // dropped the param and the redesign remounted on top of the classic page
+  // mid-task. Now the param plants a sessionStorage flag instead: the whole
+  // tab stays classic across navigations, reloads and POST round-trips until
+  // the quickbar toggle clears it. sessionStorage (not localStorage, not a
+  // global setting) gives exactly that lifetime: per tab, dies with the tab,
+  // never leaks into other tabs. Private-mode failures degrade to the old
+  // one-shot param behavior.
+  const NATIVE_TAB_KEY = 'usospp:nativeTab';
+  function readNativeTabFlag() {
+    try { return sessionStorage.getItem(NATIVE_TAB_KEY) === '1'; } catch (e) { return false; }
+  }
+  function writeNativeTabFlag(on) {
+    try {
+      if (on) sessionStorage.setItem(NATIVE_TAB_KEY, '1');
+      else sessionStorage.removeItem(NATIVE_TAB_KEY);
+    } catch (e) { /* private mode etc. */ }
+  }
+  function isBypassed() {
+    return new URLSearchParams(location.search).has('usospp_off') || readNativeTabFlag();
+  }
+
   function findHostRoot() {
     return document.querySelector('usos-layout');
   }
@@ -289,7 +312,9 @@
     quickbarEl.id = 'usospp-quickbar';
     quickbarEl.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:99999;display:flex;gap:6px;background:#241c14;border-radius:14px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);font-family:system-ui,sans-serif;align-items:center;';
 
-    // Toggle button to enable USOS++ redesign
+    // Toggle button to enable USOS++ redesign (also the return path from a
+    // sticky native tab — clears the per-tab flag first, otherwise this tab
+    // would keep bypassing despite the global setting).
     const toggle = document.createElement('div');
     toggle.title = 'Włącz panel USOS++';
     toggle.style.cssText = 'width:24px;height:24px;border-radius:12px;background:#d9773a;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform 0.1s,background 0.15s;flex-shrink:0;margin-left:4px;margin-right:8px;';
@@ -299,7 +324,12 @@
     toggle.addEventListener('mousedown', () => { toggle.style.transform = 'scale(0.9)'; });
     toggle.addEventListener('mouseup', () => { toggle.style.transform = 'scale(1)'; });
     toggle.addEventListener('click', async () => {
-      await window.USOSPP_STATE.setState({ enabled: true });
+      writeNativeTabFlag(false);
+      const next = await window.USOSPP_STATE.setState({ enabled: true });
+      currentSettings = next;
+      // Apply directly instead of waiting for the storage-event round-trip
+      // (which this same tab may never see) — applyState is idempotent.
+      await applyState(next);
     });
     quickbarEl.appendChild(toggle);
 
@@ -519,7 +549,11 @@
   }
 
   function applyIndependentFeatures(settings) {
-    if (settings.features.quickbar && !settings.enabled) ensureQuickbar();
+    // A sticky-bypassed tab always shows the quickbar — it's the only
+    // in-tab return path to the panel, so the quickbar feature flag must
+    // not be able to hide it there. The whole-plugin kill switch still wins
+    // (pluginEnabled === false hides everything, bypass included).
+    if ((settings.features.quickbar && !settings.enabled) || (isBypassed() && settings.pluginEnabled !== false)) ensureQuickbar();
     else removeQuickbar();
 
     if (settings.features.keyboardNav && settings.enabled) document.addEventListener('keydown', onKeydown);
@@ -596,11 +630,14 @@
   // Links like "Otwórz w USOS →" need to actually show classic USOSweb, even
   // though the redesign is globally enabled for the domain — otherwise
   // they'd just reopen the same redesign (or its unverified fallback) on the
-  // new tab, defeating their entire purpose. Appending ?usospp_off=1 makes
-  // this one page load render as classic USOS without touching the stored
-  // (global, cross-tab) `enabled` setting; navigating onward from there
-  // drops the param and the redesign resumes normally.
-  const bypassThisLoad = new URLSearchParams(location.search).has('usospp_off');
+  // new tab, defeating their entire purpose. Appending ?usospp_off=1 plants
+  // the sticky per-tab native flag (see NATIVE_TAB_KEY above), so the whole
+  // tab renders as classic USOS — including onward navigations, reloads and
+  // POST round-trips that no longer carry the param — without touching the
+  // stored (global, cross-tab) `enabled` setting. The quickbar toggle is the
+  // way back: it clears the tab flag and mounts the panel in this tab only.
+  if (new URLSearchParams(location.search).has('usospp_off')) writeNativeTabFlag(true);
+  const bypassThisLoad = isBypassed();
 
   (async () => {
     const settings = await getState();
@@ -608,7 +645,9 @@
   })();
 
   onStateChange(async () => {
-    if (bypassThisLoad) return;
+    // Live check (not the load-time const): the quickbar toggle clears the
+    // tab flag and this same tab must then pick up the change.
+    if (isBypassed()) return;
     const settings = await getState();
     await applyState(settings);
   });

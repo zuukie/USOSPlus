@@ -226,7 +226,7 @@
         bodyNodes.push(el);
         el = el.nextElementSibling;
       }
-      sections.push({ title, html: window.USOSPP_CORE_SANITIZE.sanitizeHtml(bodyNodes, doc) });
+      sections.push({ title, html: window.USOSPP_CORE_SANITIZE.sanitizeHtml(bodyNodes, doc, window.USOSPP_CORE_SANITIZE.NEWS_ALLOWED_TAGS) });
     });
 
     return {

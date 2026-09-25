@@ -12,6 +12,25 @@
 (function () {
   const DEFAULT_ALLOWED_TAGS = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'UL', 'OL', 'LI', 'A']);
 
+  // News bodies (USOS + IRK Aktualności) may carry inline photos — posters,
+  // pictograms, editor-inserted illustrations. IMG stays out of the default
+  // set (message threads etc. remain text-only); news wrappers opt in by
+  // passing NEWS_ALLOWED_TAGS explicitly.
+  const NEWS_ALLOWED_TAGS = new Set([...DEFAULT_ALLOWED_TAGS, 'IMG']);
+
+  function cleanImgSrc(src, doc) {
+    const raw = (src || '').trim();
+    if (!raw || /^data:/i.test(raw)) return null;
+    try {
+      // Relative CMS paths resolve against the fetched page, so the image
+      // still loads once transplanted into the extension's own DOM.
+      const abs = new URL(raw, doc.baseURI || undefined).href;
+      return /^https?:\/\//i.test(abs) ? abs : null;
+    } catch {
+      return null;
+    }
+  }
+
   function sanitizeNode(node, targetDoc, allowedTags) {
     if (node.nodeType === Node.TEXT_NODE) return targetDoc.createTextNode(node.textContent);
     if (node.nodeType !== Node.ELEMENT_NODE) return null;
@@ -24,6 +43,17 @@
         container.setAttribute('target', '_blank');
         container.setAttribute('rel', 'noopener noreferrer');
       }
+    }
+    if (isAllowed && node.tagName === 'IMG') {
+      // src + alt only: no srcset/sizes/event handlers survive, and a
+      // relative/unresolvable/non-http(s) src drops the whole image rather
+      // than injecting a broken one. Sizing is CSS-capped at render time.
+      const src = cleanImgSrc(node.getAttribute('src'), targetDoc);
+      if (!src) return null;
+      container.setAttribute('src', src);
+      const alt = node.getAttribute('alt');
+      if (alt) container.setAttribute('alt', alt);
+      return container; // void element — never has meaningful children
     }
     node.childNodes.forEach((child) => {
       const clean = sanitizeNode(child, targetDoc, allowedTags);
@@ -41,5 +71,5 @@
     return wrap.innerHTML;
   }
 
-  window.USOSPP_CORE_SANITIZE = { sanitizeHtml, DEFAULT_ALLOWED_TAGS };
+  window.USOSPP_CORE_SANITIZE = { sanitizeHtml, DEFAULT_ALLOWED_TAGS, NEWS_ALLOWED_TAGS };
 })();

@@ -47,6 +47,18 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ---- Skeletons (loading placeholders that hold the final layout) ---- */
+.usospp-skeleton { position: relative; overflow: hidden; background: var(--bg-subtle); border-radius: 6px; }
+.usospp-skeleton::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(128, 128, 128, 0.22), transparent);
+  animation: usospp-skeleton-slide 1.2s ease-in-out infinite;
+}
+@keyframes usospp-skeleton-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
 /* ---- app shell: sidebar ---- */
 .usospp-sidebar {
   width: 252px;
@@ -189,7 +201,10 @@
 .usospp-modal-wide { max-width: 760px; }
 
 .usospp-content { flex: 1; padding: 32px; max-width: 1360px; width: 100%; margin: 0 auto; box-sizing: border-box; }
-.usospp-view { display: flex; flex-direction: column; gap: 20px; animation: usospp-fade-in 0.2s ease; }
+.usospp-view { display: flex; flex-direction: column; gap: 20px; }
+/* Fade-in runs only on navigation (render() stamps data-enter="1" on a new
+   view; data arrivals patch content under data-enter="0" and stay silent). */
+main[data-content-root][data-enter="1"] .usospp-view { animation: usospp-fade-in 0.2s ease; }
 
 /* ---- Card / stats ---- */
 .usospp-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 20px 24px; }
@@ -311,6 +326,7 @@
 .usospp-news-body a { color: #d9773a; }
 .usospp-news-body a:hover { color: oklch(52% 0.15 45); }
 .usospp-news-body ul, .usospp-news-body ol { margin: 0 0 10px 0; padding-left: 20px; }
+.usospp-news-body img { max-width: 100%; height: auto; display: block; margin: 10px 0; border-radius: 8px; }
 
 .usospp-raw-dump {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

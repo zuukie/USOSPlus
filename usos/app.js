@@ -238,7 +238,7 @@
   // group (including a subject-detail page opened from within it), even
   // though only the hub id itself appears in NAV_ITEMS.
   const NAV_GROUPS = {
-    przedmioty: ['przedmioty', 'przedmiotyLista', 'zapisy', 'planer'],
+    przedmioty: ['przedmioty', 'przedmiotyLista', 'zapisy', 'zapisTura', 'zapisGrupy', 'planer'],
     katalog: ['katalog', 'katalogJednostki', 'katalogPrzedmioty', 'katalogKierunki', 'katalogBudynki'],
   };
 
@@ -271,7 +271,7 @@
   const VALID_VIEWS = new Set([
     ...NAV_ITEMS.filter((item) => !item.external).map((item) => item.id),
     ...MORE_NAV_ITEMS.filter((item) => !item.external).map((item) => item.id),
-    'przedmiotyLista', 'zapisy', 'planer', 'ustawienia', 'subjectPage', 'catalogPage',
+    'przedmiotyLista', 'zapisy', 'zapisTura', 'zapisGrupy', 'planer', 'ustawienia', 'subjectPage', 'catalogPage',
   ]);
 
   // Views that render entirely from pages USOSweb also serves to anonymous
@@ -434,7 +434,9 @@
     oceny: ['Oceny', 'Aktualny widok z USOSweb'],
     przedmioty: ['Przedmioty', 'Przegląd, zapisy i generator planu'],
     przedmiotyLista: ['Przegląd przedmiotów', 'Na podstawie danych z USOSweb'],
-    zapisy: ['Zapisy', 'Rejestracja na przedmioty — kalendarz wydziałowy'],
+    zapisy: ['Zapisy', 'Twoje tury rejestracji — terminy, przedmioty i plany'],
+    zapisTura: ['Tura zapisów', 'Przedmioty w wybranej turze'],
+    zapisGrupy: ['Grupy przedmiotu', 'Zapełnienie grup w turze'],
     planer: ['Generator planu', 'Podgląd — niczego tu nie zapisujemy w USOS'],
     egzaminy: ['Egzaminy', 'Zapisy i wyniki sesji'],
     ects: ['ECTS / Postęp', 'Realizacja programu studiów'],
@@ -470,6 +472,8 @@
       let initialCatalogBackView = 'dashboard';
       let initialCatalogPrevKind = null;
       let initialCatalogPrevKod = null;
+      let initialZapisTura = null;
+      let initialZapisGrupy = null;
       if (saved && VALID_VIEWS.has(saved.view)) {
         if (saved.view === 'subjectPage') {
           if (saved.subjectUrl) {
@@ -500,6 +504,34 @@
               initialCatalogPrevKod = saved.catalogBackPrevKod || null;
             }
           }
+        } else if (saved.view === 'zapisTura') {
+          if (saved.zapisTuraSubjectsUrl || saved.zapisTuraKey) {
+            initialView = 'zapisTura';
+            initialZapisTura = {
+              key: saved.zapisTuraKey || null,
+              title: saved.zapisTuraTitle || '',
+              code: saved.zapisTuraCode || '',
+              subjectsUrl: saved.zapisTuraSubjectsUrl || '',
+              registerUrl: saved.zapisTuraRegisterUrl || '',
+              planUrls: Array.isArray(saved.zapisTuraPlanUrls) ? saved.zapisTuraPlanUrls : [],
+            };
+          }
+        } else if (saved.view === 'zapisGrupy') {
+          if (saved.zapisGrupyGroupsUrl || (saved.zapisGrupyTourKey && saved.zapisGrupySubjKod)) {
+            initialView = 'zapisGrupy';
+            initialZapisGrupy = {
+              key: saved.zapisGrupyKey || null,
+              tourKey: saved.zapisGrupyTourKey || null,
+              subjKod: saved.zapisGrupySubjKod || null,
+              title: saved.zapisGrupyTitle || '',
+              kod: saved.zapisGrupyKod || '',
+              cykl: saved.zapisGrupyCykl || '',
+              occupancy: saved.zapisGrupyOccupancy || null,
+              detailsUrl: saved.zapisGrupyDetailsUrl || '',
+              groupsUrl: saved.zapisGrupyGroupsUrl || '',
+              registerUrl: saved.zapisGrupyRegisterUrl || '',
+            };
+          }
         } else {
           initialView = saved.view;
         }
@@ -529,7 +561,34 @@
         calcGrade: '5.0',
         calcNewEcts: '5',
         zapisyFilter: '',
-        zapisyOwnOnly: true,
+        zapisTuraKey: initialZapisTura ? initialZapisTura.key : null,
+        zapisTuraTitle: initialZapisTura ? initialZapisTura.title : '',
+        zapisTuraCode: initialZapisTura ? initialZapisTura.code : '',
+        zapisTuraSubjectsUrl: initialZapisTura ? initialZapisTura.subjectsUrl : '',
+        zapisTuraRegisterUrl: initialZapisTura ? initialZapisTura.registerUrl : '',
+        zapisTuraPlanUrls: initialZapisTura ? initialZapisTura.planUrls : [],
+        zapisTuraSubjects: [],
+        zapisTuraLoading: initialView === 'zapisTura',
+        zapisTuraError: false,
+        zapisGrupyKey: initialZapisGrupy ? initialZapisGrupy.key : null,
+        zapisGrupyTourKey: initialZapisGrupy ? initialZapisGrupy.tourKey : null,
+        zapisGrupySubjKod: initialZapisGrupy ? initialZapisGrupy.subjKod : null,
+        zapisGrupyTitle: initialZapisGrupy ? initialZapisGrupy.title : '',
+        zapisGrupyKod: initialZapisGrupy ? initialZapisGrupy.kod : '',
+        zapisGrupyCykl: initialZapisGrupy ? initialZapisGrupy.cykl : '',
+        zapisGrupyOccupancy: initialZapisGrupy ? initialZapisGrupy.occupancy : null,
+        zapisGrupyDetailsUrl: initialZapisGrupy ? initialZapisGrupy.detailsUrl : '',
+        zapisGrupyGroupsUrl: initialZapisGrupy ? initialZapisGrupy.groupsUrl : '',
+        zapisGrupyRegisterUrl: initialZapisGrupy ? initialZapisGrupy.registerUrl : '',
+        zapisGrupySections: [],
+        zapisGrupyLoading: initialView === 'zapisGrupy',
+        zapisGrupyError: false,
+        // Main-plan bridge (see computeZapisMainPlanMatch): which rows of
+        // this group list are in the MAIN plan, plus a one-shot flash after
+        // "Dodaj do planu" and a highlight target when arriving from a plan
+        // block (direction A).
+        zapisGrupyMainPlan: null,
+        zapisGrupyHighlightNr: null,
         subjectBackView: initialSubjectBackView,
         subjectUrl: initialSubjectUrl,
         subjectLoading: initialView === 'subjectPage',
@@ -598,6 +657,25 @@
         plannerPicks: [],
         plannerPlans: [],
         plannerActivePlanId: null,
+        // The "my plan" integrations (Zapisy badges, tour banner, seat
+        // guardian) read this plan — not necessarily the tab being looked
+        // at (see planner-store.js's mainPlanId).
+        plannerMainPlanId: null,
+        // id of the plan tab currently showing an inline rename <input>,
+        // or null when no rename is in progress.
+        plannerRenamingPlanId: null,
+        // Direction A of the Plan × Zapisy bridge: seat badges on the
+        // visible grid's blocks. Explicit check only (button above the
+        // grid) — never auto-fetched, so opening the planner costs USOS
+        // zero requests. Badges keyed by pick key.
+        plannerRejCheck: 'idle', // idle | loading | done
+        plannerRejBadges: {},
+        plannerRejSummary: null,
+        // Direction C: tour banner over the plan. Null = not loaded yet
+        // (ensurePlannerTourBanner fills it once per page lifetime);
+        // { tours: [] } = loaded, empty when no active tour covers the
+        // main plan — the banner then renders nothing at all.
+        plannerTourBanner: null,
         plannerCustomSearchOpen: false,
         plannerCustomSearchQuery: '',
         plannerCustomSearchLoading: false,
@@ -605,6 +683,11 @@
         // ---- automatic generator ("Automatyczny" mode) ----
         plannerMode: 'manual',
         plannerAutoSelected: {}, // subjectId -> {subjectUrl, subjectName}
+        // Signature of the candidate list the last seed covered (sorted
+        // subjectIds joined) — seedPlannerAutoSelected only union-ADDS, so
+        // a manually unticked subject is never re-checked behind the
+        // student's back; only genuinely new candidates get default-checked.
+        plannerAutoSeedSig: null,
         plannerAutoEarliestStart: '',
         plannerAutoLatestEnd: '',
         plannerAutoBlockedWindows: [], // [{day, start, end}]
@@ -614,6 +697,14 @@
         plannerAutoMaxPerDay: '',
         plannerAutoPreferredDays: '',
         plannerAutoMinimizeGaps: true,
+        // Generator constraint (direction D): when on, groups the tour
+        // reports as full are removed from the CSP domains before search.
+        // Unknown seat state never filters — only confirmed-full groups go.
+        plannerAutoOnlyFreeSeats: true,
+        // Fresh tour seat map for the "pełna" tags on group rows/popovers:
+        // `${kod}||${normalized label}||${nr}` -> { full, seatsText }.
+        // Filled by generate-with-constraint; absent until then.
+        plannerAutoSeatMap: {},
         plannerAutoStatus: 'idle', // idle | fetching | generating | done | failed
         plannerAutoCandidates: [],
         plannerAutoActiveCandidateIndex: 0,
@@ -652,10 +743,17 @@
       // persistViewState()/handlePopState() for the rest of the mechanism.
       try { history.replaceState(this.viewStatePayload(), '', location.href); } catch (e) { /* ignore */ }
       this.setupTitleGuard();
+      this.seedPlannerAutoSelected();
       this.loadPlannerPicks();
       this.checkNewsUpdate();
       if (initialView === 'subjectPage' && initialSubjectUrl) {
         this.fetchSubjectData(initialSubjectUrl);
+      }
+      if (initialView === 'zapisTura' && initialZapisTura) {
+        this.fetchZapisTura(initialZapisTura);
+      }
+      if (initialView === 'zapisGrupy' && initialZapisGrupy) {
+        this.fetchZapisGrupy(initialZapisGrupy);
       }
       if (initialView === 'catalogPage' && initialCatalogKod) {
         if (initialCatalogKind === 'stage') {
@@ -729,6 +827,22 @@
         view: this.state.view,
         subjectUrl: this.state.view === 'subjectPage' ? this.state.subjectUrl : null,
         subjectBackView: this.state.view === 'subjectPage' ? this.state.subjectBackView : null,
+        zapisTuraKey: this.state.view === 'zapisTura' ? this.state.zapisTuraKey : null,
+        zapisTuraTitle: this.state.view === 'zapisTura' ? this.state.zapisTuraTitle : null,
+        zapisTuraCode: this.state.view === 'zapisTura' ? this.state.zapisTuraCode : null,
+        zapisTuraSubjectsUrl: this.state.view === 'zapisTura' ? this.state.zapisTuraSubjectsUrl : null,
+        zapisTuraRegisterUrl: this.state.view === 'zapisTura' ? this.state.zapisTuraRegisterUrl : null,
+        zapisTuraPlanUrls: this.state.view === 'zapisTura' ? this.state.zapisTuraPlanUrls : null,
+        zapisGrupyKey: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyKey : null,
+        zapisGrupyTourKey: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyTourKey : null,
+        zapisGrupySubjKod: this.state.view === 'zapisGrupy' ? this.state.zapisGrupySubjKod : null,
+        zapisGrupyTitle: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyTitle : null,
+        zapisGrupyKod: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyKod : null,
+        zapisGrupyCykl: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyCykl : null,
+        zapisGrupyOccupancy: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyOccupancy : null,
+        zapisGrupyDetailsUrl: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyDetailsUrl : null,
+        zapisGrupyGroupsUrl: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyGroupsUrl : null,
+        zapisGrupyRegisterUrl: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyRegisterUrl : null,
         catalogKind: this.state.view === 'catalogPage' ? this.state.catalogKind : null,
         catalogKod: this.state.view === 'catalogPage' ? this.state.catalogKod : null,
         catalogEtpKod: this.state.view === 'catalogPage' && this.state.catalogKind === 'stage' ? this.state.catalogEtpKod : null,
@@ -764,6 +878,8 @@
       const p = e.state || {};
       let view = VALID_VIEWS.has(p.view) ? p.view : 'dashboard';
       if (view === 'subjectPage' && !p.subjectUrl) view = 'przedmiotyLista';
+      if (view === 'zapisTura' && !p.zapisTuraSubjectsUrl && !p.zapisTuraKey) view = 'zapisy';
+      if (view === 'zapisGrupy' && !p.zapisGrupyGroupsUrl && !(p.zapisGrupyTourKey && p.zapisGrupySubjKod)) view = 'zapisy';
       if (view === 'catalogPage') {
         const validKind = p.catalogKind === 'unit' || p.catalogKind === 'program'
           || (p.catalogKind === 'stage' && !!p.catalogEtpKod);
@@ -815,6 +931,56 @@
         });
         if (p.catalogKind === 'stage') this.fetchStagePage(p.catalogKod, p.catalogEtpKod, null);
         else this.fetchCatalogPage(p.catalogKind, p.catalogKod);
+      } else if (view === 'zapisTura') {
+        this.setState({
+          view: 'zapisTura',
+          notifPanelOpen: false,
+          avatarMenuOpen: false,
+          zapisTuraKey: p.zapisTuraKey || null,
+          zapisTuraTitle: p.zapisTuraTitle || '',
+          zapisTuraCode: p.zapisTuraCode || '',
+          zapisTuraSubjectsUrl: p.zapisTuraSubjectsUrl || '',
+          zapisTuraRegisterUrl: p.zapisTuraRegisterUrl || '',
+          zapisTuraPlanUrls: Array.isArray(p.zapisTuraPlanUrls) ? p.zapisTuraPlanUrls : [],
+          zapisTuraSubjects: [],
+          zapisTuraLoading: true,
+          zapisTuraError: false,
+        });
+        this.fetchZapisTura({
+          key: p.zapisTuraKey,
+          title: p.zapisTuraTitle,
+          code: p.zapisTuraCode,
+          subjectsUrl: p.zapisTuraSubjectsUrl,
+          registerUrl: p.zapisTuraRegisterUrl,
+          planUrls: p.zapisTuraPlanUrls,
+        });
+      } else if (view === 'zapisGrupy') {
+        this.setState({
+          view: 'zapisGrupy',
+          notifPanelOpen: false,
+          avatarMenuOpen: false,
+          zapisGrupyKey: p.zapisGrupyKey || null,
+          zapisGrupyTourKey: p.zapisGrupyTourKey || null,
+          zapisGrupySubjKod: p.zapisGrupySubjKod || null,
+          zapisGrupyTitle: p.zapisGrupyTitle || '',
+          zapisGrupyKod: p.zapisGrupyKod || '',
+          zapisGrupyCykl: p.zapisGrupyCykl || '',
+          zapisGrupyOccupancy: p.zapisGrupyOccupancy || null,
+          zapisGrupyDetailsUrl: p.zapisGrupyDetailsUrl || '',
+          zapisGrupyGroupsUrl: p.zapisGrupyGroupsUrl || '',
+          zapisGrupyRegisterUrl: p.zapisGrupyRegisterUrl || '',
+          zapisGrupySections: [],
+          zapisGrupyLoading: true,
+          zapisGrupyError: false,
+          zapisGrupyMainPlan: null,
+            zapisGrupyHighlightNr: p.zapisGrupyHighlightNr || null,
+        });
+        this.fetchZapisGrupy({
+          key: p.zapisGrupyKey,
+          tourKey: p.zapisGrupyTourKey,
+          subjKod: p.zapisGrupySubjKod,
+          groupsUrl: p.zapisGrupyGroupsUrl,
+        });
       } else if (view === 'mapa') {
         this.setState({ view: 'mapa', notifPanelOpen: false, avatarMenuOpen: false });
         this.ensureMapaData();
@@ -878,10 +1044,14 @@
 
     // Dismissing the beta notice (see renderBetaNotice) only ever needs to
     // repaint the main content area, same reasoning as setTopbarState.
+    // Content patches also silence the enter animation (see render()): the
+    // <main> keeps data-enter="0" while its innerHTML swaps, so arriving
+    // data never replays the navigation fade.
     setContentState(patch) {
       Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
       const el = this.root.querySelector('[data-content-root]');
       if (!el) { this.render(); return; }
+      el.dataset.enter = '0';
       el.innerHTML = `${this.renderBetaNotice()}${this.renderView()}`;
     }
 
@@ -1024,6 +1194,7 @@
       this.setState(patch);
       this.persistViewState();
       if (view === 'mapa') this.ensureMapaData();
+      if (view === 'planer') this.ensurePlannerTourBanner();
       if (view === 'katalogJednostki') this.ensureKatalogRoot();
       if (view === 'katalogPrzedmioty') this.ensureKatalogRoot();
       if (view === 'katalogKierunki') this.ensureKatalogRoot();
@@ -1111,11 +1282,41 @@
         case 'openUsos':
           window.open(withUsospOff(el.dataset.url || location.origin + '/kontroler.php'), '_blank', 'noopener');
           break;
+        case 'viewSubjects':
+          // Personal-calendar tour links (szukajPrzedmiotu&method=rej) open
+          // the in-panel tour view; faculty-calendar links (jed_org_kod)
+          // keep the old unit-offer view — one action, no duplicate paths.
+          this.openZapisTuraFromUrl(el.dataset.url || '');
+          break;
+        case 'zapisTuraRetry':
+          this.openZapisTuraFromUrl(this.state.zapisTuraSubjectsUrl || '');
+          break;
+        case 'openZapisGrupy': {
+          let occ = null;
+          try { occ = el.dataset.occ ? JSON.parse(el.dataset.occ) : null; } catch (e) { occ = null; }
+          this.openZapisGrupy({
+            tourKey: el.dataset.tour || null,
+            subjKod: el.dataset.kod || null,
+            title: el.dataset.name || '',
+            kod: el.dataset.kod || '',
+            cykl: el.dataset.cykl || '',
+            occupancy: occ,
+            detailsUrl: el.dataset.details || '',
+            groupsUrl: el.dataset.url || '',
+            registerUrl: el.dataset.register || '',
+          });
+          break;
+        }
+        case 'zapisGrupyRetry':
+          this.fetchZapisGrupy({
+            key: this.state.zapisGrupyKey,
+            tourKey: this.state.zapisGrupyTourKey,
+            subjKod: this.state.zapisGrupySubjKod,
+            groupsUrl: this.state.zapisGrupyGroupsUrl,
+          });
+          break;
         case 'rescrape':
           this.emitSettings({ rescrape: true });
-          break;
-        case 'toggleZapisyOwnOnly':
-          this.setState((s) => ({ zapisyOwnOnly: !s.zapisyOwnOnly }));
           break;
         case 'openSubjectPage':
           this.openSubjectPage(el.dataset.url);
@@ -1248,11 +1449,36 @@
         case 'plannerDeletePlan':
           this.plannerDeletePlan();
           break;
+        case 'plannerSetMainPlan':
+          this.plannerSetMainPlan(el.dataset.id);
+          break;
+        case 'plannerStartRename':
+          this.plannerStartRename(el.dataset.id);
+          break;
+        case 'plannerCommitRename':
+          this.plannerCommitRename(el.dataset.id);
+          break;
+        case 'plannerCancelRename':
+          this.plannerCancelRename();
+          break;
+        case 'plannerNoop':
+          // Swallows clicks that must not trigger an enclosing
+          // data-action (e.g. the rename <input> inside a plan tab).
+          break;
         case 'plannerToggleCustomSearch':
           this.plannerToggleCustomSearch();
           break;
         case 'plannerSelectSearchSubject':
           this.plannerSelectSearchSubject(el.dataset.url, el.dataset.name);
+          break;
+        case 'plannerCheckRejSeats':
+          this.plannerCheckRejSeats();
+          break;
+        case 'plannerOpenRejGroups':
+          this.plannerOpenRejGroups(el.dataset.pickKey || '');
+          break;
+        case 'plannerOpenTourBanner':
+          this.plannerOpenTourBanner(parseInt(el.dataset.index || '0', 10));
           break;
         case 'plannerSetMode':
           this.plannerSetMode(el.dataset.mode);
@@ -1268,6 +1494,9 @@
           break;
         case 'plannerAutoToggleMinimizeGaps':
           this.setPlannerPrefsState((s) => ({ plannerAutoMinimizeGaps: !s.plannerAutoMinimizeGaps }));
+          break;
+        case 'plannerAutoToggleOnlyFreeSeats':
+          this.setPlannerPrefsState((s) => ({ plannerAutoOnlyFreeSeats: !s.plannerAutoOnlyFreeSeats }));
           break;
         case 'plannerAutoGenerate':
           this.plannerAutoGenerate();
@@ -1582,6 +1811,254 @@
         });
     }
 
+    // Opens a registration tour inside the panel: title/register/plan links
+    // come from the Zapisy row, but the subjectsUrl itself is refreshed
+    // first (refreshPersonalCalendar — the callback token is per page load,
+    // so a stored URL may already be stale) and matched back by rej_kod. The
+    // passed URL is only a fallback when the refresh itself fails. Read-only
+    // GETs throughout — the enrolment POST (brdg2/zarejestruj) is never
+    // called; saving happens in USOSweb via the deep link.
+    openZapisTuraFromUrl(url) {
+      if (!url) return;
+      if (/[?&]method=rej\b/.test(url)) {
+        const m = url.match(/[?&]rej_kod=([^&]+)/);
+        const key = m ? decodeURIComponent(m[1]) : url;
+        const row = this.zapisRounds.find((r) => r.rejKod === key || r.subjectsUrl === url);
+        this.openZapisTura({
+          key,
+          title: (row && row.sectionTitle) || '',
+          code: (row && (row.sectionCode || row.rejKod)) || key,
+          subjectsUrl: url,
+          registerUrl: (row && row.registerUrl) || null,
+          planUrls: (row && row.planUrls) || [],
+        });
+        return;
+      }
+      const kodMatch1 = url.match(/[?&]jed_org_kod=([^&]+)/);
+      const kodMatch2 = url.match(/[?&]kod=([^&]+)/);
+      const jedOrgKod = kodMatch1 ? decodeURIComponent(kodMatch1[1])
+        : kodMatch2 ? decodeURIComponent(kodMatch2[1]) : null;
+      if (jedOrgKod) {
+        this.setState({ view: 'katalogPrzedmioty', katalogPrzedmiotyUnitKod: jedOrgKod });
+      } else {
+        window.open(withUsospOff(url), '_blank', 'noopener');
+      }
+    }
+
+    openZapisTura(meta) {
+      this.setState({
+        view: 'zapisTura',
+        zapisTuraKey: meta.key || null,
+        zapisTuraTitle: meta.title || '',
+        zapisTuraCode: meta.code || '',
+        zapisTuraSubjectsUrl: meta.subjectsUrl || '',
+        zapisTuraRegisterUrl: meta.registerUrl || '',
+        zapisTuraPlanUrls: Array.isArray(meta.planUrls) ? meta.planUrls : [],
+        zapisTuraSubjects: [],
+        zapisTuraLoading: true,
+        zapisTuraError: false,
+      });
+      this.persistViewState();
+      this.fetchZapisTura(meta);
+    }
+
+    fetchZapisTura(meta) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setState({ zapisTuraLoading: false, zapisTuraError: true });
+        return;
+      }
+      const adapter = adapters.selectAdapter();
+      const keyM = (meta.subjectsUrl || '').match(/[?&]rej_kod=([^&]+)/);
+      const rejKod = keyM ? decodeURIComponent(keyM[1]) : (meta.key || null);
+      // Data arrival repaints content in place (no navigation fade, no
+      // sidebar/topbar rebuild); stale arrivals (navigated away meanwhile)
+      // commit silently so a later back-navigation still finds the data.
+      const commit = (patch) => {
+        if (this.state.view === 'zapisTura') this.setContentState(patch);
+        else Object.assign(this.state, patch);
+      };
+      // One final setState (loading → loaded in a single step): every full
+      // render recreates .usospp-view and replays its fade-in, so N
+      // setStates read as N page refreshes. Intermediate refresh results
+      // only feed the retry URL — they never render on their own.
+      const loadFrom = (subjectsUrl, extra) => scrape.fetchRejSubjects(adapter, subjectsUrl)
+        .then((res) => {
+          if (!res || !res.supported) {
+            commit({ zapisTuraLoading: false, zapisTuraError: true, ...extra });
+          } else {
+            commit({ zapisTuraLoading: false, zapisTuraSubjects: res.subjects || [], ...extra });
+          }
+        })
+        .catch(() => {
+          commit({ zapisTuraLoading: false, zapisTuraError: true, ...extra });
+        });
+      scrape.refreshPersonalCalendar(adapter)
+        .then((cal) => {
+          const fresh = (cal && Array.isArray(cal.sections) ? cal.sections : [])
+            .find((s) => s.code === rejKod || (s.rounds || []).some((r) => r.rejKod === rejKod));
+          if (fresh && fresh.subjectsUrl) {
+            const freshRound = (fresh.rounds || []).find((r) => r.rejKod === rejKod && r.registerUrl)
+              || (fresh.rounds || []).find((r) => r.registerUrl);
+            loadFrom(fresh.subjectsUrl, {
+              zapisTuraSubjectsUrl: fresh.subjectsUrl,
+              ...(freshRound && freshRound.registerUrl ? { zapisTuraRegisterUrl: freshRound.registerUrl } : null),
+            });
+          } else if (meta.subjectsUrl) {
+            loadFrom(meta.subjectsUrl, {});
+          } else {
+            commit({ zapisTuraLoading: false, zapisTuraError: true });
+          }
+        })
+        .catch(() => {
+          if (meta.subjectsUrl) loadFrom(meta.subjectsUrl, {});
+          else commit({ zapisTuraLoading: false, zapisTuraError: true });
+        });
+    }
+
+    // Opens one subject's registration-context groups inside the panel.
+    // Freshness chain (all read-only GETs): refresh calendar → find the
+    // tour → fresh subjectsUrl → find the subject by kod → fresh groupsUrl
+    // → group list. The enrolment POST is never called; saving stays a
+    // deep link out of the panel.
+    openZapisGrupy(meta) {
+      if (!meta || (!meta.groupsUrl && !(meta.tourKey && meta.subjKod))) return;
+      this.setState({
+        view: 'zapisGrupy',
+        zapisGrupyKey: (meta.tourKey || '') + '|' + (meta.subjKod || ''),
+        zapisGrupyTourKey: meta.tourKey || null,
+        zapisGrupySubjKod: meta.subjKod || null,
+        zapisGrupyTitle: meta.title || '',
+        zapisGrupyKod: meta.kod || '',
+        zapisGrupyCykl: meta.cykl || '',
+        zapisGrupyOccupancy: meta.occupancy || null,
+        zapisGrupyDetailsUrl: meta.detailsUrl || '',
+        zapisGrupyGroupsUrl: meta.groupsUrl || '',
+        zapisGrupyRegisterUrl: meta.registerUrl || '',
+        zapisGrupySections: [],
+        zapisGrupyLoading: true,
+        zapisGrupyError: false,
+        zapisGrupyMainPlan: null,
+        zapisGrupyHighlightNr: meta.highlightNr || null,
+      });
+      this.fetchZapisGrupy(meta);
+    }
+
+    fetchZapisGrupy(meta) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) {
+        this.setState({ zapisGrupyLoading: false, zapisGrupyError: true });
+        return;
+      }
+      const adapter = adapters.selectAdapter();
+      // Same single-render rule as fetchZapisTura: the freshness chain
+      // (calendar → subjects → groups) accumulates fresh URLs/occupancy in
+      // locals and commits them in ONE final setState — intermediate
+      // setStates would each replay .usospp-view's fade-in.
+      // Arrival repaints content in place (see fetchZapisTura's commit).
+      const commit = (patch) => {
+        if (this.state.view === 'zapisGrupy') this.setContentState(patch);
+        else Object.assign(this.state, patch);
+      };
+      const occPatch = (occ) => (occ ? { zapisGrupyOccupancy: occ } : null);
+      const urlPatch = (groupsUrl) => (groupsUrl ? { zapisGrupyGroupsUrl: groupsUrl } : null);
+      const loadGroups = (groupsUrl, occ) => {
+        if (!groupsUrl) {
+          commit({ zapisGrupyLoading: false, zapisGrupyError: true, ...occPatch(occ) });
+          return;
+        }
+        scrape.fetchRejGroups(adapter, groupsUrl)
+          .then(async (res) => {
+            if (!res || !res.supported) {
+              commit({ zapisGrupyLoading: false, zapisGrupyError: true, ...urlPatch(groupsUrl), ...occPatch(occ) });
+            } else {
+              const sections = Array.isArray(res.sections) ? res.sections : [];
+              // Main-plan match rides along in the SAME commit (one render,
+              // no column pop-in later) — the store read is local, not USOS.
+              let mainPlan = null;
+              try { mainPlan = await this.computeZapisMainPlanMatch(sections); } catch (e) { mainPlan = null; }
+              commit({ zapisGrupyLoading: false, zapisGrupySections: sections, ...urlPatch(groupsUrl), ...occPatch(occ), ...(mainPlan ? { zapisGrupyMainPlan: mainPlan } : null) });
+            }
+          })
+          .catch(() => {
+            commit({ zapisGrupyLoading: false, zapisGrupyError: true, ...urlPatch(groupsUrl), ...occPatch(occ) });
+          });
+      };
+      const tourKey = meta.tourKey;
+      const subjKod = meta.subjKod;
+      if (!tourKey || !subjKod) {
+        loadGroups(meta.groupsUrl, null);
+        return;
+      }
+      scrape.refreshPersonalCalendar(adapter)
+        .then((cal) => {
+          const section = (cal && Array.isArray(cal.sections) ? cal.sections : [])
+            .find((s) => s.code === tourKey || (s.rounds || []).some((r) => r.rejKod === tourKey));
+          const subjectsUrl = section ? section.subjectsUrl : null;
+          if (!subjectsUrl) {
+            loadGroups(meta.groupsUrl, null);
+            return;
+          }
+          scrape.fetchRejSubjects(adapter, subjectsUrl)
+            .then((res) => {
+              const subj = (res && Array.isArray(res.subjects) ? res.subjects : [])
+                .find((x) => x.kod === subjKod);
+              const occ = (subj && subj.occupancy) || null;
+              if (subj && subj.groupsUrl) loadGroups(subj.groupsUrl, occ);
+              else loadGroups(meta.groupsUrl, occ);
+            })
+            .catch(() => {
+              loadGroups(meta.groupsUrl, null);
+            });
+        })
+        .catch(() => {
+          loadGroups(meta.groupsUrl, null);
+        });
+    }
+
+    // Direction B of the Plan × Zapisy bridge: which rows of THIS group
+    // list (subject kod = state.zapisGrupyKod) are in the MAIN plan.
+    // Returns { planId, planName, rows } where rows maps
+    // `${sectionType}||${nr}` -> { sessionMatch } — or null when there is
+    // no main-plan pick for this subject (render then shows plain rows).
+    async computeZapisMainPlanMatch(sections) {
+      const kod = this.state.zapisGrupyKod;
+      if (!kod || !Array.isArray(sections) || !sections.length) return null;
+      const main = await this.getMainPlanRecord();
+      if (!main) return null;
+      return this.computeZapisMainPlanMatchFor(sections, kod, main.picks, main.name, main.id);
+    }
+
+    // Same row-match as computeZapisMainPlanMatch but over an explicit
+    // picks array (kept for callers that already hold picks in hand).
+    // NOTE: the pick goes in whole — overriding its classTypeLabel/nr with
+    // the row's own values would make every row match itself (that bug
+    // once lit 📅 on all rows). matchPickGroups already filters by the
+    // pick's own type+nr; here we additionally pin hits to this row's nr.
+    async computeZapisMainPlanMatchFor(sections, kod, picks, planName, planId) {
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      if (!bridge || !kod) return null;
+      const rows = {};
+      let count = 0;
+      const mine = (picks || []).filter((p) => bridge.przKodFromUrl(p.subjectUrl) === kod);
+      if (!mine.length) return null;
+      (sections || []).forEach((sec) => {
+        (sec.groups || []).forEach((g) => {
+          const hits = mine
+            .flatMap((p) => bridge.matchPickGroups(p, { sections: [sec] }))
+            .filter((h) => String(h.group.nr) === String(g.nr));
+          const hit = hits.find((h) => h.sessionMatch) || hits[0];
+          if (hit) {
+            rows[`${sec.type || ''}||${g.nr}`] = { sessionMatch: !!hit.sessionMatch };
+            count += 1;
+          }
+        });
+      });
+      if (!count) return null;
+      return { planId, planName, rows, count };
+    }
     // Opens a "jednostka" or "program" search result in our own page —
     // same shape as openSubjectPage/fetchSubjectData, just generalized over
     // `kind` since both are otherwise identical (fetch, parse, show, with a
@@ -2558,34 +3035,80 @@
     // background per cycle and upgrade each cycle's timetable in place.
     // Guarded by `subjectUrl` (not object identity) so a stale response
     // arriving after the user opened a *different* subject is dropped.
+    // Timetables arrive per cycle and at different times, but the page
+    // must not rebuild for them: every full render recreates .usospp-view
+    // (visible blink even with the enter-gated fade). So Promise.all waits
+    // for every cycle, state commits silently, and only the skeleton slots
+    // ([data-cycle-timetable]) are swapped for real timetables in place.
     loadSubjectTimetables(url, cycles) {
       const scrape = window.USOSPP_SCRAPE;
       const adapters = window.USOSPP_ADAPTERS;
       if (!scrape || !adapters) return;
       const adapter = adapters.selectAdapter();
       if (!adapter) return;
-      cycles.forEach((cycle, idx) => {
-        if (!cycle.planUrl) return;
-        scrape.fetchDoc(cycle.planUrl)
+      const jobs = cycles.map((cycle, idx) => {
+        if (!cycle.planUrl) return Promise.resolve(null);
+        return scrape.fetchDoc(cycle.planUrl)
           .then((doc) => {
-            if (!doc || this.state.subjectUrl !== url) return;
+            if (!doc) return { idx, tt: null };
             const tt = adapter.getSubjectTimetable(doc);
-            if (!tt || !tt.days.length) return;
-            this.setState((s) => {
-              if (!s.subjectData || s.subjectUrl !== url) return {};
-              const nextCycles = s.subjectData.cycles.map((c, i) => (i === idx ? { ...c, timetable: tt } : c));
-              return { subjectData: { ...s.subjectData, cycles: nextCycles } };
-            });
+            return { idx, tt: (tt && tt.days.length) ? tt : null };
           })
-          .catch(() => {});
+          .catch(() => ({ idx, tt: null }));
+      });
+      Promise.all(jobs).then((results) => {
+        const s = this.state;
+        // Stale (user navigated elsewhere meanwhile): new view fetches its
+        // own data — touch nothing, leave no skeletons behind elsewhere.
+        if (!s.subjectData || s.subjectUrl !== url || s.view !== 'subjectPage') return;
+        const byIdx = new Map(results.filter(Boolean).map((r) => [r.idx, r.tt]));
+        const nextCycles = s.subjectData.cycles.map((c, i) => (
+          byIdx.has(i) && byIdx.get(i) ? { ...c, timetable: byIdx.get(i) } : c
+        ));
+        // Silent commit (no render) — visible swap happens per slot below.
+        s.subjectData = { ...s.subjectData, cycles: nextCycles };
+        const root = this.root.querySelector('[data-content-root]');
+        if (!root) return;
+        cycles.forEach((cycle, idx) => {
+          if (!cycle.planUrl) return;
+          const slot = root.querySelector(`[data-cycle-timetable="${idx}"]`);
+          if (!slot) return;
+          const tt = byIdx.get(idx);
+          const html = tt ? this.renderSubjectTimetable(tt) : '';
+          slot.outerHTML = html || `<div style="font-size:11.5px;color:var(--ink-3);margin-top:14px;">Nie udało się pobrać planu.</div>`;
+        });
       });
     }
 
     // ---- schedule planner (what-if plan, never touches real USOS state) ---
 
+    // Tab-strip projection shared by every plan-list mutation tail:
+    // {id, name, pickCount} plus isMain, so the star survives any refresh.
+    projectPlannerPlans(plans, mainPlanId) {
+      return (plans || []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        pickCount: (p.picks || []).length,
+        isMain: p.id === mainPlanId,
+      }));
+    }
+
+    // Full main-plan record ({id, name, picks}) for the Zapisy
+    // integrations — reads the store directly instead of local state,
+    // which only ever holds the ACTIVE plan's picks.
+    async getMainPlanRecord() {
+      const planner = window.USOSPP_PLANNER;
+      if (!planner) return null;
+      const data = await planner.getData();
+      const mainId = (data.plans.some((p) => p.id === data.mainPlanId)) ? data.mainPlanId : data.activePlanId;
+      const plan = data.plans.find((p) => p.id === mainId) || data.plans[0];
+      if (!plan) return null;
+      return { id: plan.id, name: plan.name, picks: plan.picks || [] };
+    }
+
     // Applies a freshly-loaded (or cross-tab-changed) planner store snapshot
-    // — { plans: [{id,name,picks}], activePlanId } — to local state. Also
-    // recomputes every pick's `key` in every plan (not just the active one,
+    // — { plans: [{id,name,picks}], activePlanId, mainPlanId } — to local
+    // state. Also recomputes every pick's `key` in every plan (not just the active one,
     // so switching to an old plan doesn't resurrect the stale-key bug) from
     // its own stable fields: `key` used to be built from the raw subject
     // URL before classTypeKey started normalizing through subjectId, so
@@ -2612,10 +3135,20 @@
         ? preferredId
         : (migratedPlans.some((p) => p.id === data.activePlanId) ? data.activePlanId : migratedPlans[0].id);
       const activePlan = migratedPlans.find((p) => p.id === activePlanId);
+      // Unlike the active tab (kept per-tab, see above), the MAIN plan is
+      // global truth — a star set in another tab is followed here.
+      const mainPlanId = migratedPlans.some((p) => p.id === data.mainPlanId) ? data.mainPlanId : activePlanId;
+      // Manual picks may contribute custom generator candidates (see
+      // plannerSubjectCandidates) — assign them first so the seed below
+      // sees the fresh list, then default-check any it hasn't seen yet.
+      // Single render: seedPlannerAutoSelected never renders by itself.
+      Object.assign(this.state, { plannerPicks: (activePlan && activePlan.picks) || [] });
+      this.seedPlannerAutoSelected();
       this.setPlannerState({
-        plannerPlans: migratedPlans.map((p) => ({ id: p.id, name: p.name, pickCount: p.picks.length })),
+        plannerPlans: this.projectPlannerPlans(migratedPlans, mainPlanId),
         plannerActivePlanId: activePlanId,
-        plannerPicks: (activePlan && activePlan.picks) || [],
+        plannerMainPlanId: mainPlanId,
+        plannerPicks: this.state.plannerPicks,
       });
       if (changed) {
         const planner = window.USOSPP_PLANNER;
@@ -2646,7 +3179,10 @@
         if (!data.plans.some((p) => p.id === activeId)) return data;
         return { ...data, plans: data.plans.map((p) => (p.id === activeId ? { ...p, picks: nextPicks } : p)) };
       }).then((next) => {
-        this.setPlannerState({ plannerPlans: next.plans.map((p) => ({ id: p.id, name: p.name, pickCount: p.picks.length })) });
+        this.setPlannerState({
+          plannerPlans: this.projectPlannerPlans(next.plans, next.mainPlanId),
+          plannerMainPlanId: next.mainPlanId,
+        });
       });
     }
 
@@ -2691,7 +3227,12 @@
       planner.setData((data) => {
         if (data.plans.length <= 1) return data;
         const nextPlans = data.plans.filter((p) => p.id !== data.activePlanId);
-        return { plans: nextPlans, activePlanId: nextPlans[0].id };
+        const mainAlive = nextPlans.some((p) => p.id === data.mainPlanId);
+        return {
+          plans: nextPlans,
+          activePlanId: nextPlans[0].id,
+          mainPlanId: mainAlive ? data.mainPlanId : nextPlans[0].id,
+        };
       }).then((next) => this.applyPlannerSwitchResult(next));
     }
 
@@ -2701,11 +3242,321 @@
     applyPlannerSwitchResult(next) {
       const plan = next.plans.find((p) => p.id === next.activePlanId);
       this.setPlannerState({
-        plannerPlans: next.plans.map((p) => ({ id: p.id, name: p.name, pickCount: p.picks.length })),
+        plannerPlans: this.projectPlannerPlans(next.plans, next.mainPlanId),
         plannerActivePlanId: next.activePlanId,
+        plannerMainPlanId: next.mainPlanId,
         plannerPicks: (plan && plan.picks) || [],
         plannerExpandedUrl: null,
         plannerDraftSelection: {},
+        plannerRenamingPlanId: null,
+      });
+    }
+
+    // Star toggle: marks which saved plan the Zapisy integrations treat as
+    // "my plan". Never touches the active tab or any picks — and never
+    // discards an open configurator (unlike applyPlannerSwitchResult).
+    plannerSetMainPlan(id) {
+      if (!id || id === this.state.plannerMainPlanId) return;
+      const planner = window.USOSPP_PLANNER;
+      if (!planner) return;
+      planner.setData((data) => (data.plans.some((p) => p.id === id) ? { ...data, mainPlanId: id } : data))
+        .then((next) => {
+          this.setPlannerState({
+            plannerPlans: this.projectPlannerPlans(next.plans, next.mainPlanId),
+            plannerMainPlanId: next.mainPlanId,
+          });
+        });
+    }
+
+    // Inline rename: the tab label becomes an <input> (see
+    // renderPlannerPlanTabs); commit on Enter/✓, cancel on Escape/✕.
+    // Anything else re-rendering the planner abandons the edit — rename is
+    // an explicit mode, not ambient state.
+    plannerStartRename(id) {
+      if (!id) return;
+      this.setPlannerState({ plannerRenamingPlanId: id });
+      const input = this.root.querySelector(`input[data-plan-rename="${CSS.escape(id)}"]`);
+      if (input) { input.focus(); input.select(); }
+    }
+
+    plannerCancelRename() {
+      if (!this.state.plannerRenamingPlanId) return;
+      this.setPlannerState({ plannerRenamingPlanId: null });
+    }
+
+    plannerCommitRename(id) {
+      if (!id) return;
+      const input = this.root.querySelector(`input[data-plan-rename="${CSS.escape(id)}"]`);
+      const name = (input ? input.value : '').trim().slice(0, 40);
+      // Empty (or unchanged-in-effect) commits just exit rename mode —
+      // there is no "empty plan name" state to persist.
+      if (!name) {
+        this.setPlannerState({ plannerRenamingPlanId: null });
+        return;
+      }
+      const planner = window.USOSPP_PLANNER;
+      if (!planner) return;
+      planner.setData((data) => ({
+        ...data,
+        plans: data.plans.map((p) => (p.id === id ? { ...p, name } : p)),
+      })).then((next) => {
+        this.setPlannerState({
+          plannerPlans: this.projectPlannerPlans(next.plans, next.mainPlanId),
+          plannerRenamingPlanId: null,
+        });
+      });
+    }
+
+    // Direction A of the Plan × Zapisy bridge: seat badges on the visible
+    // grid's blocks. Explicit check only (the button above the grid calls
+    // plannerCheckRejSeats) — opening the planner never fetches tour data
+    // on its own, so idle browsing costs USOS zero requests. Results ride
+    // in-memory (this._plannerRejCache, keyed by tour/groupsUrl) for the
+    // page lifetime; a reload re-checks from scratch.
+    renderPlannerRejCheck() {
+      if (!this.state.plannerPicks.length) return '';
+      const loading = this.state.plannerRejCheck === 'loading';
+      const summary = this.state.plannerRejSummary;
+      return `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <button class="usospp-btn-ghost" style="font-size:12px;${loading ? 'opacity:0.6;' : ''}" ${loading ? 'disabled' : ''} data-action="plannerCheckRejSeats">${loading ? 'Sprawdzam miejsca…' : 'Sprawdź miejsca w zapisach'}</button>
+          ${summary ? `<span style="font-size:12px;color:var(--ink-3);">${esc(summary)}</span>` : ''}
+        </div>
+      `;
+    }
+
+    async plannerCheckRejSeats() {
+      if (this.state.plannerRejCheck === 'loading') return;
+      this.setPlannerState({ plannerRejCheck: 'loading', plannerRejSummary: null });
+      const res = await this.fetchRejSeatsForPicks(this.state.plannerPicks);
+      if (!res || this.state.view !== 'planer') return;
+      if (res.error) {
+        this.setPlannerState({ plannerRejCheck: 'idle', plannerRejSummary: res.error });
+        return;
+      }
+      const summary = res.matchedKods.size
+        ? `${[...res.tourLabels].join(', ')} · ${res.matchedKods.size}/${res.totalKods} przedmiotów z planu w turze — kliknij blok, żeby zobaczyć grupy`
+        : 'Brak Twoich przedmiotów w aktywnych turach zapisów.';
+      this.setPlannerState({ plannerRejCheck: 'done', plannerRejBadges: res.badges, plannerRejSummary: summary });
+    }
+
+    // Shared core for direction A (badges on the visible grid), the seat
+    // guardian and the generator's free-seats constraint: seat state per
+    // pick key for the given picks, across all live personal tours.
+    // Returns { badges, tourLabels, matchedKods, totalKods } or { error }.
+    // In-memory caches (_plannerRejCache) make repeat checks cheap; stops
+    // firing USOS requests the moment the planner is left.
+    async fetchRejSeatsForPicks(picks) {
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!bridge || !scrape || !adapters) return { error: 'Moduł zapisów niedostępny.' };
+      try {
+        const adapter = adapters.selectAdapter();
+        const cal = await scrape.refreshPersonalCalendar(adapter);
+        const sections = (cal && Array.isArray(cal.sections) ? cal.sections : []);
+        if (!sections.length) return { error: 'Brak tur zapisów na Twoim koncie.' };
+        const now = Date.now();
+        const tours = [];
+        sections.forEach((sec) => {
+          (sec.rounds || []).forEach((r) => {
+            if (!r.rejKod || !r.hasAccess) return;
+            if (r.endsAt) {
+              const end = Date.parse(String(r.endsAt).replace(' ', 'T'));
+              if (!Number.isNaN(end) && end < now) return;
+            }
+            tours.push({ rejKod: r.rejKod, registerUrl: r.registerUrl || null, sectionCode: sec.code || r.rejKod, subjectsUrl: sec.subjectsUrl || null });
+          });
+        });
+        if (!tours.length) return { error: 'Brak aktywnych tur zapisów z dostępem.' };
+        const kodToPicks = new Map();
+        (picks || []).forEach((p) => {
+          const kod = bridge.przKodFromUrl(p.subjectUrl);
+          if (!kod) return;
+          if (!kodToPicks.has(kod)) kodToPicks.set(kod, []);
+          kodToPicks.get(kod).push(p);
+        });
+        if (!kodToPicks.size) return { error: 'Plan nie zawiera przedmiotów z kodami USOS.' };
+        this._plannerRejCache = this._plannerRejCache || {};
+        const badges = {};
+        const tourLabels = new Set();
+        const matchedKods = new Set();
+        for (const tour of tours) {
+          if (!tour.subjectsUrl) continue;
+          const cacheKey = `subj:${tour.rejKod}`;
+          let subjects = this._plannerRejCache[cacheKey];
+          if (!subjects) {
+            const res = await scrape.fetchRejSubjects(adapter, tour.subjectsUrl).catch(() => null);
+            subjects = (res && Array.isArray(res.subjects)) ? res.subjects : [];
+            this._plannerRejCache[cacheKey] = subjects;
+          }
+          const byKod = new Map(subjects.map((s) => [s.kod, s]));
+          for (const [kod, kodPicks] of kodToPicks) {
+            const subj = byKod.get(kod);
+            if (!subj || !subj.groupsUrl) continue;
+            let rejGroups = this._plannerRejCache[`grp:${subj.groupsUrl}`];
+            if (rejGroups === undefined) {
+              const res = await scrape.fetchRejGroups(adapter, subj.groupsUrl).catch(() => null);
+              rejGroups = (res && res.supported) ? res : null;
+              this._plannerRejCache[`grp:${subj.groupsUrl}`] = rejGroups;
+            }
+            if (!rejGroups) continue;
+            matchedKods.add(kod);
+            tourLabels.add(tour.sectionCode);
+            const subjMatch = bridge.matchSubject(kodPicks, subj);
+            kodPicks.forEach((p) => {
+              if (badges[p.key]) return;
+              const hits = bridge.matchPickGroups(p, rejGroups);
+              const hit = hits.find((h) => h.sessionMatch) || hits[0];
+              const base = {
+                tourKey: tour.rejKod,
+                kod,
+                cykl: (subj.cycles && subj.cycles[0]) || '',
+                title: subj.name || p.subjectName,
+                groupsUrl: subj.groupsUrl,
+                registerUrl: tour.registerUrl,
+                enrollment: subjMatch ? subjMatch.enrollment : null,
+              };
+              if (!hit) {
+                // Subject is in the tour but this exact group isn't (label
+                // skew the soft match couldn't bridge, group renumbered…).
+                // Still a click-through: the block opens the group list,
+                // just without seat numbers (known:false renders the plain
+                // "zapisy" tag instead of "3/20" / "pełna").
+                badges[p.key] = { ...base, nr: null, sessionMatch: false, rejSession: null, seatsText: null, full: false, known: false };
+                return;
+              }
+              const seats = hit.seats;
+              badges[p.key] = {
+                ...base,
+                nr: hit.group.nr,
+                sessionMatch: !!hit.sessionMatch,
+                rejSession: hit.group.session || null,
+                seatsText: seats.known ? (seats.full ? 'pełna' : `${seats.free}/${seats.cap}`) : null,
+                full: !!seats.full,
+                known: !!seats.known,
+              };
+            });
+          }
+          if (this.state.view !== 'planer') return null;
+        }
+        return { badges, tourLabels, matchedKods, totalKods: kodToPicks.size };
+      } catch (e) {
+        return { error: 'Nie udało się sprawdzić miejsc — spróbuj ponownie.' };
+      }
+    }
+
+    // Clicking a badged grid block jumps to direction B (zapisGrupy) with
+    // the block's own group pre-highlighted (see zapisGrupyHighlightNr).
+    plannerOpenRejGroups(pickKey) {
+      const b = (this.state.plannerRejBadges || {})[pickKey];
+      if (!b || !b.groupsUrl) return;
+      this.openZapisGrupy({
+        tourKey: b.tourKey,
+        subjKod: b.kod,
+        title: b.title,
+        kod: b.kod,
+        cykl: b.cykl,
+        groupsUrl: b.groupsUrl,
+        registerUrl: b.registerUrl,
+        highlightNr: b.nr,
+      });
+    }
+
+    // Direction C of the Plan × Zapisy bridge: a thin banner over the plan
+    // naming live tours that cover the MAIN plan's subjects. Once per page
+    // lifetime, only while the planner is actually open, and reusing
+    // direction A's subject cache — the calendar refresh (1 GET) plus one
+    // subjects fetch per active tour, same order of magnitude as opening
+    // the Zapisy list itself.
+    async ensurePlannerTourBanner() {
+      if (this._tourBannerTried || this.state.plannerTourBanner) return;
+      this._tourBannerTried = true;
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!bridge || !scrape || !adapters) return;
+      try {
+        const main = await this.getMainPlanRecord();
+        if (!main || !(main.picks || []).length) return;
+        const mainKods = new Set(main.picks.map((p) => bridge.przKodFromUrl(p.subjectUrl)).filter(Boolean));
+        if (!mainKods.size) return;
+        const adapter = adapters.selectAdapter();
+        const cal = await scrape.refreshPersonalCalendar(adapter);
+        const sections = (cal && Array.isArray(cal.sections) ? cal.sections : []);
+        const now = Date.now();
+        this._plannerRejCache = this._plannerRejCache || {};
+        const tours = [];
+        for (const sec of sections) {
+          if (!sec.subjectsUrl) continue;
+          const liveRounds = (sec.rounds || []).filter((r) => {
+            if (!r.rejKod || !r.hasAccess) return false;
+            if (r.endsAt) {
+              const end = Date.parse(String(r.endsAt).replace(' ', 'T'));
+              if (!Number.isNaN(end) && end < now) return false;
+            }
+            return true;
+          });
+          if (!liveRounds.length) continue;
+          const firstRound = liveRounds[0];
+          const cacheKey = `subj:${firstRound.rejKod}`;
+          let subjects = this._plannerRejCache[cacheKey];
+          if (!subjects) {
+            const res = await scrape.fetchRejSubjects(adapter, sec.subjectsUrl).catch(() => null);
+            subjects = (res && Array.isArray(res.subjects)) ? res.subjects : [];
+            this._plannerRejCache[cacheKey] = subjects;
+          }
+          const covered = subjects.filter((s) => mainKods.has(s.kod));
+          if (!covered.length) continue;
+          if (this.state.view !== 'planer') return;
+          const endM = String(firstRound.endsAt || '').match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+          tours.push({
+            rejKod: firstRound.rejKod,
+            code: sec.code || firstRound.rejKod,
+            title: sec.title || '',
+            endsText: endM ? `${endM[3]}.${endM[2]}, ${endM[4]}:${endM[5]}` : null,
+            endsRel: this.relZapisTime(firstRound.startsAt, firstRound.endsAt),
+            subjectCount: covered.length,
+            mainPlanName: main.name,
+            subjectsUrl: sec.subjectsUrl,
+            registerUrl: firstRound.registerUrl || null,
+            planUrls: Array.isArray(sec.planUrls) ? sec.planUrls : [],
+          });
+        }
+        if (this.state.view === 'planer') {
+          this.setPlannerState({ plannerTourBanner: { tours } });
+        } else {
+          this.state.plannerTourBanner = { tours };
+        }
+      } catch (e) { /* banner stays absent — never an error state */ }
+    }
+
+    renderPlannerTourBanner() {
+      const banner = this.state.plannerTourBanner;
+      if (!banner || !(banner.tours || []).length) return '';
+      return `
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+          ${banner.tours.map((t, i) => `
+            <div class="usospp-planner-tourbanner">
+              <span>🟠 <strong>${esc(t.code)}</strong>${t.endsText ? ` · do ${esc(t.endsText)}${t.endsRel ? ` (${esc(t.endsRel)})` : ''}` : ''} · dotyczy ${esc(String(t.subjectCount))} ${t.subjectCount === 1 ? 'przedmiotu' : (t.subjectCount % 10 >= 2 && t.subjectCount % 10 <= 4 && (t.subjectCount % 100 < 12 || t.subjectCount % 100 > 14) ? 'przedmioty' : 'przedmiotów')} z „${esc(t.mainPlanName)}”</span>
+              <a data-action="plannerOpenTourBanner" data-index="${i}" style="font-weight:600;white-space:nowrap;">Przejdź do tury →</a>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    plannerOpenTourBanner(index) {
+      const banner = this.state.plannerTourBanner;
+      const t = banner && (banner.tours || [])[index];
+      if (!t) return;
+      this.openZapisTura({
+        key: t.rejKod,
+        title: t.title,
+        code: t.code,
+        subjectsUrl: t.subjectsUrl,
+        registerUrl: t.registerUrl,
+        planUrls: t.planUrls,
       });
     }
 
@@ -2761,6 +3612,27 @@
         else next[id] = { subjectUrl: url, subjectName: name };
         return { plannerAutoSelected: next };
       });
+    }
+
+    // Generator default: every candidate subject starts checked ("Przedmioty
+    // do uwzględnienia (X)" reads as all-in until the student opts out).
+    // Union-add only — never removes, never re-checks a manually unticked
+    // subject. Runs once at construction (stage subjects are already in
+    // this.data) and again from applyPlannerData (manual picks arrive async
+    // and contribute custom candidates). No rendering here: the constructor
+    // hasn't rendered yet, and applyPlannerData's own setPlannerState right
+    // below picks the change up.
+    seedPlannerAutoSelected() {
+      const { subjects } = this.plannerSubjectCandidates;
+      const ids = subjects.map((s) => subjectId(s.detailsUrl)).filter(Boolean).sort();
+      const sig = ids.join('|');
+      if (!sig || sig === this.state.plannerAutoSeedSig) return;
+      const next = { ...this.state.plannerAutoSelected };
+      subjects.forEach((s) => {
+        const id = subjectId(s.detailsUrl);
+        if (id && !next[id]) next[id] = { subjectUrl: s.detailsUrl, subjectName: s.name || '' };
+      });
+      Object.assign(this.state, { plannerAutoSelected: next, plannerAutoSeedSig: sig });
     }
 
     plannerAutoAddBlock() {
@@ -2851,6 +3723,79 @@
     // synchronous CSP search runs on the main thread — see the plan doc's
     // note on why this is a cheap, worthwhile insurance even with a
     // sub-250ms search budget.
+    // Direction D, generator half: removes tour-confirmed-full groups from
+    // the CSP domains (see plannerAutoOnlyFreeSeats). Unknown seat state
+    // never filters — a group USOS didn't report on stays eligible. Returns
+    // { variables, seatMap } for the search plus the popover "pełna" tags,
+    // or { failure } when the filter empties a variable (surfaced as a
+    // kind:'seats' message naming the subject, so the student knows exactly
+    // which toggle to loosen). On tour-fetch errors the search proceeds
+    // UNFILTERED — the generator must not block on a hiccup in tour data.
+    async applyFreeSeatsConstraint(variables) {
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      if (!bridge) return { variables, seatMap: {} };
+      const pseudoPicks = [];
+      variables.forEach((v) => {
+        const kod = bridge.przKodFromUrl(v.subjectUrl);
+        if (!kod) return;
+        (v.groups || []).forEach((g) => {
+          pseudoPicks.push({
+            key: `auto||${kod}||${v.classTypeLabel}||${g.nr}`,
+            subjectUrl: v.subjectUrl,
+            classTypeLabel: v.classTypeLabel,
+            nr: g.nr,
+            sessions: g.sessions || [],
+          });
+        });
+      });
+      const res = await this.fetchRejSeatsForPicks(pseudoPicks);
+      if (!res || res.error) return { variables, seatMap: {} };
+      const seatMap = {};
+      Object.entries(res.badges).forEach(([pkey, b]) => {
+        const parts = String(pkey).split('||');
+        seatMap[`${b.kod}||${bridge.normType(parts[2] || '')}||${String(b.nr)}`] = {
+          full: b.full,
+          known: b.known,
+          seatsText: b.seatsText,
+        };
+      });
+      const emptied = [];
+      const filtered = variables.map((v) => {
+        const kod = bridge.przKodFromUrl(v.subjectUrl);
+        const kept = (v.groups || []).filter((g) => {
+          const hit = kod ? seatMap[`${kod}||${bridge.normType(v.classTypeLabel)}||${String(g.nr)}`] : null;
+          return !(hit && hit.known && hit.full);
+        });
+        if (kept.length === 0 && (v.groups || []).length > 0) {
+          emptied.push(`${v.subjectName} — ${v.classTypeLabel}`);
+        }
+        return { ...v, groups: kept };
+      });
+      if (emptied.length) {
+        return {
+          failure: {
+            kind: 'seats',
+            message: `Wszystkie grupy są pełne wg zapisów dla: ${emptied.join('; ')}. Wyłącz „Tylko grupy z wolnymi miejscami” albo poczekaj na kolejną turę.`,
+          },
+        };
+      }
+      return { variables: filtered, seatMap };
+    }
+
+    // "pełna" / free-seats tag for a group row, popover or ghost box —
+    // driven by plannerAutoSeatMap (filled by generate-with-constraint).
+    // Silent when the group was never checked: no data, no tag, no guessing.
+    seatTagHtml(varKey, label, nr) {
+      const map = this.state.plannerAutoSeatMap;
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      if (!map || !bridge) return '';
+      const kod = String(varKey || '').split('::')[0];
+      const hit = map[`${kod}||${bridge.normType(label)}||${String(nr)}`];
+      if (!hit || !hit.known) return '';
+      if (hit.full) return ` <span class="usospp-tt-entry-rej full">pełna</span>`;
+      return ` <span class="usospp-tt-entry-rej">${esc(hit.seatsText || '')}</span>`;
+    }
+
     async plannerAutoGenerate() {
       if (this.state.plannerAutoStatus === 'fetching' || this.state.plannerAutoStatus === 'generating') return;
       if (!Object.keys(this.state.plannerAutoSelected).length) return;
@@ -2862,6 +3807,22 @@
       if (!ok) {
         this.setPlannerState({ plannerAutoStatus: 'failed', plannerAutoFailure: { kind: 'fetch', message: 'Nie udało się wczytać grup zajęć dla wybranych przedmiotów — spróbuj ponownie.' } });
         return;
+      }
+
+      let searchVariables = variables;
+      if (this.state.plannerAutoOnlyFreeSeats) {
+        const constrained = await this.applyFreeSeatsConstraint(variables);
+        if (this.state.view !== 'planer') return;
+        if (constrained.failure) {
+          this.setPlannerState({ plannerAutoStatus: 'failed', plannerAutoFailure: constrained.failure });
+          return;
+        }
+        searchVariables = constrained.variables;
+        this.setPlannerState({ plannerAutoSeatMap: constrained.seatMap });
+      } else if (Object.keys(this.state.plannerAutoSeatMap || {}).length) {
+        // Constraint off = zero tour requests: drop tags from the previous
+        // constrained run instead of showing aging data.
+        this.setPlannerState({ plannerAutoSeatMap: {} });
       }
 
       this.setPlannerState({ plannerAutoStatus: 'generating' });
@@ -2884,7 +3845,7 @@
         minimizeGaps: this.state.plannerAutoMinimizeGaps,
       };
 
-      const result = engine.generate({ variables, hardConstraints, preferences });
+      const result = engine.generate({ variables: searchVariables, hardConstraints, preferences });
       if (result.ok) {
         this.setPlannerState({ plannerAutoStatus: 'done', plannerAutoCandidates: result.candidates, plannerAutoActiveCandidateIndex: 0, plannerAutoFailure: null });
       } else {
@@ -3212,6 +4173,10 @@
       } else if (e.target.dataset.action === 'mapaSearchInput' && e.key === 'Escape') {
         this.mapaClearSearch();
         e.target.blur();
+      } else if (e.target.dataset.planRename) {
+        // Inline plan-tab rename commit/cancel (see plannerCommitRename).
+        if (e.key === 'Enter') this.plannerCommitRename(e.target.dataset.planRename);
+        else if (e.key === 'Escape') this.plannerCancelRename();
       }
     }
 
@@ -3289,12 +4254,17 @@
 
     render() {
       const dark = this.settings.darkMode;
+      // Fade-in plays only when the view itself changes — data arriving
+      // later patches content under data-enter="0" (see setContentState and
+      // the zapis/subject fetchers) instead of flashing the whole page.
+      const entering = this.state.view !== this._lastRenderedView;
+      this._lastRenderedView = this.state.view;
       this.root.innerHTML = `
         <div class="usospp-root" data-theme="${dark ? 'dark' : 'light'}" data-action="closeMenus">
           ${this.renderSidebar()}
           <div class="usospp-main">
             ${this.renderTopbar()}
-            <main class="usospp-content" data-action="closeMenus" data-content-root>
+            <main class="usospp-content" data-action="closeMenus" data-content-root data-enter="${entering ? '1' : '0'}">
               ${this.renderBetaNotice()}
               ${this.renderView()}
             </main>
@@ -3595,6 +4565,8 @@
         case 'przedmioty': return this.renderPrzedmiotyHub();
         case 'przedmiotyLista': return this.renderPrzedmiotyLista();
         case 'zapisy': return this.renderZapisy();
+        case 'zapisTura': return this.renderZapisTura();
+        case 'zapisGrupy': return this.renderZapisGrupy();
         case 'planer': return this.renderPlanner();
         case 'egzaminy': return this.renderEgzaminy();
         case 'ects': return this.renderEcts();
@@ -3659,6 +4631,66 @@
     get registrationGroups() {
       const r = this.data.registrationsResult || {};
       return Array.isArray(r.groups) ? r.groups : [];
+    }
+
+    // Single unified Zapisy model: the personal calendar
+    // (personalCalendarResult — already filtered to this student, with exact
+    // times, attributes and register links) flattened to rounds. The
+    // faculty-wide registrationGroups feed the SAME shape only as a fallback
+    // when the personal scrape is unsupported — never a second list in the
+    // UI. Sorted by start time, nearest first.
+    get zapisRounds() {
+      const personal = this.data.personalCalendarResult || {};
+      if (Array.isArray(personal.sections) && personal.sections.length) {
+        const out = [];
+        personal.sections.forEach((s) => {
+          (s.rounds || []).forEach((r) => {
+            out.push({
+              source: 'personal',
+              sectionCode: s.code,
+              sectionTitle: s.title,
+              subjectsUrl: s.subjectsUrl,
+              planUrls: Array.isArray(s.planUrls) ? s.planUrls : [],
+              turaId: r.turaId,
+              rejKod: r.rejKod,
+              state: r.state,
+              startsAt: r.startsAt,
+              endsAt: r.endsAt,
+              roundType: r.roundType,
+              roundNote: r.roundNote,
+              attributes: r.attributes || {},
+              registerUrl: r.registerUrl,
+              hasAccess: r.hasAccess,
+            });
+          });
+        });
+        out.sort((a, b) => (a.startsAt || '').localeCompare(b.startsAt || ''));
+        return out;
+      }
+      const out = [];
+      this.registrationGroups.forEach((g) => {
+        (g.rounds || []).forEach((r) => {
+          out.push({
+            source: 'faculty',
+            sectionCode: g.code,
+            sectionTitle: g.groupLabel,
+            subjectsUrl: g.subjectsUrl,
+            planUrls: [],
+            turaId: r.turaId,
+            rejKod: null,
+            state: r.state,
+            startsAt: r.startsAt,
+            endsAt: r.endsAt,
+            roundType: r.roundType,
+            roundNote: r.roundNote,
+            attributes: r.attributes || {},
+            registerUrl: null,
+            hasAccess: r.hasAccess,
+          });
+        });
+      });
+      out.sort((a, b) => (a.startsAt || '').localeCompare(b.startsAt || ''));
+      return out;
     }
 
     get ownProgrammes() {
@@ -3839,7 +4871,7 @@
     renderPrzedmiotyHub() {
       const tiles = [
         { view: 'przedmiotyLista', icon: 'book', title: 'Przegląd przedmiotów', desc: 'Etapy studiów i przedmioty przypisane do Twojego programu.' },
-        { view: 'zapisy', icon: 'ticket', title: 'Zapisy na przedmioty', desc: 'Kalendarz tur rejestracji na wydziale — bez zapisywania niczego za Ciebie.' },
+        { view: 'zapisy', icon: 'ticket', title: 'Zapisy na przedmioty', desc: 'Twoje tury rejestracji — terminy, przedmioty i plany. Sam zapis odbywa się w USOSweb.' },
         { view: 'planer', icon: 'layers', title: 'Generator planu', desc: 'Poukładaj sobie plan zajęć na próbę, zanim zapiszesz się naprawdę.' },
       ];
       // All three tiles are personal — logged out they all land on the login
@@ -4148,7 +5180,20 @@
       const backView = s.subjectBackView || 'przedmiotyLista';
       const header = backLink(backView);
       if (s.subjectLoading) {
-        return `<div class="usospp-view">${header}<div class="usospp-card"><div class="usospp-empty-hint">Wczytywanie…</div></div></div>`;
+        return `<div class="usospp-view">${header}
+          <div class="usospp-card">
+            <div class="usospp-skeleton" style="height:18px;width:55%;"></div>
+            <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
+              <div class="usospp-skeleton" style="height:13px;width:90%;"></div>
+              <div class="usospp-skeleton" style="height:13px;width:75%;"></div>
+              <div class="usospp-skeleton" style="height:13px;width:60%;"></div>
+            </div>
+          </div>
+          <div class="usospp-card">
+            <div class="usospp-skeleton" style="height:16px;width:35%;"></div>
+            <div class="usospp-skeleton" style="height:120px;margin-top:12px;"></div>
+          </div>
+        </div>`;
       }
       if (s.subjectError || !s.subjectData) {
         return `
@@ -4167,7 +5212,8 @@
       // everything" if for some reason every cycle looks finished (e.g. an
       // unrecognized state string) so we never silently show an empty page.
       const relevantCycles = d.cycles.filter((c) => !/zakończon/i.test(c.cycleState || ''));
-      const cyclesToShow = relevantCycles.length ? relevantCycles : d.cycles;
+      const cyclesToShow = (relevantCycles.length ? relevantCycles : d.cycles)
+        .map((c) => ({ c, i: d.cycles.indexOf(c) }));
       return `
         <div class="usospp-view">
           ${header}
@@ -4178,7 +5224,7 @@
             </div>
             ${d.generalInfo.map((f) => this.renderSubjectField(f)).join('')}
           </div>
-          ${cyclesToShow.map((c) => this.renderSubjectCycleCard(c)).join('')}
+          ${cyclesToShow.map(({ c, i }) => this.renderSubjectCycleCard(c, i)).join('')}
         </div>
       `;
     }
@@ -4569,7 +5615,7 @@
       `;
     }
 
-    renderSubjectCycleCard(c) {
+    renderSubjectCycleCard(c, idx) {
       return `
         <div class="usospp-card">
           <div class="usospp-card-head">
@@ -4597,7 +5643,13 @@
             `).join('')}
           ` : ''}
 
-          ${c.timetable.days.length ? this.renderSubjectTimetable(c.timetable) : ''}
+          ${c.timetable && c.timetable.days.length ? this.renderSubjectTimetable(c.timetable) : (c.planUrl ? `
+            <div data-cycle-timetable="${idx !== undefined ? idx : ''}">
+              <div class="usospp-eyebrow" style="margin-top:14px;margin-bottom:8px;">Plan zajęć (wszystkie grupy)</div>
+              <div class="usospp-skeleton" style="height:120px;"></div>
+              <div style="font-size:11.5px;color:var(--ink-3);margin-top:6px;">Pobieranie planu…</div>
+            </div>
+          ` : '')}
 
           ${c.fields.length ? `
             <div class="usospp-eyebrow" style="margin-top:14px;margin-bottom:8px;">Szczegóły</div>
@@ -4660,78 +5712,88 @@
       `;
     }
 
-    renderZapisy() {
-      const r = this.data.registrationsResult || {};
-      const owns = this.ownProgrammes;
-      const prgKods = [...new Set(owns.map((p) => p.prgKod).filter(Boolean))];
-      const semesters = [...new Set(owns.map((p) => p.semester).filter((n) => Number.isInteger(n)))];
-      const directionName = owns.find((p) => p.directionName)?.directionName || null;
-      const hasOwnData = prgKods.length > 0;
-      const ownOnly = hasOwnData && this.state.zapisyOwnOnly;
+    // Tour time range: same day → date once ("28.09, 10:15 – 11:50"),
+    // multi-day → full both sides ("28.09, 10:15 – 29.09, 16:00").
+    fmtZapisRange(startsAt, endsAt) {
+      const parts = (s) => {
+        const m = (s || '').match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+        return m ? { day: `${m[1]}-${m[2]}-${m[3]}`, date: `${m[3]}.${m[2]}`, time: `${m[4]}:${m[5]}` } : null;
+      };
+      const start = parts(startsAt);
+      if (!start) return null;
+      const end = parts(endsAt);
+      if (!end) return `${start.date}, ${start.time}`;
+      if (end.day === start.day) return `${start.date}, ${start.time} – ${end.time}`;
+      return `${start.date}, ${start.time} – ${end.date}, ${end.time}`;
+    }
 
-      let groups = this.registrationGroups.filter((g) => g.rounds.length > 0);
-      if (ownOnly) {
-        groups = groups.filter((g) => prgKods.some((kod) => g.groupLabel.includes(kod)));
+    // Relative tour status against now: "trwa teraz" / "zakończona" /
+    // "dziś" / "jutro" / "za N dni". Day granularity (floor), so it reads
+    // the same way USOSweb's own "rozpocznie się za X dni" does.
+    relZapisTime(startsAt, endsAt) {
+      const parse = (s) => {
+        const m = (s || '').match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+        return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) : null;
+      };
+      const start = parse(startsAt);
+      if (!start) return null;
+      const now = new Date();
+      const end = parse(endsAt);
+      if (end && now >= start && now <= end) return 'trwa teraz';
+      if ((end && now > end)) return 'zakończona';
+      const dayMs = 86400000;
+      const days = Math.floor((start - now) / dayMs);
+      if (days < 0) return 'zakończona';
+      if (days === 0) {
+        // Under 24h away but on the next calendar day (e.g. tomorrow
+        // morning seen tonight) reads as "jutro", not "dziś".
+        const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        return startDay > today ? 'jutro' : 'dziś';
       }
+      if (days === 1) return 'jutro';
+      return `za ${days} dni`;
+    }
+
+    // Single unified Zapisy list over get zapisRounds (personal calendar
+    // primary, faculty fallback — never two lists). No "Tylko mój kierunek"
+    // switch: the personal calendar is already student-filtered.
+    renderZapisy() {
+      const personal = this.data.personalCalendarResult || {};
+      const rounds = this.zapisRounds;
       const filter = (this.state.zapisyFilter || '').trim().toLowerCase();
       const filtered = filter
-        ? groups.filter((g) => g.groupLabel.toLowerCase().includes(filter) || g.code.toLowerCase().includes(filter))
-        : groups;
+        ? rounds.filter((r) => ((r.sectionTitle || '') + ' ' + (r.sectionCode || '')).toLowerCase().includes(filter))
+        : rounds;
 
-      const flatRounds = [];
-      filtered.forEach((g) => {
-        // "sem. <N>" in the heading, matched against the semester numbers
-        // found on the student's own rejestracja/przedmioty hub — best
-        // effort, since we don't have a confirmed single "current semester"
-        // field (see getOwnProgrammes' comment).
-        const semMatch = g.groupLabel.match(/sem\.\s*(\d+)/i);
-        const headingSemester = semMatch ? parseInt(semMatch[1], 10) : null;
-        const isOwnSemester = headingSemester !== null && semesters.includes(headingSemester);
-        g.rounds.forEach((round) => flatRounds.push({ ...round, group: g, isOwnSemester }));
-      });
-      flatRounds.sort((a, b) => (a.startsAt || '').localeCompare(b.startsAt || ''));
-
-      // A single faculty can list well over a thousand rounds (every
-      // programme/semester/round-name combination gets its own group) —
-      // confirmed against the live W4N page (1590 rows). Rendering that
-      // unfiltered would be both unreadable and a large DOM dump, so cap the
-      // default view and push people toward the filter box instead.
-      const RENDER_CAP = 150;
-      const capped = !filter && flatRounds.length > RENDER_CAP;
-      const toRender = capped ? flatRounds.slice(0, RENDER_CAP) : flatRounds;
-
-      const u = this.data.user || {};
+      // A faculty fallback can list well over a thousand rounds (1590 rows
+      // seen live on W4N) — cap the unfiltered view and push people toward
+      // the filter box instead.
+      const RENDER_CAP = 50;
+      const capped = !filter && filtered.length > RENDER_CAP;
+      const toRender = capped ? filtered.slice(0, RENDER_CAP) : filtered;
 
       return `
         <div class="usospp-view">
           ${backLink('przedmioty')}
           <div class="usospp-card">
             <div class="usospp-card-head">
-              <div class="usospp-card-title">Rejestracje na przedmioty</div>
+              <div class="usospp-card-title">Zapisy na przedmioty</div>
               <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dla_stud/rejestracja/kalendarz&usospp_off=1">Twój kalendarz w USOS →</button>
             </div>
-            ${!r.supported ? `
-              <div class="usospp-empty-hint">Nie udało się odczytać listy rejestracji wydziałowych — sprawdź w klasycznym USOS.</div>
+            ${!personal.supported && rounds.length === 0 ? `
+              <div class="usospp-empty-hint">Nie udało się odczytać Twoich rejestracji — sprawdź w klasycznym USOS.</div>
             ` : `
               <p class="usospp-muted-text" style="margin-bottom:14px;">
-                Tury zapisów zgłoszone dla ${esc(u.faculty || 'Twojej jednostki')} wraz z terminami — również te, do których nie masz jeszcze osobistego dostępu. Kliknięcie „zobacz przedmioty” otwiera prawdziwą stronę USOS w nowej karcie; USOS++ niczego tu za Ciebie nie zapisuje.
+                ${personal.supported
+                  ? 'Twoje tury zapisów z terminami — „przedmioty w turze” otwiera podgląd wewnątrz USOS++. Sam zapis odbywa się w USOSweb.'
+                  : 'Kalendarz osobisty niedostępny — pokazuję tury wydziałowe (bez Twoich terminów i akcji).'}
               </p>
-              ${hasOwnData ? `
-                <div class="usospp-list-row" style="margin-bottom:12px;">
-                  <div>
-                    <div style="font-size:13.5px;font-weight:500;">Tylko mój kierunek${directionName ? ` — ${esc(directionName)}` : ''}</div>
-                    <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${semesters.length ? `Wykryte semestry: ${semesters.join(', ')} (na podstawie „Rejestracja na przedmioty” w USOS — może obejmować więcej niż jeden, jeśli USOS pokazuje kilka naraz)` : 'Dopasowanie po kodzie programu studiów'}</div>
-                  </div>
-                  <div class="usospp-switch ${ownOnly ? 'on' : ''}" data-action="toggleZapisyOwnOnly"><div class="usospp-switch-knob"></div></div>
-                </div>
+              <input class="usospp-input" style="margin-bottom:16px;" placeholder="Filtruj po nazwie / kodzie tury…" value="${esc(this.state.zapisyFilter || '')}" data-bind="zapisyFilter">
+              ${toRender.length === 0 ? `
+                <div class="usospp-empty-hint">${filter ? 'Brak tur pasujących do filtra.' : 'Brak tur zapisów w tej chwili.'}</div>
               ` : `
-                <div class="usospp-empty-hint" style="padding:10px 0;">Nie udało się rozpoznać Twojego kierunku — pokazuję rejestracje całego wydziału, przefiltruj ręcznie poniżej.</div>
-              `}
-              <input class="usospp-input" style="margin-bottom:16px;" placeholder="Filtruj po nazwie kierunku / semestru… (np. informatyka stosowana)" value="${esc(this.state.zapisyFilter || '')}" data-bind="zapisyFilter">
-              ${flatRounds.length === 0 ? `
-                <div class="usospp-empty-hint">${filter || ownOnly ? 'Brak tur pasujących do filtra.' : 'Brak zdefiniowanych tur zapisów w tej chwili.'}</div>
-              ` : `
-                ${capped ? `<div class="usospp-tag-muted" style="display:block;margin-bottom:10px;">Pokazano ${RENDER_CAP} z ${flatRounds.length} tur (najbliższe terminy). Zawęź filtrem powyżej.</div>` : ''}
+                ${capped ? `<div class="usospp-tag-muted" style="display:block;margin-bottom:10px;">Pokazano ${RENDER_CAP} z ${filtered.length} tur (najbliższe terminy). Zawęź filtrem powyżej.</div>` : ''}
                 ${toRender.map((round) => this.renderRegistrationRound(round)).join('')}
               `}
             `}
@@ -4741,20 +5803,175 @@
     }
 
     renderRegistrationRound(round) {
-      const g = round.group;
       const accessBadge = round.hasAccess
-        ? `<div class="usospp-badge" style="background:oklch(90% 0.08 150);color:oklch(35% 0.1 150);">masz dostęp</div>`
+        ? `<div class="usospp-badge usospp-badge-positive">masz dostęp</div>`
         : `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-3);">brak dostępu</div>`;
+      const range = this.fmtZapisRange(round.startsAt, round.endsAt);
+      const rel = this.relZapisTime(round.startsAt, round.endsAt);
+      const attrs = [];
+      if (round.attributes) {
+        if (round.attributes['Czy giełda włączona']) attrs.push(`giełda: ${esc(String(round.attributes['Czy giełda włączona']).toLowerCase())}`);
+        if (round.attributes['Czy podpięcia wymagane']) attrs.push(`podpięcia: ${esc(String(round.attributes['Czy podpięcia wymagane']).toLowerCase())}`);
+        if (round.attributes['Rejestracja dedykowana']) attrs.push(`dedykowana: ${esc(String(round.attributes['Rejestracja dedykowana']).toLowerCase())}`);
+      }
+      const subjectsBtn = round.subjectsUrl
+        ? `<button class="usospp-btn-ghost usospp-zapis-btn" data-action="viewSubjects" data-url="${esc(round.subjectsUrl)}" style="font-size:12px;padding:6px 10px;width:100%;">Przedmioty w turze</button>`
+        : '';
+      const registerBtn = round.registerUrl
+        ? `<button class="usospp-btn-ghost usospp-zapis-btn" data-action="openUsos" data-url="${esc(round.registerUrl)}" style="font-size:12px;padding:6px 10px;width:100%;">Zapisz w USOS</button>`
+        : '';
       return `
         <div class="usospp-list-row" style="align-items:flex-start;">
-          <div>
-            <div style="font-size:13.5px;font-weight:600;">${esc(g.groupLabel)}${round.isOwnSemester ? ' <span class="usospp-tag-muted" style="font-style:normal;font-weight:600;color:oklch(58% 0.15 45);">· Twój semestr?</span>' : ''}</div>
+          <div style="min-width:0;">
+            <div style="display:flex;align-items:flex-start;gap:8px;">
+              <div style="font-size:13.5px;font-weight:600;min-width:0;">${esc(round.sectionTitle || '')}</div>
+              <div style="flex-shrink:0;">${accessBadge}</div>
+            </div>
+            ${round.sectionCode ? `<div style="font-size:11.5px;color:var(--ink-3);">${esc(round.sectionCode)}</div>` : ''}
             <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(round.roundType || '')}${round.roundNote ? ' · ' + esc(round.roundNote) : ''}</div>
             <div style="font-size:12px;color:var(--ink-2);margin-top:4px;">${esc(round.state || '—')}</div>
-            ${round.startsAt ? `<div style="font-size:11.5px;color:var(--ink-3);margin-top:2px;">${esc(round.startsAt)}${round.endsAt ? ' – ' + esc(round.endsAt) : ''}</div>` : ''}
-            ${g.subjectsUrl ? `<div style="margin-top:6px;"><a data-action="openUsos" data-url="${esc(g.subjectsUrl)}" style="font-size:12px;font-weight:600;">zobacz przedmioty w tej turze →</a></div>` : ''}
+            ${attrs.length ? `<div style="font-size:11.5px;color:var(--ink-3);margin-top:2px;">${attrs.join(' · ')}</div>` : ''}
           </div>
-          ${accessBadge}
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;min-width:150px;text-align:right;">
+            ${range ? `<div style="font-size:14px;font-weight:700;color:oklch(58% 0.15 45);white-space:nowrap;">${esc(range)}${rel ? ` <span style="font-size:11.5px;font-weight:500;color:var(--ink-3);">(${esc(rel)})</span>` : ''}</div>` : ''}
+            ${subjectsBtn}
+            ${registerBtn}
+          </div>
+        </div>
+      `;
+    }
+
+    // In-panel tour view: header (term/attributes come from the Zapisy row),
+    // subject list (fresh fetch), plan links and the USOS deep link as the
+    // last step. Read-only — nothing here posts to USOS.
+    renderZapisTura() {
+      const s = this.state;
+      const plans = Array.isArray(s.zapisTuraPlanUrls) ? s.zapisTuraPlanUrls : [];
+      const subjects = Array.isArray(s.zapisTuraSubjects) ? s.zapisTuraSubjects : [];
+      return `
+        <div class="usospp-view">
+          ${backLink('zapisy', '← Wróć do zapisów')}
+          <div class="usospp-card">
+            <div class="usospp-card-head">
+              <div>
+                <div class="usospp-card-title">${esc(s.zapisTuraTitle || 'Tura zapisów')}</div>
+                ${s.zapisTuraCode ? `<div style="font-size:11.5px;color:var(--ink-3);">${esc(s.zapisTuraCode)}</div>` : ''}
+              </div>
+              ${s.zapisTuraRegisterUrl ? `<button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(s.zapisTuraRegisterUrl)}">Zapisz w USOS →</button>` : ''}
+            </div>
+            ${plans.length ? `
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                ${plans.map((p) => `<a data-action="openUsos" data-url="${esc(p.url)}" style="font-size:12px;font-weight:600;cursor:pointer;">Plan: ${esc(p.label || 'zajęć')} →</a>`).join('')}
+              </div>
+            ` : ''}
+            ${s.zapisTuraLoading ? `
+              ${[0, 1, 2, 3, 4].map(() => `
+                <div class="usospp-list-row" style="align-items:flex-start;">
+                  <div style="min-width:0;flex:1;">
+                    <div class="usospp-skeleton" style="height:14px;width:70%;"></div>
+                    <div class="usospp-skeleton" style="height:11px;width:45%;margin-top:6px;"></div>
+                    <div class="usospp-skeleton" style="height:11px;width:30%;margin-top:6px;"></div>
+                  </div>
+                  <div style="display:flex;flex-direction:row;gap:8px;flex-shrink:0;">
+                    <div class="usospp-skeleton" style="height:30px;width:72px;"></div>
+                    <div class="usospp-skeleton" style="height:30px;width:88px;"></div>
+                  </div>
+                </div>
+              `).join('')}
+            ` : s.zapisTuraError ? `
+              <div class="usospp-empty-hint">Nie udało się wczytać przedmiotów tej tury.</div>
+              <div style="margin-top:10px;"><a data-action="zapisTuraRetry" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div>
+            ` : subjects.length === 0 ? `
+              <div class="usospp-empty-hint">Brak przedmiotów w tej turze.</div>
+            ` : `
+              ${subjects.map((subj) => `
+                <div class="usospp-list-row" style="align-items:flex-start;">
+                  <div style="min-width:0;">
+                    <div style="font-size:13px;font-weight:500;">${esc(subj.name || '')}</div>
+                    <div style="font-size:11.5px;color:var(--ink-3);">${esc(subj.kod || '')}${subj.jednostka ? ' · ' + esc(subj.jednostka) : ''}${subj.cycles && subj.cycles.length ? ' · ' + esc(subj.cycles.join(', ')) : ''}</div>
+                    ${subj.occupancy ? `<div style="font-size:11.5px;color:var(--ink-3);margin-top:2px;">${esc(String(subj.occupancy.registered))}/${esc(String(subj.occupancy.limit))} zapisanych</div>` : ''}
+                  </div>
+                  <div style="display:flex;flex-direction:row;align-items:center;gap:8px;flex-shrink:0;">
+                    ${subj.groupsUrl ? `<button class="usospp-btn-ghost usospp-zapis-btn" data-action="openZapisGrupy" data-tour="${esc(s.zapisTuraKey || '')}" data-kod="${esc(subj.kod || '')}" data-name="${esc(subj.name || '')}" data-cykl="${esc((subj.cycles && subj.cycles[0]) || '')}" data-occ="${esc(subj.occupancy ? JSON.stringify(subj.occupancy) : '')}" data-details="${esc(subj.url || '')}" data-url="${esc(subj.groupsUrl)}" data-register="${esc(s.zapisTuraRegisterUrl || '')}" style="font-size:12px;padding:6px 10px;white-space:nowrap;">Grupy →</button>` : ''}
+                    <button class="usospp-btn-ghost usospp-zapis-btn" data-action="openSubjectPage" data-url="${esc(subj.url)}" style="font-size:12px;padding:6px 10px;white-space:nowrap;">Szczegóły →</button>
+                  </div>
+                </div>
+              `).join('')}
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    // Subject's registration-context groups inside one tour: occupancy,
+    // per-class-type sections with group numbers, teachers, times and
+    // enrolled/limit counts (adapter.getRejGroups). Read-only — the header
+    // keeps the general subject details and the USOS deep link; nothing here
+    // posts to USOS.
+    renderZapisGrupy() {
+      const s = this.state;
+      const sections = Array.isArray(s.zapisGrupySections) ? s.zapisGrupySections : [];
+      const occ = s.zapisGrupyOccupancy;
+      const totalGroups = sections.reduce((n, x) => n + (Array.isArray(x.groups) ? x.groups.length : 0), 0);
+      const mainPlan = s.zapisGrupyMainPlan;
+      const mainRows = (mainPlan && mainPlan.rows) || {};
+      const highlightNr = s.zapisGrupyHighlightNr;
+      const groupRow = (g, secType) => {
+        const full = g.limitGorny !== null && g.limitGorny !== undefined
+          && g.zapisanych !== null && g.zapisanych !== undefined && g.zapisanych >= g.limitGorny;
+        const opis = g.opis && !/^brak$/i.test(g.opis.trim()) ? g.opis : null;
+        const inPlan = mainRows[`${secType || ''}||${g.nr}`] || null;
+        const highlighted = highlightNr !== null && highlightNr !== undefined && String(g.nr) === String(highlightNr);
+        const planCell = inPlan
+          ? `<span class="usospp-zapis-inplan-tag" title="${esc(inPlan.sessionMatch ? `Ta grupa jest w planie głównym „${mainPlan.planName}”` : `Grupa nr ${g.nr} jest w planie głównym „${mainPlan.planName}”, ale jej termin różni się od zapisanego w planie`)}">📅 ${esc(mainPlan.planName)}${inPlan.sessionMatch ? '' : ' ⚠'}</span>`
+          : '';
+        return `
+          <tr${(inPlan || highlighted) ? ` class="${[inPlan ? 'usospp-zapis-inplan' : '', highlighted ? 'usospp-zapis-highlight' : ''].filter(Boolean).join(' ')}"` : ''}>
+            <td>${esc(g.nr || '—')}</td>
+            <td>${esc(g.termin || '—')}</td>
+            <td>${esc(g.prowadzacy || '—')}${opis ? `<div style="font-size:11px;color:var(--ink-3);">${esc(opis)}</div>` : ''}</td>
+            <td style="white-space:nowrap;${full ? 'font-weight:700;color:oklch(55% 0.19 25);' : ''}">${g.zapisanych !== null && g.zapisanych !== undefined ? esc(String(g.zapisanych)) : '—'}/${g.limitGorny !== null && g.limitGorny !== undefined ? esc(String(g.limitGorny)) : '—'}</td>
+            <td>${planCell}</td>
+          </tr>
+        `;
+      };
+      return `
+        <div class="usospp-view">
+          ${backLink('zapisTura', '← Wróć do tury')}
+          <div class="usospp-card">
+            <div class="usospp-card-head">
+              <div>
+                <div class="usospp-card-title">${esc(s.zapisGrupyTitle || 'Grupy przedmiotu')}</div>
+                <div style="font-size:11.5px;color:var(--ink-3);">${esc(s.zapisGrupyKod || '')}${s.zapisGrupyCykl ? ' · ' + esc(s.zapisGrupyCykl) : ''}</div>
+                ${occ ? `<div style="font-size:12.5px;font-weight:700;color:oklch(58% 0.15 45);margin-top:4px;">${esc(String(occ.registered))}/${esc(String(occ.limit))} zapisanych</div>` : ''}
+              </div>
+              <div style="display:flex;gap:8px;flex-shrink:0;">
+                ${s.zapisGrupyDetailsUrl ? `<button class="usospp-btn-ghost" data-action="openSubjectPage" data-url="${esc(s.zapisGrupyDetailsUrl)}">Szczegóły przedmiotu</button>` : ''}
+                ${s.zapisGrupyRegisterUrl ? `<button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(s.zapisGrupyRegisterUrl)}">Zapisz w USOS →</button>` : ''}
+              </div>
+            </div>
+            ${s.zapisGrupyLoading ? `
+              <table class="usospp-table">
+                <thead><tr><th>Grupa</th><th>Termin</th><th>Prowadzący</th><th>Zapisani</th><th>Plan</th></tr></thead>
+                <tbody>
+                  ${[0, 1, 2, 3].map(() => `<tr>${[0, 1, 2, 3, 4].map(() => `<td><div class="usospp-skeleton" style="height:13px;"></div></td>`).join('')}</tr>`).join('')}
+                </tbody>
+              </table>
+            ` : s.zapisGrupyError ? `
+              <div class="usospp-empty-hint">Nie udało się wczytać grup tego przedmiotu.</div>
+              <div style="margin-top:10px;"><a data-action="zapisGrupyRetry" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div>
+            ` : totalGroups === 0 ? `
+              <div class="usospp-empty-hint">Brak zdefiniowanych grup.</div>
+            ` : `
+              ${sections.map((sec) => `
+                ${sec.type ? `<div class="usospp-eyebrow" style="margin-top:14px;margin-bottom:8px;">${esc(sec.type)}</div>` : ''}
+                <table class="usospp-table">
+                  <thead><tr><th>Grupa</th><th>Termin</th><th>Prowadzący</th><th>Zapisani</th><th>Plan</th></tr></thead>
+                  <tbody>${(sec.groups || []).map((g) => groupRow(g, sec.type)).join('')}</tbody>
+                </table>
+              `).join('')}
+            `}
+          </div>
         </div>
       `;
     }
@@ -4786,7 +6003,7 @@
         </div>
       `;
       if (this.state.plannerMode === 'auto') {
-        return modeTabs + this.renderPlannerAutoBody();
+        return modeTabs + this.renderPlannerTourBanner() + this.renderPlannerAutoBody();
       }
 
       const { subjects, skippedStages } = this.plannerSubjectCandidates;
@@ -4794,6 +6011,7 @@
 
       return `
         ${modeTabs}
+        ${this.renderPlannerTourBanner()}
         <div class="usospp-card">
           <div class="usospp-card-head">
             <div class="usospp-card-title">Generator planu</div>
@@ -4818,6 +6036,7 @@
           <div style="display:flex;flex-direction:column;gap:20px;">
             <div class="usospp-card">
               <div class="usospp-card-title" style="margin-bottom:12px;">Twój plan (podgląd)</div>
+              ${this.renderPlannerRejCheck()}
               ${this.renderPlannerGrid()}
             </div>
 
@@ -4986,6 +6205,10 @@
               <div style="font-size:13px;">Minimalizuj okienka między zajęciami</div>
               <div class="usospp-switch${s.plannerAutoMinimizeGaps ? ' on' : ''}" data-action="plannerAutoToggleMinimizeGaps"><div class="usospp-switch-knob"></div></div>
             </div>
+            <div class="usospp-list-row">
+              <div style="font-size:13px;">Tylko grupy z wolnymi miejscami (twarde, wg zapisów)</div>
+              <div class="usospp-switch${s.plannerAutoOnlyFreeSeats ? ' on' : ''}" data-action="plannerAutoToggleOnlyFreeSeats"><div class="usospp-switch-knob"></div></div>
+            </div>
           </div>
         </div>
       `;
@@ -5142,24 +6365,32 @@
     // tab strip over the saved plans (see planner-store.js), capped at
     // MAX_PLANS since an unbounded pile of half-abandoned drafts helps no
     // one. Duplicate/delete act on whichever plan is currently active,
-    // rather than needing per-tab icon buttons.
+    // rather than needing per-tab icon buttons. The ★ marks the MAIN plan
+    // (see mainPlanId): the one the Zapisy integrations treat as "my plan".
+    // The ✎ turns the tab label into an inline rename <input>.
     renderPlannerPlanTabs() {
       const plans = this.state.plannerPlans;
       const activeId = this.state.plannerActivePlanId;
+      const renamingId = this.state.plannerRenamingPlanId;
       const planner = window.USOSPP_PLANNER;
       const maxPlans = (planner && planner.MAX_PLANS) || 5;
       const atLimit = plans.length >= maxPlans;
+      const mainPlan = plans.find((p) => p.isMain);
       return `
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
           ${plans.map((p) => `
-            <button class="usospp-mode-btn${p.id === activeId ? ' active' : ''}" style="flex:none;padding:6px 12px;font-size:12px;" data-action="plannerSwitchPlan" data-id="${esc(p.id)}">${esc(p.name)}</button>
+            <button class="usospp-mode-btn${p.id === activeId ? ' active' : ''}" style="flex:none;padding:6px 8px 6px 4px;font-size:12px;display:flex;align-items:center;gap:2px;max-width:220px;" data-action="plannerSwitchPlan" data-id="${esc(p.id)}" title="${esc(`Przełącz na plan ${p.name}`)}">${p.id === renamingId
+              ? `<input data-plan-rename="${esc(p.id)}" data-action="plannerNoop" value="${esc(p.name)}" maxlength="40" style="width:110px;font-size:12px;padding:2px 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--ink);" /><span data-action="plannerCommitRename" data-id="${esc(p.id)}" title="Zapisz nazwę" style="cursor:pointer;font-weight:700;">✓</span><span data-action="plannerCancelRename" title="Anuluj" style="cursor:pointer;color:var(--ink-3);">✕</span>`
+              : `<span data-action="plannerSetMainPlan" data-id="${esc(p.id)}" title="${esc(p.isMain ? 'Plan główny — pokazywany w Zapisach' : 'Ustaw jako plan główny (pokazywany w Zapisach)')}" style="cursor:pointer;font-size:13px;color:${p.isMain ? '#d9773a' : 'var(--ink-3)'};">${p.isMain ? '★' : '☆'}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</span><span data-action="plannerStartRename" data-id="${esc(p.id)}" title="Zmień nazwę" style="cursor:pointer;color:var(--ink-3);font-size:11px;padding:0 2px;">✎</span>`}</button>
           `).join('')}
           ${!atLimit ? `<button class="usospp-btn-ghost" style="padding:6px 12px;font-size:12px;" data-action="plannerNewPlan">+ Nowy plan</button>` : ''}
         </div>
         <div style="display:flex;gap:14px;margin-bottom:14px;">
           ${!atLimit ? `<a data-action="plannerDuplicatePlan" style="font-size:12px;font-weight:600;">Duplikuj ten plan</a>` : `<span class="usospp-tag-muted">limit ${maxPlans} planów</span>`}
           ${plans.length > 1 ? `<a data-action="plannerDeletePlan" style="font-size:12px;font-weight:600;color:oklch(58% 0.19 25);">Usuń ten plan</a>` : ''}
+          ${mainPlan && mainPlan.id !== activeId ? `<a data-action="plannerSetMainPlan" data-id="${esc(activeId || '')}" style="font-size:12px;font-weight:600;">Ustaw ten jako główny</a>` : ''}
         </div>
+        ${mainPlan && mainPlan.id !== activeId ? `<div style="font-size:12px;color:var(--ink-3);margin-bottom:14px;">Oglądasz inny plan niż główny — podświetlenie „w planie” w Zapisach dotyczy planu <strong>${esc(mainPlan.name)}</strong>.</div>` : ''}
       `;
     }
 
@@ -5272,7 +6503,7 @@
             <div style="font-size:12.5px;font-weight:600;">
               Grupa ${esc(g.nr)}
               ${buildings.length ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:10.5px;padding:2px 9px;">${esc(buildings.join(', '))}</span>` : ''}
-              ${g.occupancy ? ` <span style="color:var(--ink-3);font-weight:500;">· ${esc(g.occupancy)}</span>` : ''}
+              ${g.occupancy ? ` <span style="color:var(--ink-3);font-weight:500;">· ${esc(g.occupancy)}</span>` : ''}${this.seatTagHtml(key, classTypeLabel, g.nr)}
             </div>
             <div style="font-size:11.5px;color:var(--ink-3);margin-top:1px;">${schedule}</div>
             ${g.teacher ? `<div style="font-size:11.5px;color:var(--ink-3);">${esc(g.teacher)}</div>` : ''}
@@ -5459,18 +6690,34 @@
                     const conflict = conflicts.has(e.pickKey);
                     const removeColor = 'oklch(55% 0.19 25)';
                     const weeksTag = weeksLabel(e.weeks);
+                    // Direction A badge: seat state of this exact group in
+                    // its tour (see plannerCheckRejSeats). Drafts have no
+                    // committed group yet, so they never carry one.
+                    const badge = (!e.draft && e.key) ? (this.state.plannerRejBadges || {})[e.key] : null;
+                    const rejLinked = !!(badge && badge.groupsUrl);
+                    const rejClass = badge && badge.known ? (badge.full ? ' usospp-tt-entry--rej-full' : ' usospp-tt-entry--rej-ok') : '';
+                    const rejTitle = rejLinked
+                      ? ` — zapisy (${badge.tourKey}): ${badge.enrollment === 'registered' ? 'jesteś zapisany na przedmiot; ' : ''}${badge.seatsText ? `grupa ${badge.nr}: ${badge.full ? 'brak miejsc' : `${badge.seatsText} wolne`} — kliknij, żeby zobaczyć grupy` : 'kliknij, żeby zobaczyć grupy'}`
+                      : '';
                     const full = [e.subjectName, e.teacher, e.place].filter(Boolean).join(' — ')
                       + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '')
-                      + (e.draft ? ' (jeszcze niedodane)' : e.pendingRemoval ? ' (zostanie usunięte po zapisaniu)' : '');
+                      + (e.draft ? ' (jeszcze niedodane)' : e.pendingRemoval ? ' (zostanie usunięte po zapisaniu)' : '')
+                      + rejTitle;
                     const entryStyle = e.draft
                       ? `background:transparent;border:2px dashed ${color.time};opacity:0.85;`
                       : e.pendingRemoval
                         ? `background:transparent;border:2px dashed ${removeColor};opacity:0.55;`
                         : `background:${color.bg};`;
                     const labelStyle = `color:${e.pendingRemoval ? removeColor : color.label};${e.pendingRemoval ? 'text-decoration:line-through;' : ''}`;
+                    const rejAction = badge && badge.groupsUrl
+                      ? ` data-action="plannerOpenRejGroups" data-pick-key="${esc(e.key)}" style="top:${top}px;height:${height}px;${entryStyle}cursor:pointer;"`
+                      : ` style="top:${top}px;height:${height}px;${entryStyle}"`;
+                    const rejBadgeHtml = rejLinked
+                      ? ` <span class="usospp-tt-entry-rej${badge.full ? ' full' : ''}">${badge.enrollment === 'registered' ? '✓ ' : ''}${esc(badge.seatsText || 'zapisy')}</span>`
+                      : '';
                     return `
-                      <div class="usospp-tt-entry${conflict ? ' usospp-tt-entry--conflict' : ''}" style="top:${top}px;height:${height}px;${entryStyle}" title="${esc(full)}">
-                        <div class="usospp-tt-entry-time" style="color:${e.pendingRemoval ? removeColor : color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
+                      <div class="usospp-tt-entry${conflict ? ' usospp-tt-entry--conflict' : ''}${rejClass}"${rejAction} title="${esc(full)}">
+                        <div class="usospp-tt-entry-time" style="color:${e.pendingRemoval ? removeColor : color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}${rejBadgeHtml}</div>
                         <div class="usospp-tt-entry-label" style="${labelStyle}">${esc(e.classTypeShort)} · ${esc(e.subjectName)}</div>
                         ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${e.pendingRemoval ? removeColor : color.meta};">${esc(e.teacher)}</div>` : ''}
                         ${e.place ? `<div class="usospp-tt-entry-meta" style="color:${e.pendingRemoval ? removeColor : color.meta};">${esc(shortPlace(e.place))}</div>` : ''}
@@ -5529,7 +6776,7 @@
             <div class="usospp-cand-row-main">
               Grupa ${esc(e.candRef.nr)}
               <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:10px;padding:1px 7px;">${esc(e.classTypeShort)}</span>
-              ${riskyGids.has(e.candGroup) ? '<span class="usospp-cand-risk-dot" title="Nachodzi na zajęcia już wybrane w planie"></span>' : ''}
+              ${riskyGids.has(e.candGroup) ? '<span class="usospp-cand-risk-dot" title="Nachodzi na zajęcia już wybrane w planie"></span>' : ''}${this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr)}
             </div>
             <div class="usospp-cand-row-sub">${esc(e.candRef.teacher || 'brak danych o prowadzącym')}${e.place ? ` · ${esc(shortPlace(e.place))}` : ''}</div>
           </div>
@@ -5576,7 +6823,7 @@
              style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:0.55;"
              title="${esc(full)}">
           <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
-          <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)}${risky ? ' ⚠' : ''}</div>
+           <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)}${risky ? ' ⚠' : ''}${this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr)}</div>
           ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(e.teacher)}</div>` : ''}
           ${e.place ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(shortPlace(e.place))}</div>` : ''}
         </div>

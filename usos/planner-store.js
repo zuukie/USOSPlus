@@ -6,9 +6,13 @@
 // sync quota, and cross-device sync isn't worth that risk for something
 // this disposable.
 //
-// Shape: { plans: [{ id, name, picks: [...] }, ...], activePlanId }. Capped
-// at MAX_PLANS so a student comparing a few "what if" layouts (e.g. morning
-// vs. evening lab group) doesn't end up with an unbounded pile of drafts.
+// Shape: { plans: [{ id, name, picks: [...] }, ...], activePlanId,
+// mainPlanId }. Capped at MAX_PLANS so a student comparing a few "what if"
+// layouts (e.g. morning vs. evening lab group) doesn't end up with an
+// unbounded pile of drafts. activePlanId is whichever tab is being looked
+// at; mainPlanId is the one "my plan" integrations (Zapisy badges, tour
+// banner, seat guardian) read — deliberately separate, so comparing
+// variants doesn't move the truth the rest of the plugin points at.
 (function () {
   const KEY = 'usospp_planner';
   const MAX_PLANS = 5;
@@ -31,6 +35,12 @@
     }
     if (!data.plans.some((p) => p.id === data.activePlanId)) {
       data = { ...data, activePlanId: data.plans[0].id };
+    }
+    // Pre-main-plan snapshots (or a main plan deleted from another tab)
+    // fall back to the active plan — never to nothing.
+    if (!data.mainPlanId || !data.plans.some((p) => p.id === data.mainPlanId)) {
+      data = { ...data, mainPlanId: data.activePlanId };
+      await chrome.storage.local.set({ [KEY]: data });
     }
     return data;
   }

@@ -58,11 +58,36 @@
     // adapter.getOwnProgrammes) — used to filter the faculty-wide
     // registration calendar down to just this student's kierunek.
     zapisyHub: 'kontroler.php?_action=dla_stud/rejestracja/przedmioty',
+    // Personal registration calendar (see adapter.getPersonalCalendar) —
+    // the student's own tours with exact times, attributes and actions.
+    // Unlike the faculty-wide rejJednostki calendar below, this one is
+    // already filtered to the logged-in student, so it is the primary
+    // source for the Zapisy view; rejJednostki stays only as a fallback
+    // enrichment when this fetch fails.
+    kalendarz: 'kontroler.php?_action=dla_stud/rejestracja/kalendarz',
     // Faculty-wide registration calendar — needs the jednostka code, which
     // varies per student/university, so it's a function rather than a
     // static path (see adapter.getUser().facultyCode).
     rejestracje(kod) {
       return `kontroler.php?_action=news/rejestracje/rejJednostki&jed_org_kod=${encodeURIComponent(kod)}`;
+    },
+    // Subjects inside one personal-calendar tour (see
+    // adapter.getRejSubjects) — the "pokaż przedmioty…" link target. Takes
+    // the full stored subjectsUrl: rej_kod is stable, but the callback token
+    // is per page load, so callers must pass a freshly scraped URL (see
+    // refreshPersonalCalendar below), never one kept across sessions.
+    rejSubjects(subjectsUrl) {
+      try {
+        const u = new URL(subjectsUrl, location.origin);
+        const rejKod = u.searchParams.get('rej_kod');
+        const callback = u.searchParams.get('callback');
+        if (!rejKod) return null;
+        let path = `kontroler.php?_action=katalog2/przedmioty/szukajPrzedmiotu&method=rej&rej_kod=${encodeURIComponent(rejKod)}`;
+        if (callback) path += `&callback=${encodeURIComponent(callback)}`;
+        return path;
+      } catch (e) {
+        return null;
+      }
     },
     // Per-stage subject list (see adapter.getStageSubjects) — one per
     // {prg_kod, etp_kod} pair from getOwnProgrammes, so it's generalized to
@@ -285,6 +310,7 @@
     unavailableCount = 0;
     const [
       homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc,
+      kalendarzDoc,
       platnosciNierozDoc, planyRatalneDoc, wplatyDoc, wplatyNierozDoc, kontaBankoweDoc,
       stypendiaDoc, sprawdzianyDoc, podaniaDoc, ankietyDoc,
     ] = await Promise.all([
@@ -294,6 +320,7 @@
       fetchDoc(PATHS.plan),
       fetchDoc(PATHS.zapisyHub),
       fetchDoc(PATHS.news),
+      fetchDoc(PATHS.kalendarz),
       fetchDoc(PATHS.platnosciNierozliczone),
       fetchDoc(PATHS.platnosciPlanyRatalne),
       fetchDoc(PATHS.platnosciWplaty),
@@ -352,6 +379,16 @@
       }
     }
 
+    // Personal calendar — primary source for the Zapisy view (see PATHS
+    // above). Independent of facultyCode: it works wherever USOS serves
+    // the dla_stud calendar for the logged-in student.
+    let personalCalendarResult = { supported: false, verified: false, sections: [] };
+    try {
+      if (kalendarzDoc) personalCalendarResult = adapter.getPersonalCalendar(kalendarzDoc);
+    } catch (e) {
+      // leave personalCalendarResult as the unsupported default
+    }
+
     let stageSubjectsResult = { supported: false, verified: false, stages: [] };
     if (ownProgrammesResult.supported) {
       try {
@@ -386,6 +423,7 @@
 
     return {
       user, etapyResult, gradesResult, planResult, examsResult, registrationsResult,
+      personalCalendarResult,
       ownProgrammesResult, stageSubjectsResult, newsResult, paymentsResult,
       scholarshipsResult, testsResult, petitionsResult, surveysResult,
       // True when every single fetch of this run was a 503 dispatch — USOSweb
@@ -415,6 +453,7 @@
       planResult: { supported: false, verified: false, raw: null },
       examsResult: { supported: false, verified: false, exams: [] },
       registrationsResult: { supported: false, verified: false, groups: [] },
+      personalCalendarResult: { supported: false, verified: false, sections: [] },
       ownProgrammesResult: { supported: false, verified: false, programmes: [] },
       stageSubjectsResult: { supported: false, verified: false, stages: [] },
       newsResult,
@@ -435,5 +474,72 @@
     };
   }
 
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews };
+  // Fresh personal calendar on demand (see PATHS.rejSubjects): the
+  // subjectsUrl/registerUrl links carry a per-page-load callback token, so
+  // opening a tour always re-scrapes the calendar first and uses the fresh
+  // URLs from that result — never ones stored from mount time.
+  async function refreshPersonalCalendar(adapter) {
+    const doc = await fetchDoc(PATHS.kalendarz);
+    if (!doc) return { supported: false, verified: false, sections: [] };
+    try {
+      return adapter.getPersonalCalendar(doc);
+    } catch (e) {
+      return { supported: false, verified: false, sections: [] };
+    }
+  }
+
+  // Subjects of one tour, from a freshly scraped subjectsUrl (see
+  // PATHS.rejSubjects for why freshness matters). Read-only GET, like
+  // every other fetch in this file — the actual enrolment POST
+  // (brdg2/zarejestruj) is never called from here; the UI only deep-links
+  // to it.
+  async function fetchRejSubjects(adapter, subjectsUrl) {
+    const path = PATHS.rejSubjects(subjectsUrl);
+    if (!path) return { supported: false, verified: false, subjects: [], total: 0, nextUrl: null };
+    const doc = await fetchDoc(path);
+    if (!doc) return { supported: false, verified: false, subjects: [], total: 0, nextUrl: null };
+    try {
+      return adapter.getRejSubjects(doc);
+    } catch (e) {
+      return { supported: false, verified: false, subjects: [], total: 0, nextUrl: null };
+    }
+  }
+
+  // Groups of one subject inside one tour, from a freshly scraped
+  // groupsUrl (adapter.getRejGroups — brdg2/grupyPrzedmiotu). Same
+  // freshness rule as fetchRejSubjects: the callback token is per page
+  // load, so callers resolve the URL through a fresh calendar +
+  // subjects scrape first (see app.js's fetchZapisGrupy), never reuse a
+  // stored one across sessions.
+  function rejGroupsPath(groupsUrl) {
+    try {
+      const u = new URL(groupsUrl, location.origin);
+      const rejKod = u.searchParams.get('rej_kod');
+      const przKod = u.searchParams.get('prz_kod');
+      const cdydKod = u.searchParams.get('cdyd_kod');
+      const callback = u.searchParams.get('callback');
+      if (!rejKod || !przKod) return null;
+      let path = `kontroler.php?_action=dla_stud/rejestracja/brdg2/grupyPrzedmiotu&rej_kod=${encodeURIComponent(rejKod)}&prz_kod=${encodeURIComponent(przKod)}`;
+      if (cdydKod) path += `&cdyd_kod=${encodeURIComponent(cdydKod)}`;
+      path += '&odczyt=1';
+      if (callback) path += `&callback=${encodeURIComponent(callback)}`;
+      return path;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function fetchRejGroups(adapter, groupsUrl) {
+    const path = rejGroupsPath(groupsUrl);
+    if (!path) return { supported: false, verified: false, sections: [] };
+    const doc = await fetchDoc(path);
+    if (!doc) return { supported: false, verified: false, sections: [] };
+    try {
+      return adapter.getRejGroups(doc);
+    } catch (e) {
+      return { supported: false, verified: false, sections: [] };
+    }
+  }
+
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups };
 })();
