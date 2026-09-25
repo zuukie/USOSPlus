@@ -1,14 +1,28 @@
 # Co nowego w USOS++
 
-Krótka historia zmian — co się pojawiło, po co i co z tego masz.
-Bez żargonu: tylko efekt, który widać w panelu.
+## 0.9.6 „Zapisy pod plan"
 
-> Dopisując wpis, trzymaj się schematu: **funkcja → po co → efekt**.
-> Jeden punkt = jedna zmiana odczuwalna przez użytkownika.
-> Nowe zmiany trafiają do sekcji na górze; po publikacji wersji usuń
-> z jej nagłówka dopisek „(nieopublikowane)”.
+- **W Zapisach widać wolne miejsca i Twoje zapisy** — przy każdej grupie
+  od razu widać, ile miejsc jest zajętych (pełne grupy są oznaczone),
+  a przy przedmiotach z trwającej tury także to, czy jesteś już zapisany.
+- **Odświeżona strona zapisów na przedmioty** — czytelniejszy układ
+  i więcej informacji w jednym miejscu: status Twojej rejestracji
+  w turze, zajętość miejsc i szybkie przejście do grup przedmiotu.
+- **Jeden główny plan, Zapisy same podpowiadają** — oznaczasz gwiazdką
+  swój główny plan, a w Zapisach każda grupa pokazuje, czy do niego
+  pasuje. W planerze zobaczysz też, które miejsca są jeszcze wolne,
+  i możesz układać plan tylko z grup, w których są miejsca.
+- **Plany z własnymi nazwami** — zamiast „Plan 1…5" nazwiesz każdy tak,
+  żeby od razu wiedzieć, co w nim jest.
+- **Zdjęcia w Aktualnościach** — ogłoszenia z plakatami i ilustracjami
+  wyglądają teraz tak, jak przygotowała je uczelnia.
+- **Generator bierze od razu wszystko** — lista przedmiotów do układania
+  planu startuje w pełni zaznaczona; odhaczasz tylko te, których
+  nie chcesz.
+- **„Otwórz w USOS" już nie ucieka** — po przejściu na klasyczny widok
+  karta zostaje klasyczna, dopóki sam nie wrócisz do panelu.
 
-## 0.9.5 (nieopublikowane)
+## 0.9.5
 
 - **Panel IRK: ulubione i porównywarka kierunków** — bo kandydat wybiera spośród dziesiątek ofert i gubi się w kartach. Efekt: gwiazdka przy kierunku zapisuje go na liście, a maksymalnie 3 kierunki da się zestawić obok siebie w jednej tabeli.
 - **Panel IRK: filtry zgłoszeń i licznik nieprzeczytanych** — bo przy kilku zgłoszeniach trudno wypatrzyć to nieopłacone albo nieprzeczytaną wiadomość. Efekt: filtr po statusie opłaty/kwalifikacji i wyszukiwarce kierunku plus badge z liczbą nieprzeczytanych na Dashboardzie.

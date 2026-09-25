@@ -1,6 +1,6 @@
 # Polityka prywatności — USOS++
 
-Ostatnia aktualizacja: 2026-09-15
+Ostatnia aktualizacja: 2026-09-25
 
 USOS++ to rozszerzenie do Chrome, które przebudowuje interfejs USOSweb
 (np. `web.usos.pwr.edu.pl`) na nowocześniejszy, jednostronicowy panel.
@@ -56,9 +56,12 @@ obchodzić zabezpieczeń strony (np. `X-Frame-Options`).
 USOS++ nie zawiera żadnego kodu analitycznego, telemetrii, reklam ani
 narzędzi śledzących. Nie ładuje też żadnego zdalnego/kodu wykonywalnego —
 cały kod rozszerzenia (w tym biblioteka mapy, Leaflet) jest zawarty w jego
-pakiecie i podlega przeglądowi Chrome Web Store; jedyne, co jest pobierane
-w locie z zewnątrz, to same obrazki kafelków mapy opisane wyżej — dane, nie
-kod.
+pakiecie i podlega przeglądowi Chrome Web Store; w locie z zewnątrz
+pobierane są wyłącznie dane, nie kod: obrazki kafelków mapy opisane
+wyżej oraz obrazki osadzone w treściach Aktualności — te dociągają się
+z serwerów wskazanych przez samą treść redakcji (host uczelni albo
+zewnętrzny, np. sieć dostarczania treści), dokładnie tak, jak załadowałaby
+je natywna strona USOS z tym samym newsem.
 
 ## Uprawnienia i ich wykorzystanie
 
