@@ -7,7 +7,7 @@
 > Projekt jednej osoby (studenta), w wersji beta, nieoficjalny i niezwiązany
 > z systemem USOS ani z żadną uczelnią.
 
-- Strona: https://zuukie.github.io/USOSPlus/
+- Strona: https://usosplus.pl/
 - Instalacja: https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa
 - Kod: https://github.com/zuukie/USOSPlus
 - Zgłaszanie błędów i pomysłów: https://github.com/zuukie/USOSPlus/issues

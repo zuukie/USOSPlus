@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://zuukie.github.io/USOSPlus/sitemap.xml
+Sitemap: https://usosplus.pl/sitemap.xml
