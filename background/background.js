@@ -8,6 +8,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'usospp:registerUniversity') {
+    // Defense-in-depth: only the extension's own popup (or its own content
+    // scripts) may register new university origins — never a web page.
+    // Web pages can't send runtime messages without externally_connectable
+    // (which we don't declare), but an explicit sender check costs nothing.
+    if (sender && sender.id && sender.id !== chrome.runtime.id) return undefined;
+    if (sender && sender.url && !sender.url.startsWith('chrome-extension://' + chrome.runtime.id + '/')) {
+      return undefined;
+    }
     registerModule(msg.originPattern, msg.module || 'usos').then(sendResponse);
     return true;
   }
@@ -22,16 +30,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // registerModule call.
 const MODULE_FILES = {
   usos: {
-    css: ['fonts/fonts.css', 'core/ui/design-system.css', 'usos/usos.css', 'vendor/leaflet/leaflet.css'],
+    css: ['fonts/fonts.css', 'core/ui/design-system.css', 'usos/usos.css'],
     js: [
       'core/state-bridge.js',
       'core/detect.js',
       'core/sanitize-html.js',
-      'vendor/leaflet/leaflet.js',
+      'usos/leaflet-loader.js',
       'usos/planner-store.js',
       'usos/adapters.js',
       'usos/scraping.js',
       'usos/generator.js',
+      'usos/zapisy-plan.js',
       'usos/app.js',
       'usos/inject.js',
     ],
@@ -88,8 +97,11 @@ async function saveRegistryEntry(originPattern, moduleName) {
 async function registerModule(originPattern, moduleName) {
   const files = MODULE_FILES[moduleName];
   if (!files) return { ok: false, error: `Unknown USOS++ module: ${moduleName}` };
+  if (typeof originPattern !== 'string' || !/^\*:\/\/[^/*]+\/\*$/.test(originPattern)) {
+    return { ok: false, error: `Rejected origin pattern: ${originPattern}` };
+  }
   const id = `usospp-dynamic-${moduleName}-` + originPattern.replace(/[^a-z0-9]+/gi, '-');
-  const entry = { id, matches: [originPattern], css: files.css, js: files.js, runAt: 'document_end' };
+  const entry = { id, matches: [originPattern], css: files.css, js: files.js, runAt: 'document_idle' };
   // A host permission granted moments earlier (popup.js's addUniversity calls
   // straight in here right after chrome.permissions.request resolves) was
   // observed live to sometimes not yet be visible to

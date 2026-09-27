@@ -1,5 +1,10 @@
 # Co nowego w USOS++
 
+## 0.9.7
+
+- **Poprawki pod maską** — szybsze działanie, dodatkowe usprawnienia
+  bezpieczeństwa i naprawiony błąd wykryty tuż po wydaniu 0.9.6.
+
 ## 0.9.6 „Zapisy pod plan"
 
 - **W Zapisach widać wolne miejsca i Twoje zapisy** — przy każdej grupie

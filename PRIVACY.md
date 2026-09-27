@@ -33,7 +33,10 @@ obchodzić zabezpieczeń strony (np. `X-Frame-Options`).
   funkcje) są zapisywane w `chrome.storage.sync`, czyli standardowej,
   szyfrowanej synchronizacji ustawień Google Chrome powiązanej z kontem
   użytkownika — nie mamy do tego dostępu poza samą przeglądarką
-  użytkownika.
+  użytkownika. Dotyczy to też listy ulubionych kierunków IRK
+  (`irkFavorites` — same adresy URL programów, bez danych osobowych):
+  synchronizuje się między urządzeniami zalogowanymi na to samo konto
+  Google, dokładnie jak pozostałe ustawienia.
 - Centrum powiadomień w USOS++ (dzwonek w górnym pasku) zapisuje lokalnie
   (`chrome.storage.local`, tylko na urządzeniu użytkownika) sygnaturę
   ostatnio widzianych ogłoszeń, żeby wiedzieć, czy pojawiło się coś nowego
@@ -61,7 +64,13 @@ pobierane są wyłącznie dane, nie kod: obrazki kafelków mapy opisane
 wyżej oraz obrazki osadzone w treściach Aktualności — te dociągają się
 z serwerów wskazanych przez samą treść redakcji (host uczelni albo
 zewnętrzny, np. sieć dostarczania treści), dokładnie tak, jak załadowałaby
-je natywna strona USOS z tym samym newsem.
+  je natywna strona USOS z tym samym newsem.
+- Widok „Egzaminy” ładuje stronę egzaminów USOS w ukrytym iframe
+  same-origin, bo jest to aplikacja AngularJS renderowana po stronie
+  klienta (statyczne pobranie HTML nie zawiera danych). Iframe jest
+  usuwany po odczycie; to jedyne miejsce, w którym kod strony USOS
+  wykonuje się poza samą stroną — cała reszta to inertne parsowanie
+  przez `DOMParser` bez wykonywania skryptów.
 
 ## Uprawnienia i ich wykorzystanie
 

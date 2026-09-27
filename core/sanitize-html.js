@@ -24,8 +24,10 @@
     try {
       // Relative CMS paths resolve against the fetched page, so the image
       // still loads once transplanted into the extension's own DOM.
+      // https-only: plain http images are dropped to avoid mixed content
+      // and silent image swaps on the wire.
       const abs = new URL(raw, doc.baseURI || undefined).href;
-      return /^https?:\/\//i.test(abs) ? abs : null;
+      return /^https:\/\//i.test(abs) ? abs : null;
     } catch {
       return null;
     }
@@ -37,8 +39,8 @@
     const isAllowed = allowedTags.has(node.tagName);
     const container = isAllowed ? targetDoc.createElement(node.tagName.toLowerCase()) : targetDoc.createDocumentFragment();
     if (isAllowed && node.tagName === 'A') {
-      const href = node.getAttribute('href') || '';
-      if (/^https?:\/\//i.test(href)) {
+      const href = (node.getAttribute('href') || '').trim();
+      if (/^https:\/\//i.test(href) && !/[\r\n\t]/.test(href)) {
         container.setAttribute('href', href);
         container.setAttribute('target', '_blank');
         container.setAttribute('rel', 'noopener noreferrer');
@@ -46,11 +48,13 @@
     }
     if (isAllowed && node.tagName === 'IMG') {
       // src + alt only: no srcset/sizes/event handlers survive, and a
-      // relative/unresolvable/non-http(s) src drops the whole image rather
+      // relative/unresolvable/non-https src drops the whole image rather
       // than injecting a broken one. Sizing is CSS-capped at render time.
       const src = cleanImgSrc(node.getAttribute('src'), targetDoc);
       if (!src) return null;
       container.setAttribute('src', src);
+      container.setAttribute('loading', 'lazy');
+      container.setAttribute('decoding', 'async');
       const alt = node.getAttribute('alt');
       if (alt) container.setAttribute('alt', alt);
       return container; // void element — never has meaningful children

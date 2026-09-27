@@ -19,7 +19,8 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function fmtGrade(raw) {
@@ -347,9 +348,28 @@
   // forget on a URL that came straight from a scraped href rather than one
   // built here with the param already on it, so the click handler adds it
   // centrally instead of relying on every call site to remember.
+  // Security: data-url values come from scraped DOM, so only same-origin
+  // http(s) or site-relative URLs are allowed — anything else (javascript:,
+  // data:, external origin) falls back to the USOS home page.
+  function isSafeOpenUrl(url) {
+    if (!url) return false;
+    try {
+      const parsed = new URL(url, location.origin);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+      return parsed.origin === location.origin;
+    } catch (e) {
+      return false;
+    }
+  }
   function withUsospOff(url) {
-    if (!url || /(?:^|[?&])usospp_off=/.test(url)) return url;
+    if (!url) return location.origin + '/kontroler.php';
+    if (!isSafeOpenUrl(url)) return location.origin + '/kontroler.php';
+    if (/(?:^|[?&])usospp_off=/.test(url)) return url;
     return url + (url.includes('?') ? '&' : '?') + 'usospp_off=1';
+  }
+  function safeOpenUrl(url, fallback) {
+    const target = isSafeOpenUrl(url) ? url : (fallback || (location.origin + '/kontroler.php'));
+    window.open(withUsospOff(target), '_blank', 'noopener');
   }
 
   // One row from adapter.getPaymentGroups — its `fields` are whatever
@@ -1199,6 +1219,33 @@
       if (view === 'katalogPrzedmioty') this.ensureKatalogRoot();
       if (view === 'katalogKierunki') this.ensureKatalogRoot();
       if (view === 'katalogBudynki') this.ensureMapaData();
+      this.ensureDeferredData(view);
+    }
+
+    // Lazy-loads sections deliberately left out of collectAll (exams iframe,
+    // faculty rejestracje, per-stage subjects) on first view entry that
+    // needs them. Re-renders only if the view is still the one that asked.
+    ensureDeferredData(view) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters || !this.data) return;
+      const adapter = adapters.selectAdapter ? adapters.selectAdapter() : null;
+      if (!adapter) return;
+      if ((view === 'egzaminy' || view === 'dashboard') && !this.data.examsResultLoaded && scrape.fetchExamsResult) {
+        scrape.fetchExamsResult(adapter, this.data).then(() => {
+          if (this.state.view === view) this.render();
+        }).catch(() => {});
+      }
+      if ((view === 'zapisy' || view === 'zapisTura' || view === 'dashboard') && !this.data.registrationsResultLoaded && scrape.fetchRegistrationsResult) {
+        scrape.fetchRegistrationsResult(adapter, this.data).then(() => {
+          if (this.state.view === view) this.render();
+        }).catch(() => {});
+      }
+      if ((view === 'przedmiotyLista' || view === 'zapisy' || view === 'dashboard') && !this.data.stageSubjectsResultLoaded && scrape.fetchStageSubjectsResult) {
+        scrape.fetchStageSubjectsResult(adapter, this.data).then(() => {
+          if (this.state.view === view) this.render();
+        }).catch(() => {});
+      }
     }
 
     persistNewsSeen() {
@@ -1280,7 +1327,7 @@
           this.emitSettings({ disable: true });
           break;
         case 'openUsos':
-          window.open(withUsospOff(el.dataset.url || location.origin + '/kontroler.php'), '_blank', 'noopener');
+          safeOpenUrl(el.dataset.url || location.origin + '/kontroler.php');
           break;
         case 'viewSubjects':
           // Personal-calendar tour links (szukajPrzedmiotu&method=rej) open
@@ -1583,7 +1630,7 @@
     // USOS++ there too and hide the real content, so instead we fetch and
     // parse that same URL ourselves and show it in our own modal.
     openPaymentDetails(url) {
-      if (!url) return;
+      if (!url || !isSafeOpenUrl(url)) return;
       this.setModalState({ paymentDetailsOpen: true, paymentDetailsLoading: true, paymentDetailsError: false, paymentDetailsData: null });
       const scrape = window.USOSPP_SCRAPE;
       const adapters = window.USOSPP_ADAPTERS;
@@ -1841,7 +1888,7 @@
       if (jedOrgKod) {
         this.setState({ view: 'katalogPrzedmioty', katalogPrzedmiotyUnitKod: jedOrgKod });
       } else {
-        window.open(withUsospOff(url), '_blank', 'noopener');
+        safeOpenUrl(url);
       }
     }
 
@@ -2942,6 +2989,21 @@
       }
       const container = this.root.querySelector('[data-mapa-map]');
       if (!container) return; // loading/error/empty state currently shown — nothing to mount yet
+      if (!window.L) {
+        const loader = window.USOSPP_LEAFLET;
+        if (loader && !this._leafletLoading) {
+          this._leafletLoading = true;
+          loader.ensureLeaflet().then(() => {
+            this._leafletLoading = false;
+            if (this.state.view === 'mapa') this.mountMapaIfNeeded();
+          }).catch(() => {
+            this._leafletLoading = false;
+            this.state.mapaError = true;
+            this.renderMapaStateIfNeeded();
+          });
+        }
+        return;
+      }
       if (this._leafletMap) { this._leafletMap.remove(); this._leafletMap = null; }
       const map = window.L.map(container, { center: [51.11, 17.03], zoom: 12 });
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -3004,6 +3066,17 @@
       if (!buildings || !buildings.length) return;
       const container = this.root.querySelector('[data-unit-map]');
       if (!container) return; // still loading / errored — card (so the div) isn't rendered
+      if (!window.L) {
+        const loader = window.USOSPP_LEAFLET;
+        if (loader && !this._leafletLoading) {
+          this._leafletLoading = true;
+          loader.ensureLeaflet().then(() => {
+            this._leafletLoading = false;
+            this.mountUnitMapPreview();
+          }).catch(() => { this._leafletLoading = false; });
+        }
+        return;
+      }
       const map = window.L.map(container, { center: [51.11, 17.03], zoom: 12, scrollWheelZoom: false });
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
@@ -6964,7 +7037,7 @@
                   <div style="font-size:13px;font-family:ui-monospace,monospace;margin-top:4px;">${esc(a.number)}</div>
                   <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(a.bankName || '—')}${a.currency ? ` · ${esc(a.currency)}` : ''}</div>
                 </div>
-                ${a.blankietUrl ? `<a href="${esc(a.blankietUrl)}" target="_blank" rel="noopener" style="font-size:12.5px;font-weight:600;color:#d9773a;white-space:nowrap;flex-shrink:0;">blankiet →</a>` : ''}
+                ${a.blankietUrl && isSafeOpenUrl(a.blankietUrl) ? `<a href="${esc(a.blankietUrl)}" target="_blank" rel="noopener" style="font-size:12.5px;font-weight:600;color:#d9773a;white-space:nowrap;flex-shrink:0;">blankiet →</a>` : ''}
               </div>
             `).join('')}
           </div>

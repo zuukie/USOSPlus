@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "USOS++ (Beta)",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Nowoczesna wersja systemu USOSweb: oceny, plan zajęć, płatności i egzaminy w jednym, szybkim panelu — bez zbędnego klikania.",
   "icons": {
     "16": "icons/icon16.png",
@@ -28,12 +28,12 @@
   "content_scripts": [
     {
       "matches": ["*://web.usos.pwr.edu.pl/*"],
-      "css": ["fonts/fonts.css", "core/ui/design-system.css", "usos/usos.css", "vendor/leaflet/leaflet.css"],
+      "css": ["fonts/fonts.css", "core/ui/design-system.css", "usos/usos.css"],
       "js": [
         "core/state-bridge.js",
         "core/detect.js",
         "core/sanitize-html.js",
-        "vendor/leaflet/leaflet.js",
+        "usos/leaflet-loader.js",
         "usos/planner-store.js",
         "usos/adapters.js",
         "usos/scraping.js",
@@ -42,13 +42,13 @@
         "usos/app.js",
         "usos/inject.js"
       ],
-      "run_at": "document_end"
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
       "resources": ["fonts/generalsans/*.woff2", "fonts/inter/*.woff2", "vendor/leaflet/images/*.png"],
-      "matches": ["*://web.usos.pwr.edu.pl/*", "*://*/*"]
+      "matches": ["*://web.usos.pwr.edu.pl/*"]
     }
   ]
 }

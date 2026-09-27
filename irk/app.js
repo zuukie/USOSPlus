@@ -16,7 +16,8 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   const ICONS = {
@@ -118,9 +119,26 @@
   // globally enabled for the domain) just mounts right back on top of
   // whatever page it opens — same fix usos/app.js's withUsospOff applies for
   // USOSweb, and irk/inject.js checks the same query param on load.
+  // Security: only same-origin http(s) URLs are allowed (data-url comes
+  // from scraped DOM); anything else falls back to the IRK home page.
+  function isSafeOpenUrl(url) {
+    if (!url) return false;
+    try {
+      const parsed = new URL(url, location.origin);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+      return parsed.origin === location.origin;
+    } catch (e) {
+      return false;
+    }
+  }
   function withUsospOff(url) {
-    if (!url) return url;
+    if (!url) return location.origin;
+    if (!isSafeOpenUrl(url)) return location.origin;
     return url + (url.includes('?') ? '&' : '?') + 'usospp_off=1';
+  }
+  function safeOpenUrl(url, fallback) {
+    const target = isSafeOpenUrl(url) ? url : (fallback || location.origin);
+    window.open(withUsospOff(target), '_blank', 'noopener');
   }
 
   class App {
@@ -612,13 +630,14 @@
     }
 
     openProgramme(url) {
-      if (!url) return;
+      if (!url || !isSafeOpenUrl(url)) return;
       this.setState({ view: 'programme', programmeUrl: url, programmeLoading: true, programmeError: false, programmeData: null, fieldData: null });
       this.persistViewState();
       this.fetchProgramme(url);
     }
 
     fetchProgramme(url) {
+      if (!isSafeOpenUrl(url)) { this.setState({ programmeLoading: false, programmeError: true }); return; }
       const scrape = window.USOSPP_IRK_SCRAPE;
       const adapters = window.USOSPP_IRK_ADAPTERS;
       scrape.fetchDoc(url)
@@ -737,7 +756,7 @@
           this.openProgramme(el.dataset.url);
           break;
         case 'openIrk':
-          window.open(withUsospOff(el.dataset.url || location.origin), '_blank', 'noopener');
+          safeOpenUrl(el.dataset.url || location.origin);
           break;
         case 'openRecruitmentPicker':
           this.openRecruitmentPicker();
@@ -1586,7 +1605,7 @@
       }
       return `
         <div class="usospp-card" style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
-          ${result.photoUrl ? `<img src="${esc(result.photoUrl)}" alt="Zdjęcie" style="width:96px;height:120px;object-fit:cover;border-radius:10px;border:1px solid var(--border);flex-shrink:0;">` : ''}
+          ${result.photoUrl && isSafeOpenUrl(result.photoUrl) ? `<img src="${esc(result.photoUrl)}" alt="Zdjęcie" loading="lazy" decoding="async" style="width:96px;height:120px;object-fit:cover;border-radius:10px;border:1px solid var(--border);flex-shrink:0;">` : ''}
           <div style="flex:1;min-width:220px;">
             <div class="usospp-card-title">${esc(result.fullName || 'Twoje konto')}</div>
             <div class="usospp-muted-text" style="margin-top:2px;">

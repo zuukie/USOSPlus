@@ -196,17 +196,39 @@
     }
   }
 
+  // Search cache (2 min) + abort of stale queries — the topbar fires on
+  // every confirmed phrase and each confirmation used to cost 4 JSON
+  // requests with no dedup, so fast typing produced races + duplicate load.
+  const searchCache = new Map();
+  let searchController = null;
+  async function fetchJsonAbortable(path, signal) {
+    try {
+      const res = await fetch(path, { credentials: 'same-origin', signal });
+      trackedCount++;
+      if (res.status === 503) unavailableCount++;
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Same min-search-length (3) the classic <usos-selector> autocomplete
   // widgets use — querying shorter patterns is just noise USOS itself
   // wouldn't bother sending either.
   async function searchCatalog(query) {
     const pattern = (query || '').trim();
     if (pattern.length < 3) return { subjects: [], units: [], programs: [] };
+    const cached = searchCache.get(pattern);
+    if (cached && Date.now() - cached.at < 120000) return cached.result;
+    if (searchController) { try { searchController.abort(); } catch (e) { /* ignore */ } }
+    searchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const signal = searchController ? searchController.signal : undefined;
     const [subjectsByName, subjectsByCode, unitsJson, programsJson] = await Promise.all([
-      fetchJson(PATHS.searchSubjects(pattern)),
-      fetchJson(PATHS.searchSubjectsByCode(pattern)),
-      fetchJson(PATHS.searchUnits(pattern)),
-      fetchJson(PATHS.searchPrograms(pattern)),
+      fetchJsonAbortable(PATHS.searchSubjects(pattern), signal),
+      fetchJsonAbortable(PATHS.searchSubjectsByCode(pattern), signal),
+      fetchJsonAbortable(PATHS.searchUnits(pattern), signal),
+      fetchJsonAbortable(PATHS.searchPrograms(pattern), signal),
     ]);
     // Merge by kod — a code query can occasionally also turn up in the
     // name results (or vice versa), and the two sets shouldn't show the
@@ -214,11 +236,17 @@
     const subjectsByKod = new Map();
     (subjectsByName && subjectsByName.wyniki ? Object.values(subjectsByName.wyniki) : []).forEach((s) => subjectsByKod.set(s.kod, s));
     (subjectsByCode && subjectsByCode.wyniki ? Object.values(subjectsByCode.wyniki) : []).forEach((s) => subjectsByKod.set(s.kod, s));
-    return {
+    const result = {
       subjects: [...subjectsByKod.values()],
       units: unitsJson && unitsJson.wyniki ? Object.values(unitsJson.wyniki) : [],
       programs: programsJson && programsJson.wyniki ? Object.values(programsJson.wyniki) : [],
     };
+    searchCache.set(pattern, { at: Date.now(), result });
+    if (searchCache.size > 30) {
+      const oldest = searchCache.keys().next().value;
+      searchCache.delete(oldest);
+    }
+    return result;
   }
 
   async function fetchDoc(path) {
@@ -308,6 +336,11 @@
   async function collectAll(adapter) {
     trackedCount = 0;
     unavailableCount = 0;
+    // Critical-for-dashboard first: home, zaliczenia, oceny, plan, hub,
+    // news, kalendarz + płatności + moje-studia. Deliberately NOT here:
+    // exams (hidden iframe ~6s), faculty rejestracje + per-stage subjects
+    // (N extra pages) — those load lazily on view entry via
+    // fetchExamsResult/fetchRegistrationsResult/fetchStageSubjectsResult.
     const [
       homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc,
       kalendarzDoc,
@@ -361,23 +394,8 @@
       bankAccounts: kontaBankoweDoc ? adapter.getBankAccounts(kontaBankoweDoc) : { supported: false, verified: false, accounts: [] },
     };
 
-    let examsResult = { supported: false, verified: false, exams: [] };
-    try {
-      const examsDoc = await fetchExamsDoc();
-      if (examsDoc) examsResult = adapter.getExams(examsDoc);
-    } catch (e) {
-      // leave examsResult as the unsupported default
-    }
-
-    let registrationsResult = { supported: false, verified: false, groups: [] };
-    if (user && user.facultyCode) {
-      try {
-        const regDoc = await fetchDoc(PATHS.rejestracje(user.facultyCode));
-        if (regDoc) registrationsResult = adapter.getRegistrationRounds(regDoc);
-      } catch (e) {
-        // leave registrationsResult as the unsupported default
-      }
-    }
+    const examsResult = { supported: false, verified: false, exams: [], deferred: true };
+    const registrationsResult = { supported: false, verified: false, groups: [], deferred: true };
 
     // Personal calendar — primary source for the Zapisy view (see PATHS
     // above). Independent of facultyCode: it works wherever USOS serves
@@ -389,24 +407,7 @@
       // leave personalCalendarResult as the unsupported default
     }
 
-    let stageSubjectsResult = { supported: false, verified: false, stages: [] };
-    if (ownProgrammesResult.supported) {
-      try {
-        const stageDocs = await Promise.all(
-          ownProgrammesResult.programmes.map((p) => fetchDoc(PATHS.stageSubjects(p.prgKod, p.etpKod)))
-        );
-        const stages = ownProgrammesResult.programmes
-          .map((p, i) => {
-            const doc = stageDocs[i];
-            if (!doc) return null;
-            return { ...p, ...adapter.getStageSubjects(doc) };
-          })
-          .filter(Boolean);
-        stageSubjectsResult = { supported: stages.length > 0, verified: true, stages };
-      } catch (e) {
-        // leave stageSubjectsResult as the unsupported default
-      }
-    }
+    const stageSubjectsResult = { supported: false, verified: false, stages: [], deferred: true };
 
     const scholarshipsResult = stypendiaDoc
       ? adapter.getScholarships(stypendiaDoc)
@@ -541,5 +542,61 @@
     }
   }
 
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups };
+  // Lazy deferred sections — called on view entry (see app.js navigate),
+  // not in collectAll, to keep mount fast. Each is idempotent per data
+  // object via the _loaded flag.
+  async function fetchExamsResult(adapter, data) {
+    if (!data || data.examsResultLoaded) return data ? data.examsResult : null;
+    try {
+      const examsDoc = await fetchExamsDoc();
+      data.examsResult = examsDoc
+        ? adapter.getExams(examsDoc)
+        : { supported: false, verified: false, exams: [] };
+    } catch (e) {
+      data.examsResult = { supported: false, verified: false, exams: [] };
+    }
+    data.examsResultLoaded = true;
+    return data.examsResult;
+  }
+
+  async function fetchRegistrationsResult(adapter, data) {
+    if (!data || data.registrationsResultLoaded) return data ? data.registrationsResult : null;
+    let result = { supported: false, verified: false, groups: [] };
+    const user = data.user;
+    if (user && user.facultyCode) {
+      try {
+        const regDoc = await fetchDoc(PATHS.rejestracje(user.facultyCode));
+        if (regDoc) result = adapter.getRegistrationRounds(regDoc);
+      } catch (e) { /* keep default */ }
+    }
+    data.registrationsResult = result;
+    data.registrationsResultLoaded = true;
+    return result;
+  }
+
+  async function fetchStageSubjectsResult(adapter, data) {
+    if (!data || data.stageSubjectsResultLoaded) return data ? data.stageSubjectsResult : null;
+    let result = { supported: false, verified: false, stages: [] };
+    const own = data.ownProgrammesResult;
+    if (own && own.supported && Array.isArray(own.programmes) && own.programmes.length) {
+      try {
+        const stageDocs = await Promise.all(
+          own.programmes.map((p) => fetchDoc(PATHS.stageSubjects(p.prgKod, p.etpKod)))
+        );
+        const stages = own.programmes
+          .map((p, i) => {
+            const doc = stageDocs[i];
+            if (!doc) return null;
+            return { ...p, ...adapter.getStageSubjects(doc) };
+          })
+          .filter(Boolean);
+        result = { supported: stages.length > 0, verified: true, stages };
+      } catch (e) { /* keep default */ }
+    }
+    data.stageSubjectsResult = result;
+    data.stageSubjectsResultLoaded = true;
+    return result;
+  }
+
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchExamsResult, fetchRegistrationsResult, fetchStageSubjectsResult };
 })();
