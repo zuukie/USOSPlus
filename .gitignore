@@ -2,3 +2,6 @@
 *.zip
 dist/
 STORE_LISTING.md
+# Lokalne skills agentów — narzędzia deweloperskie, nie część projektu.
+.agents/
+skills-lock.json

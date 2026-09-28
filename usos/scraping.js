@@ -13,6 +13,7 @@
     // info present shell-wide. Fetch home explicitly rather than trusting
     // whatever page the redesign happened to mount on.
     home: 'kontroler.php?_action=home/index',
+    grupy: 'kontroler.php?_action=home/grupy',
     zaliczenia: 'kontroler.php?_action=dla_stud/studia/zaliczenia/index',
     oceny: 'kontroler.php?_action=dla_stud/studia/oceny/index',
     plan: 'kontroler.php?_action=home/plan',
@@ -342,12 +343,13 @@
     // (N extra pages) — those load lazily on view entry via
     // fetchExamsResult/fetchRegistrationsResult/fetchStageSubjectsResult.
     const [
-      homeDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc,
+      homeDoc, grupyDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc,
       kalendarzDoc,
       platnosciNierozDoc, planyRatalneDoc, wplatyDoc, wplatyNierozDoc, kontaBankoweDoc,
       stypendiaDoc, sprawdzianyDoc, podaniaDoc, ankietyDoc,
     ] = await Promise.all([
       fetchDoc(PATHS.home),
+      fetchDoc(PATHS.grupy),
       fetchDoc(PATHS.zaliczenia),
       fetchDoc(PATHS.oceny),
       fetchDoc(PATHS.plan),
@@ -378,6 +380,18 @@
     const planResult = planDoc
       ? adapter.getPlan(planDoc)
       : { supported: false, verified: false, raw: null };
+    // Weekly plan reconstruction source: home/grupy lists every enrolled
+    // group with its recurring schedule lines (server-rendered, unlike the
+    // client-side home/plan timetable). getMyGroups is optional on older
+    // adapters — guard with typeof.
+    let myGroupsResult = { supported: false, verified: false, subjects: [] };
+    try {
+      if (grupyDoc && typeof adapter.getMyGroups === 'function') {
+        myGroupsResult = adapter.getMyGroups(grupyDoc);
+      }
+    } catch (e) {
+      // leave myGroupsResult as the unsupported default
+    }
     const ownProgrammesResult = zapisyHubDoc
       ? adapter.getOwnProgrammes(zapisyHubDoc)
       : { supported: false, verified: false, programmes: [] };
@@ -423,7 +437,7 @@
       : { supported: false, verified: false, rows: [] };
 
     return {
-      user, etapyResult, gradesResult, planResult, examsResult, registrationsResult,
+      user, etapyResult, gradesResult, planResult, myGroupsResult, examsResult, registrationsResult,
       personalCalendarResult,
       ownProgrammesResult, stageSubjectsResult, newsResult, paymentsResult,
       scholarshipsResult, testsResult, petitionsResult, surveysResult,
@@ -452,6 +466,7 @@
       etapyResult: { supported: false, verified: false, etapy: [] },
       gradesResult: { supported: false, verified: false, rows: [] },
       planResult: { supported: false, verified: false, raw: null },
+      myGroupsResult: { supported: false, verified: false, subjects: [] },
       examsResult: { supported: false, verified: false, exams: [] },
       registrationsResult: { supported: false, verified: false, groups: [] },
       personalCalendarResult: { supported: false, verified: false, sections: [] },
@@ -542,9 +557,29 @@
     }
   }
 
-  // Lazy deferred sections — called on view entry (see app.js navigate),
-  // not in collectAll, to keep mount fast. Each is idempotent per data
-  // object via the _loaded flag.
+  // Details of one enrolled group (see adapter.getGroupDetails) — room,
+  // building and lecturers for the weekly plan. Cached per URL (module
+  // lifetime): one group page per enrolled group, fetched lazily on plan
+  // view entry, never on mount.
+  const groupDetailsCache = new Map();
+  async function fetchGroupDetails(adapter, url) {
+    const miss = { supported: false, verified: false };
+    if (!url || !adapter || typeof adapter.getGroupDetails !== 'function') return miss;
+    if (groupDetailsCache.has(url)) return groupDetailsCache.get(url);
+    const doc = await fetchDoc(url);
+    let res = miss;
+    if (doc) {
+      try {
+        res = adapter.getGroupDetails(doc);
+      } catch (e) { /* keep miss */ }
+    }
+    groupDetailsCache.set(url, res);
+    if (groupDetailsCache.size > 100) {
+      const oldest = groupDetailsCache.keys().next().value;
+      groupDetailsCache.delete(oldest);
+    }
+    return res;
+  }
   async function fetchExamsResult(adapter, data) {
     if (!data || data.examsResultLoaded) return data ? data.examsResult : null;
     try {
@@ -598,5 +633,78 @@
     return result;
   }
 
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchExamsResult, fetchRegistrationsResult, fetchStageSubjectsResult };
+  // Participants of one enrolled group (see adapter.getGroupParticipants).
+  // The wrnav table paginates server-side (default 30 rows); a lone
+  // tab_limit param is ignored, so we follow the page's own
+  // tab_limit=500 link (full tab_offset/tab_limit/tab_order triplet)
+  // instead of guessing params — verified live: 30 → 110 rows on a
+  // lecture group. Separate cache from fetchGroupDetails (different URL
+  // and purpose). Fetched lazily on Studenci view entry, never on mount.
+  const groupParticipantsCache = new Map();
+  async function fetchGroupParticipants(adapter, url) {
+    const miss = { supported: false, verified: false, hidden: false, students: [] };
+    if (!url || !adapter || typeof adapter.getGroupParticipants !== 'function') return miss;
+    if (groupParticipantsCache.has(url)) return groupParticipantsCache.get(url);
+    const parse = (doc) => {
+      try {
+        return adapter.getGroupParticipants(doc);
+      } catch (e) {
+        return miss;
+      }
+    };
+    let doc = await fetchDoc(url);
+    let res = doc ? parse(doc) : miss;
+    if (doc && res.supported && !res.hidden) {
+      const bigLink = [...doc.querySelectorAll('table.wrnav a')]
+        .map((a) => a.href)
+        .find((h) => /tab_limit=500/.test(h || ''));
+      if (bigLink) {
+        const bigDoc = await fetchDoc(bigLink);
+        if (bigDoc) {
+          const bigRes = parse(bigDoc);
+          if (bigRes.supported && !bigRes.hidden && bigRes.students.length >= res.students.length) res = bigRes;
+        }
+      }
+    }
+    groupParticipantsCache.set(url, res);
+    if (groupParticipantsCache.size > 100) {
+      const oldest = groupParticipantsCache.keys().next().value;
+      groupParticipantsCache.delete(oldest);
+    }
+    return res;
+  }
+  // All enrolled groups' participants in one go: {byUrl, groups:[{url,
+  // subject, code, type, nr, ...result}], visible, hidden} for the
+  // Studenci view. Stored on data.participantsResult (…Loaded flag, same
+  // pattern as the other fetch*Result helpers).
+  async function fetchParticipantsResult(adapter, data) {
+    if (!data || data.participantsResultLoaded) return data ? data.participantsResult : null;
+    const result = { supported: false, verified: true, byUrl: {}, groups: [], visible: 0, hidden: 0 };
+    const mg = data.myGroupsResult;
+    if (mg && Array.isArray(mg.subjects) && mg.subjects.length) {
+      const jobs = [];
+      mg.subjects.forEach((s) => (s.groups || []).forEach((g) => {
+        if (g.detailsUrl) jobs.push({ url: g.detailsUrl, subject: s.name, code: s.code, type: g.type, nr: g.nr });
+      }));
+      const seen = new Set();
+      const uniqueJobs = jobs.filter((j) => !seen.has(j.url) && (seen.add(j.url), true));
+      const settled = await Promise.all(uniqueJobs.map(async (j) => {
+        try {
+          return { ...j, res: await fetchGroupParticipants(adapter, j.url) };
+        } catch (e) {
+          return { ...j, res: { supported: false, verified: false, hidden: false, students: [] } };
+        }
+      }));
+      settled.forEach(({ url, subject, code, type, nr, res }) => {
+        result.byUrl[url] = res;
+        result.groups.push({ url, subject, code, type, nr, ...res });
+        if (res.supported && !res.hidden) { result.visible++; result.supported = true; }
+        else result.hidden++;
+      });
+    }
+    data.participantsResult = result;
+    data.participantsResultLoaded = true;
+    return result;
+  }
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchStageSubjectsResult };
 })();

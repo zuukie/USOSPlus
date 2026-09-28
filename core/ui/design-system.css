@@ -38,6 +38,14 @@
   --ink-3: oklch(62% 0.01 55);
 }
 
+/* Rubber-band overscroll + scrollbar paint from <html>, outside the
+   .usospp-root theme scope above — without this, dark mode bounces into
+   white past the content edge. inject.js syncs data-usospp-theme on
+   documentElement at mount/unmount (cleared for classic pages, which are
+   light); color-scheme also themes the scrollbar and native controls. */
+html[data-usospp-theme="dark"] { background-color: oklch(18% 0.01 55); color-scheme: dark; }
+html[data-usospp-theme="light"] { background-color: oklch(97.5% 0.006 60); color-scheme: light; }
+
 .usospp-root * { box-sizing: border-box; }
 .usospp-root a { color: oklch(58% 0.15 45); text-decoration: none; cursor: pointer; }
 .usospp-root a:hover { color: oklch(48% 0.16 45); }
@@ -213,6 +221,7 @@ main[data-content-root][data-enter="1"] .usospp-view { animation: usospp-fade-in
 .usospp-eyebrow { font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); margin-bottom: 16px; }
 
 .usospp-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.usospp-stat-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .usospp-stat-label { font-size: 12.5px; color: var(--ink-3); font-weight: 600; }
 .usospp-stat-value { font-size: 26px; font-weight: 700; margin-top: 8px; }
 .usospp-stat-hint { font-size: 12px; color: var(--ink-3); margin-top: 4px; }

@@ -128,6 +128,17 @@
       container = null;
     }
     showNative();
+    syncCanvasTheme();
+  }
+
+  // Same <html>-canvas theming as usos/inject.js's syncCanvasTheme (see its
+  // comment) — IRK shares core/ui/design-system.css, so the same
+  // html[data-usospp-theme] rules apply here.
+  function syncCanvasTheme() {
+    try {
+      if (app) document.documentElement.dataset.usosppTheme = currentSettings && currentSettings.darkMode ? 'dark' : 'light';
+      else delete document.documentElement.dataset.usosppTheme;
+    } catch (e) { /* cosmetic only */ }
   }
 
   // Same whole-extension kill switch as usos/inject.js's applyState — see
@@ -140,6 +151,7 @@
     if (irkOn) {
       if (!app) await mountDashboard();
       else app.updateSettings({ darkMode: settings.darkMode, irkFavorites: settings.irkFavorites || [] });
+      syncCanvasTheme();
     } else if (app || container) {
       unmountDashboard();
     }

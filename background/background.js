@@ -20,8 +20,56 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'usospp:ensureLeaflet') {
+    // Lazy Leaflet injection (see usos/leaflet-loader.js): loads
+    // vendor/leaflet into the tab's ISOLATED world — the same realm the
+    // extension's content scripts (incl. usos/app.js) run in — so the
+    // app's own `window.L` checks see it. A page-DOM
+    // <script src="chrome-extension://…"> can't do that (it lands in the
+    // page's own JS world, invisible to content scripts) and would
+    // additionally need a web_accessible_resources entry plus the page's
+    // CSP to allow it.
+    if (sender && sender.id && sender.id !== chrome.runtime.id) return undefined;
+    ensureLeafletInTab(sender && sender.tab && sender.tab.id).then(sendResponse);
+    return true;
+  }
+
   return undefined;
 });
+
+// Injects Leaflet (JS+CSS) into a tab's ISOLATED world on demand — the
+// Mapa view and the unit-page preview are the only consumers, so bundling
+// leaflet.js statically would parse ~150 kB on every USOS page for
+// nothing. chrome.scripting execution is not subject to the page's CSP
+// and needs no web_accessible_resources entry; ISOLATED (the default
+// world) shares the realm with content scripts, hence the `window.L`
+// checks in usos/app.js keep working unchanged.
+async function ensureLeafletInTab(tabId) {
+  try {
+    if (!tabId) return { ok: false, error: 'no sender tab' };
+    const hasIt = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!window.L,
+    });
+    if (hasIt && hasIt[0] && hasIt[0].result) return { ok: true, cached: true };
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['vendor/leaflet/leaflet.js'],
+    });
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ['vendor/leaflet/leaflet.css'],
+    });
+    const verify = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!(window.L && window.L.map && window.L.marker),
+    });
+    if (verify && verify[0] && verify[0].result) return { ok: true };
+    return { ok: false, error: 'leaflet unavailable after injection' };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
 
 // File lists for each dynamically-registrable module — MUST be kept in sync
 // with the matching static entry in manifest.json. popup.js's "Dodaj obsługę

@@ -30,6 +30,22 @@
     return box ? textOf(box) : null;
   }
 
+  // Strict Polish final-grade parser. The old approach matched any digit
+  // anywhere in the cell, so subject codes ("13IST0-…"), cycles
+  // ("2026/27-Z") or ECTS counts became phantom grades and produced a fake
+  // average over subjects with "(brak ocen)". Only a whole cell exactly
+  // equal to a grade from the Polish scale counts: 2.0, 3.0, 3.5, 4.0,
+  // 4.5, 5.0, 5.5 (comma or dot separator). Returns normalized "X.Y" or
+  // null. Shared by getGrades; app.js's fmtGrade delegates to the same
+  // rule via USOSPP_ADAPTERS.parseStrictGrade.
+  const STRICT_GRADE_RE = /^(2(?:[.,]0)?|3(?:[.,]0|[.,]5)?|4(?:[.,]0|[.,]5)?|5(?:[.,]0|[.,]5)?)$/;
+  function parseStrictGrade(raw) {
+    if (raw === null || raw === undefined) return null;
+    const t = String(raw).trim().replace(/\s+/g, '');
+    if (!STRICT_GRADE_RE.test(t)) return null;
+    return t.replace(',', '.').replace(/^([2-5])$/, '$1.0');
+  }
+
   // Biweekly ("co drugi tydzień") classes render their parity as plain text
   // right next to the day/time — e.g. "co drugi czwartek (nieparzyste),
   // 11:15 - 13:00" on a groups list, or "co drugi wtorek (parzyste), 7:30 -
@@ -40,6 +56,38 @@
   function parseWeeksParity(text) {
     const m = (text || '').match(/\((nie)?parzyste\)/i);
     return m ? (m[1] ? 'odd' : 'even') : 'every';
+  }
+
+  // Polish weekday words (as rendered on home/grupy schedule lines) to the
+  // short day keys shared with app.js's planner (PN..ND). Matches inflected
+  // forms by prefix: "poniedziałek/poniedziałki", "środa/środę", etc.
+  const GROUP_DAY_PREFIX = {
+    poniedzialek: 'PN', wtorek: 'WT', wtorku: 'WT', wtorki: 'WT',
+    srod: 'ŚR', czwartek: 'CZ', czwartku: 'CZ', czwartki: 'CZ',
+    piatek: 'PT', piatku: 'PT', piatki: 'PT',
+    sobot: 'SO', niedziel: 'ND',
+  };
+  function parseGroupDay(word) {
+    const norm = (word || '').toLowerCase()
+      .replace(/ą/g, 'a').replace(/ć/g, 'c').replace(/ę/g, 'e')
+      .replace(/ł/g, 'l').replace(/ń/g, 'n').replace(/ó/g, 'o')
+      .replace(/ś/g, 's').replace(/ź|ż/g, 'z');
+    for (const prefix of Object.keys(GROUP_DAY_PREFIX)) {
+      if (norm.startsWith(prefix)) return GROUP_DAY_PREFIX[prefix];
+    }
+    return null;
+  }
+
+  // One schedule line from home/grupy, e.g. "każdy poniedziałek, 18:55 -
+  // 20:35" or "co drugi czwartek (nieparzyste), 11:15 - 13:00". Returns
+  // {day, start, end, weeks} or null when the line carries no time info.
+  function parseGroupSession(text) {
+    if (!text) return null;
+    const m = text.match(/([A-Za-ząćęłńóśźż]+)\s*,?\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/i);
+    if (!m) return null;
+    const day = parseGroupDay(m[1]);
+    if (!day) return null;
+    return { day, start: m[2], end: m[3], weeks: parseWeeksParity(text) };
   }
 
   // UNVERIFIED shared shape for four small "Moje studia" pages (stypendia,
@@ -439,41 +487,160 @@
     // fetch()+DOMParser (custom elements never upgrade there). Instead we
     // read the raw data literal the server embeds for the JS to consume:
     // <script type="module">register('plan', 'home/index', [ ...events ]);
-    // Only the empty-array case ([]) has been observed for real (no classes
-    // scheduled yet this semester) — the shape of a populated array is
-    // UNVERIFIED, so callers should treat `raw` as opaque until confirmed.
+    // Only the empty-array case ([]) was observed for a long time. Verified
+    // live 2026-09-28: on week views the third argument is NOT an array at
+    // all but a params object, e.g.
+    //   register('plan', 'home/plan', {"plan_week_sel_week":"2026-10-05"});
+    // and the events themselves are loaded client-side by usosweb/
+    // timetable.js (XHR), which fetch()+DOMParser never executes — so the
+    // static register() literal is NOT a reliable plan source. It stays as
+    // a best-effort primary (balanced-bracket parse, array only); the real
+    // weekly plan is reconstructed from home/grupy via getMyGroups below,
+    // which is fully server-rendered.
     getPlan(doc = document) {
       const scripts = [...doc.querySelectorAll('script')];
       for (const script of scripts) {
         const text = script.textContent || '';
-        const m = text.match(/register\(\s*'plan'\s*,\s*'[^']*'\s*,\s*(\[[\s\S]*?\])\s*\)/);
-        if (m) {
-          try {
-            return { supported: true, verified: false, raw: JSON.parse(m[1]) };
-          } catch (e) {
-            return { supported: true, verified: false, raw: null, parseError: true };
+        const head = text.match(/register\(\s*'plan'\s*,\s*'[^']*'\s*,/);
+        if (!head) continue;
+        const start = text.indexOf('[', head.index + head[0].length);
+        if (start === -1) continue; // object params (week view) — no static events
+        let depth = 0;
+        let inStr = null;
+        let esc = false;
+        for (let i = start; i < text.length; i++) {
+          const ch = text[i];
+          if (inStr) {
+            if (esc) esc = false;
+            else if (ch === '\\') esc = true;
+            else if (ch === inStr) inStr = null;
+            continue;
+          }
+          if (ch === '"' || ch === "'") { inStr = ch; continue; }
+          if (ch === '[') depth++;
+          else if (ch === ']') {
+            depth--;
+            if (depth === 0) {
+              const literal = text.slice(start, i + 1);
+              try {
+                return { supported: true, verified: true, raw: JSON.parse(literal) };
+              } catch (e) {
+                return { supported: true, verified: false, raw: null, parseError: true };
+              }
+            }
           }
         }
+        return { supported: true, verified: false, raw: null, parseError: true };
       }
       return { supported: false, verified: false, raw: null };
     },
 
-    // UNVERIFIED: only the empty <usos-frame id="oceny"> (no rows) was
-    // observed. Tries a plain <table>, then the same section-list pattern
-    // used by "zaliczenia etapów", then gives up gracefully.
+    // "Moje zajęcia" (home/grupy) — the student's own enrolled groups, fully
+    // server-rendered (verified live 2026-09-28 on a real account):
+    //   <usos-frame class="student"> <h2>Grupy, których jestem uczestnikiem</h2>
+    //     <ul class="no-bullets separated"> <li>
+    //       <div><span class="font-medium">NAME</span> [CODE]</div>
+    //       <div>Semestr zimowy 2026/27</div>
+    //       <ul> <li>
+    //         <div><a href="...pokazZajecia&zaj_cyk_id=..&gr_nr=..">TYPE, grupa nr N</a></div>
+    //         <div><ul class="no-bullets ..."><li>każdy poniedziałek, 18:55 - 20:35</li></ul></div>
+    // Weekly lines ("każdy X, HH:MM - HH:MM") and biweekly ones
+    // ("co drugi czwartek (nieparzyste), 11:15 - 13:00" — see
+    // parseWeeksParity above) are parsed into sessions. This is the primary
+    // source for the USOS++ weekly plan view.
+    getMyGroups(doc = document) {
+      const frames = [...doc.querySelectorAll('usos-frame')];
+      const frame = frames.find((f) => {
+        const h = f.querySelector('h2[slot="title"], h2');
+        return h && /grupy,? których jestem uczestnikiem/i.test(textOf(h) || '');
+      });
+      if (!frame) return { supported: false, verified: false, subjects: [] };
+      const subjects = [];
+      const topList = frame.querySelector('ul.no-bullets.separated, ul');
+      const topItems = topList
+        ? [...topList.children].filter((el) => el.tagName === 'LI')
+        : [];
+      topItems.forEach((li) => {
+        const nameEl = li.querySelector(':scope > div > span.font-medium');
+        const headDiv = li.querySelector(':scope > div');
+        const headText = textOf(headDiv) || '';
+        const codeMatch = headText.match(/\[([^\]]+)\]\s*$/);
+        const name = textOf(nameEl) || headText.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
+        if (!name) return;
+        const semDivs = [...li.querySelectorAll(':scope > div')];
+        const semester = semDivs.length > 1 ? textOf(semDivs[1]) : null;
+        const groups = [];
+        li.querySelectorAll(':scope > ul > li').forEach((gli) => {
+          const link = gli.querySelector('a[href*="pokazZajecia"]');
+          const linkText = textOf(link) || '';
+          const typeMatch = linkText.match(/^([^,]+),\s*grupa nr\s*(\d+)/i);
+          let zajCykId = null;
+          let grNr = typeMatch ? typeMatch[2] : null;
+          let detailsUrl = link ? link.href : null;
+          if (link) {
+            try {
+              const u = new URL(link.href);
+              zajCykId = u.searchParams.get('zaj_cyk_id');
+              if (!grNr) grNr = u.searchParams.get('gr_nr');
+            } catch (e) { /* keep nulls */ }
+          }
+          const sessions = [];
+          gli.querySelectorAll('ul li').forEach((sli) => {
+            const s = parseGroupSession(textOf(sli) || '');
+            if (s) sessions.push(s);
+          });
+          groups.push({
+            type: typeMatch ? typeMatch[1].trim() : linkText,
+            nr: grNr,
+            zajCykId,
+            detailsUrl,
+            sessions,
+          });
+        });
+        subjects.push({ name, code: codeMatch ? codeMatch[1] : null, semester, groups });
+      });
+      return { supported: subjects.length > 0, verified: true, subjects };
+    },
+
+    // Verified live 2026-09-28 on a real account (PWr): the grades frame
+    // (usos-frame#oceny) holds one table with a real <thead> —
+    // Przedmiot | Program | Ocena | Akcje — and one row per subject. A
+    // subject with no grade yet renders "(brak ocen)" in the Ocena cell, so
+    // the row list is NOT the grade list: only cells from the Ocena column
+    // that strictly match a Polish final grade count (see STRICT_GRADE_RE).
+    // Rows keep the {subject, code, program, grade} shape; grade is the
+    // normalized "X.Y" string or null.
     getGrades(doc = document) {
       const frame = doc.querySelector('usos-frame#oceny, usos-frame.oceny');
       if (!frame) return { supported: false, verified: false, rows: [] };
       const table = frame.querySelector('table');
-      if (table) {
-        const rows = [...table.querySelectorAll('tbody tr')].map((tr) => [...tr.children].map(textOf));
-        return { supported: true, verified: false, rows };
+      if (!table) {
+        const sectionRows = [...frame.querySelectorAll('usos-frame-section')].map((section) => ({
+          label: section.getAttribute('section-title') || '',
+          text: textOf(section),
+        }));
+        return { supported: true, verified: false, rows: sectionRows };
       }
-      const sectionRows = [...frame.querySelectorAll('usos-frame-section')].map((section) => ({
-        label: section.getAttribute('section-title') || '',
-        text: textOf(section),
-      }));
-      return { supported: true, verified: false, rows: sectionRows };
+      const headers = [...table.querySelectorAll('thead th')].map((th) => textOf(th) || '');
+      const lower = headers.map((h) => h.toLowerCase());
+      const subjectIdx = lower.findIndex((h) => /przedmiot/.test(h));
+      const programIdx = lower.findIndex((h) => /program/.test(h));
+      const gradeIdx = lower.findIndex((h) => /ocena/.test(h));
+      const rows = [...table.querySelectorAll('tbody tr')].map((tr) => {
+        const cells = [...tr.querySelectorAll('td')];
+        const cellText = (i) => (i >= 0 && cells[i] ? textOf(cells[i]) : null);
+        const subjectCell = cellText(subjectIdx >= 0 ? subjectIdx : 0) || '';
+        const codeMatch = subjectCell.match(/\[([^\]]+)\]\s*$/);
+        const gradeCell = cellText(gradeIdx >= 0 ? gradeIdx : 2) || '';
+        return {
+          subject: subjectCell.replace(/\s*\[[^\]]+\]\s*$/, '').trim() || subjectCell,
+          code: codeMatch ? codeMatch[1] : null,
+          program: cellText(programIdx >= 0 ? programIdx : 1),
+          grade: parseStrictGrade(gradeCell),
+          gradeText: gradeCell,
+        };
+      });
+      return { supported: true, verified: true, rows };
     },
 
     // UNVERIFIED: rejestracja na egzaminy is a separate same-document
@@ -557,6 +724,109 @@
       return { supported: true, verified: true, groups };
     },
 
+    // Participants of one group (same pokazZajecia?zaj_cyk_id=..&gr_nr=..
+    // page as getGroupDetails). Verified live 2026-09-28 on a real account:
+    // below the grey info + meetings tables sits table.wrnav with columns
+    // Lp. | Nazwisko (a[href*=pokazOsobe&os_id=..]) | Imiona | Stan
+    // (colspan=2, e.g. "aktywny"), rows alternate tr.odd_row/even_row.
+    // Access note above the table reads "Do listy studentów mają dostęp
+    // koordynatorzy przedmiotu, uczestnicy oraz prowadzący grup.
+    // Jesteś uczestnikiem, zatem masz dostęp." when visible. Pagination is
+    // server-side via tab_offset/tab_limit/tab_order (default tab_limit=30,
+    // options up to 500; a lone tab_limit param is ignored — the scraper
+    // follows the page's own tab_limit=500 link) — so this parser just
+    // reads whatever rows are present. The own row carries no
+    // marker; self-matching is done by name against getUser() in app.js.
+    // Returns {supported, verified, hidden, students:[{surname, names,
+    // status, osId}]}. Only name parts are kept — never album numbers etc.
+    getGroupParticipants(doc = document) {
+      const table = doc.querySelector('table.wrnav');
+      const bodyText = textOf(doc.body) || '';
+      const hasAccessNote = /do listy studentów mają dostęp/i.test(bodyText);
+      if (!table) {
+        return { supported: hasAccessNote, verified: true, hidden: true, students: [] };
+      }
+      const students = [];
+      table.querySelectorAll('tbody tr').forEach((tr) => {
+        const link = tr.querySelector('a[href*="pokazOsobe"]');
+        if (!link) return;
+        const cells = [...tr.querySelectorAll('td')].map((td) => (textOf(td) || '').trim());
+        if (cells.length < 3) return;
+        let osId = null;
+        try { osId = new URL(link.href).searchParams.get('os_id'); } catch (e) { /* keep null */ }
+        students.push({
+          surname: cells[1] || textOf(link) || '',
+          names: cells[2] || '',
+          status: cells[3] || null,
+          osId,
+        });
+      });
+      return { supported: true, verified: true, hidden: false, students };
+    },
+    // Details of one enrolled group (katalog2/przedmioty/pokazZajecia
+    // ?zaj_cyk_id=..&gr_nr=.. — the detailsUrl getMyGroups stores per
+    // group). Verified live 2026-09-28 on a real account: the grey info
+    // table's "Termin i miejsce:" row carries the recurring schedule line
+    // plus the room link (a[href*=pokazSale], e.g. "sala 311d") and the
+    // building note (span.note, e.g. "Gmach - Nowy Elektryczny [D-1]"),
+    // while table#lista_dat_spotkan lists concrete meetings with a
+    // per-meeting "Prowadzący" cell (td.prowadzacy — empty before the
+    // semester starts, populated later). Returns {supported, verified,
+    // room, roomUrl, building, scheduleText, teachers[], meetings[]}.
+    getGroupDetails(doc = document) {
+      const grey = doc.querySelector('table.grey');
+      if (!grey) return { supported: false, verified: false };
+      let room = null;
+      let roomUrl = null;
+      let building = null;
+      let scheduleText = null;
+      grey.querySelectorAll('tbody > tr, tr').forEach((tr) => {
+        const cells = tr.querySelectorAll(':scope > td');
+        if (cells.length < 2) return;
+        if (!/termin i miejsce/i.test(textOf(cells[0]) || '')) return;
+        const val = cells[1];
+        scheduleText = textOf(val);
+        const roomLink = val.querySelector('a[href*="pokazSale"]');
+        if (roomLink) {
+          room = textOf(roomLink);
+          roomUrl = roomLink.href;
+        }
+        const note = val.querySelector('span.note');
+        if (note) building = textOf(note);
+      });
+      const meetings = [];
+      doc.querySelectorAll('table#lista_dat_spotkan tbody tr').forEach((tr) => {
+        const cells = tr.querySelectorAll(':scope > td');
+        if (!cells.length) return;
+        const cellText = textOf(cells[0]) || '';
+        const dateMatch = cellText.match(/(\d{4}-\d{2}-\d{2})/);
+        const timeMatch = cellText.match(/(\d{1,2}:\d{2})\s*:\s*(\d{1,2}:\d{2})/);
+        const roomLink = cells[0].querySelector('a[href*="pokazSale"]');
+        const note = cells[0].querySelector('span.note');
+        const teacher = cells.length > 1 ? textOf(cells[1]) : null;
+        meetings.push({
+          date: dateMatch ? dateMatch[1] : null,
+          start: timeMatch ? timeMatch[1] : null,
+          end: timeMatch ? timeMatch[2] : null,
+          room: roomLink ? textOf(roomLink) : null,
+          building: note ? textOf(note) : null,
+          teacher: teacher || null,
+        });
+      });
+      const teachers = [...new Set(meetings.map((m) => m.teacher).filter(Boolean))];
+      const meetingRoom = meetings.map((m) => m.room).find(Boolean) || null;
+      const meetingBuilding = meetings.map((m) => m.building).find(Boolean) || null;
+      return {
+        supported: true,
+        verified: true,
+        room: room || meetingRoom,
+        roomUrl,
+        building: building || meetingBuilding,
+        scheduleText,
+        teachers,
+        meetings,
+      };
+    },
     // Verified live (2026-09-25) against .../dla_stud/rejestracja/kalendarz
     // on a real student account (PWr): the PERSONAL registration calendar,
     // already filtered to this student's programmes — 10 h2 sections, 9
@@ -1745,6 +2015,9 @@
     getUser() { return { name: null, album: null, faculty: null }; },
     getEtapy() { return { supported: false, verified: false, etapy: [] }; },
     getPlan() { return { supported: false, verified: false, raw: null }; },
+    getMyGroups() { return { supported: false, verified: false, subjects: [] }; },
+    getGroupDetails() { return { supported: false, verified: false }; },
+    getGroupParticipants() { return { supported: false, verified: false, hidden: false, students: [] }; },
     getGrades() { return { supported: false, verified: false, rows: [] }; },
     getExams() { return { supported: false, verified: false, exams: [] }; },
     getRegistrationRounds() { return { supported: false, verified: false, groups: [] }; },
@@ -1786,6 +2059,6 @@
     return hasModernShell() || looksLikeUsos();
   }
 
-  window.USOSPP_ADAPTERS = { selectAdapter, looksLikeUsos, isUsosPage, detectFooterVersion };
+  window.USOSPP_ADAPTERS = { selectAdapter, looksLikeUsos, isUsosPage, detectFooterVersion, parseStrictGrade };
   if (window.USOSPP_CORE) window.USOSPP_CORE.registerDetector('usos', isUsosPage);
 })();

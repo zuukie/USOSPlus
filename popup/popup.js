@@ -21,12 +21,30 @@ const FEATURE_GROUPS = [
 ];
 const FEATURE_META = Object.assign({}, ...FEATURE_GROUPS.map((g) => g.keys));
 
+// One outline glyph per tile, same visual language as the rest of the
+// popup (stroke currentColor, no fill) — the grid used to stamp an identical
+// circle on every tile, leaving only "Strona główna mojej uczelni" with a
+// real icon. Inner SVG markup only; the template wraps it in <svg>.
 const QUICK_ACTIONS = [
-  { key: 'plan', label: 'Plan', view: 'plan', path: 'kontroler.php?_action=home/plan' },
-  { key: 'oceny', label: 'Oceny', view: 'oceny', path: 'kontroler.php?_action=dla_stud/studia/oceny/index' },
-  { key: 'egzaminy', label: 'Egzaminy', view: 'egzaminy', path: 'kontroler.php?_action=dla_stud/rejestracja/egzaminy' },
-  { key: 'ustawienia', label: 'Ustaw.', view: 'ustawienia', path: 'kontroler.php?_action=home/index' },
+  { key: 'plan', label: 'Plan', view: 'plan', icon: '<rect x="3" y="4.5" width="14" height="12.5" rx="2"></rect><path d="M3 8.5h14M7 3v3M13 3v3"></path>' },
+  { key: 'oceny', label: 'Oceny', view: 'oceny', icon: '<path d="M4 16.5h12"></path><path d="M6.5 16.5v-5M10 16.5V8M13.5 16.5v-8"></path>' },
+  { key: 'egzaminy', label: 'Egzaminy', view: 'egzaminy', icon: '<circle cx="10" cy="10" r="7"></circle><path d="M7.5 10.2l1.8 1.8 3.2-3.8"></path>' },
+  { key: 'studenci', label: 'Studenci', view: 'studenci', icon: '<circle cx="7.5" cy="7.5" r="2.8"></circle><path d="M2.8 16.5c.6-2.8 2.4-4.2 4.7-4.2s4.1 1.4 4.7 4.2"></path><circle cx="13.8" cy="8" r="2.3"></circle><path d="M13.5 12.4c2 .2 3.3 1.5 3.8 3.6"></path>' },
+  { key: 'mapa', label: 'Mapa', view: 'mapa', icon: '<path d="M10 17.5S4.5 11.6 4.5 7.8a5.5 5.5 0 0 1 11 0c0 3.8-5.5 9.7-5.5 9.7z"></path><circle cx="10" cy="7.8" r="1.8"></circle>' },
+  { key: 'zapisy', label: 'Zapisy', view: 'zapisy', icon: '<path d="M4 6.5h12v3a1.8 1.8 0 0 0 0 3.6v3H4v-3a1.8 1.8 0 0 0 0-3.6z"></path><path d="M12.5 6.5v9.6" stroke-dasharray="1.4 1.6"></path>' },
+  { key: 'planer', label: 'Planer', view: 'planer', icon: '<rect x="3" y="3.5" width="14" height="13" rx="2"></rect><path d="M3 8h14M8 3.5V8M13 3.5V8M7.5 11.5h2M7.5 14h5"></path>' },
+  { key: 'ustawienia', label: 'Ustaw.', view: 'ustawienia', icon: '<circle cx="10" cy="10" r="2.4"></circle><path d="M10 2.5v2.2M10 15.3v2.2M17.5 10h-2.2M4.7 10H2.5M15 5l-1.5 1.5M6.5 13.5L5 15M15 15l-1.5-1.5M6.5 6.5L5 5"></path>' },
 ];
+
+// Fresh tabs can't receive an in-page navigate message (no content-script
+// app running there yet), so quick tiles opening a NEW tab deep-link through
+// ?usospp_view=…, which the app boot honors (see usos/app.js init) —
+// including for panel-only views (studenci/mapa/zapisy/planer/ustawienia)
+// that have no classic-USOS counterpart page to open instead.
+const HOME_PATH = 'kontroler.php?_action=home/index';
+function quickUrl(origin, view) {
+  return `${origin}/${HOME_PATH}&usospp_view=${view}`;
+}
 
 // USOS++ mark per the brand system: a rounded orange tile with two bold white
 // "+" glyphs. The popup's brand logo renders at 26px, just under the 32px
@@ -79,6 +97,10 @@ let looksLikeUsos = false;
 let looksLikeIrk = false;
 let snapshot = null;
 let busy = false;
+// True while the post-enable snapshot refetch is in flight — unlike `busy`
+// it doesn't block actions, it only swaps '…' placeholders into the data
+// cards (previously the whole popup ignored clicks for ~700ms here).
+let refreshingSnapshot = false;
 // Set when a previous addUniversity/toggleIrkEnabled attempt's
 // usospp:registerUniversity round-trip came back { ok: false } — background.js's
 // registerModule can genuinely fail (a permission grant it doesn't see yet,
@@ -93,6 +115,10 @@ let actionError = null;
 // user actually clicked for instead of a look-alike action that would end in
 // a slightly different state.
 let actionErrorRetry = 'addUniversity';
+// Which quick-tile view a failed "quick" action was aiming at — the retry
+// link re-runs with that view attached (see the banner in renderMainBody),
+// otherwise retrying "quick" finds no tile and silently does nothing.
+let actionErrorRetryView = null;
 
 function originPatternFor(url) {
   try {
@@ -155,6 +181,9 @@ function pingTab(tabId) {
 
 async function init() {
   state = await getState();
+  // Paint immediately (header + toggle work before tab detection finishes) —
+  // the popup used to sit blank through the whole serial await chain below.
+  render();
   await detectTab();
   if (tab && hasHostPermission && looksLikeUsos) snapshot = await fetchSnapshot();
   render();
@@ -169,16 +198,41 @@ function switchHtml(on, key) {
   return `<div class="pp-switch ${on ? 'on' : ''}" data-toggle-feature="${key}"><div class="pp-switch-knob"></div></div>`;
 }
 
+// "pn, 5.10 · 15:15–16:55 · Fizyka" + "Wykład · C-3, s. 123 (C-3)" — popping
+// the weekday off the ISO date so the card reads at a glance.
+function nextSessionTitle(ns) {
+  const days = ['nd', 'pn', 'wt', 'śr', 'czw', 'pt', 'sb'];
+  let day = '';
+  try {
+    const d = new Date(`${ns.date}T12:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      day = `${days[d.getDay()]}, ${d.getDate()}.${d.getMonth() + 1} · `;
+    }
+  } catch (e) { /* fall back to raw strings below */ }
+  return `${day}${ns.start || ''}${ns.end ? `–${ns.end}` : ''}${ns.subject ? ` · ${ns.subject}` : ''}`;
+}
+
+function nextSessionSub(ns) {
+  const bits = [];
+  if (ns.type) bits.push(ns.type);
+  if (ns.room) bits.push(ns.room + (ns.building ? ` (${ns.building})` : ''));
+  else if (ns.building) bits.push(ns.building);
+  return bits.join(' · ') || 'szczegóły w Planie';
+}
+
 function render() {
   const dark = state.darkMode;
+  // The bounce area paints from <html>, outside .pp-root's theme scope
+  // (see popup.css) — without this, dark mode overscrolls into white.
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   // The features subview only ever applies to the USOS toggles in
   // FEATURE_GROUPS, so an IRK-looking tab always gets its own small
   // header+body instead of being routed through view === 'features'.
   const irkView = !!(tab && looksLikeIrk);
   appEl.innerHTML = `
     <div class="pp-root" data-theme="${dark ? 'dark' : 'light'}">
-      ${view === 'features' ? renderFeaturesHeader() : irkView ? renderIrkHeader() : renderMainHeader()}
-      ${view === 'features' ? renderFeaturesBody() : irkView ? renderIrkBody() : renderMainBody()}
+      ${view === 'features' ? renderFeaturesHeader() : view === 'about' ? renderAboutHeader() : irkView ? renderIrkHeader() : renderMainHeader()}
+      ${view === 'features' ? renderFeaturesBody() : view === 'about' ? renderAboutBody() : irkView ? renderIrkBody() : renderMainBody()}
       ${renderFooter()}
     </div>
   `;
@@ -233,6 +287,40 @@ function renderFeaturesHeader() {
   `;
 }
 
+// Replaces the old gear action (chrome.tabs.create to a chrome:// URL, which
+// Chrome blocks for extensions — the click silently died in an unchecked
+// lastError). An in-popup page can show the running version, which a raw
+// chrome://extensions tab never did and which bug reports actually need.
+function renderAboutHeader() {
+  return `
+    <div class="pp-header">
+      <div class="pp-back" data-action="goMain">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--ink)" stroke-width="1.8"><path d="M12.5 5L7 10l5.5 5"></path></svg>
+        <div class="pp-back-title">O rozszerzeniu</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAboutBody() {
+  let version = '';
+  try {
+    version = chrome.runtime.getManifest().version || '';
+  } catch (e) { /* never — but the popup must not die over a version string */ }
+  return `
+    <div class="pp-body">
+      <div class="pp-list-item">
+        <div class="pp-list-bar" style="background:#d9773a;"></div>
+        <div>
+          <div class="pp-list-title">USOS++${version ? ` ${esc(version)}` : ''}</div>
+          <div class="pp-list-sub">Panel, Plan, Oceny, Studenci, Mapa, Zapisy i Generator planu dla USOSweb — plus dashboard dla IRK.</div>
+        </div>
+      </div>
+      <div class="pp-empty">Przełączniki funkcji znajdziesz w „Zarządzaj funkcjami", tryb ciemny w stopce poniżej.</div>
+    </div>
+  `;
+}
+
 function renderMainBody() {
   const enabled = state.enabled;
 
@@ -243,7 +331,7 @@ function renderMainBody() {
         <span>⚠️</span>
         <div>
           ${esc(actionError)}
-          <div style="margin-top:6px;"><a data-action="${actionErrorRetry}" data-module="usos">Spróbuj ponownie →</a></div>
+          <div style="margin-top:6px;"><a data-action="${actionErrorRetry}" data-module="usos"${actionErrorRetry === 'quick' && actionErrorRetryView ? ` data-view="${actionErrorRetryView}"` : ''}>Spróbuj ponownie →</a></div>
         </div>
       </div>
     `;
@@ -259,32 +347,30 @@ function renderMainBody() {
     `;
   }
 
-  const stats = snapshot
+  const nextSession = snapshot && snapshot.nextSession
     ? `
-      <div class="pp-stat-grid">
-        <div class="pp-stat-card">
-          <div class="pp-stat-label">Średnia (widoczne oceny)</div>
-          <div class="pp-stat-value">${snapshot.avg || '—'}</div>
-          <div class="pp-stat-hint">${snapshot.gradeCount ? `${snapshot.gradeCount} ocen` : 'brak ocen'}</div>
-        </div>
-        <div class="pp-stat-card">
-          <div class="pp-stat-label">Etap studiów</div>
-          <div class="pp-stat-value" style="font-size:14px;">${snapshot.etap ? esc(snapshot.etap.label) : '—'}</div>
-          <div class="pp-stat-hint">${snapshot.etap ? esc(snapshot.etap.status || '') : 'brak danych'}</div>
+      <div>
+        <div class="pp-section-heading">Najbliższe zajęcia</div>
+        <div class="pp-list-item">
+          <div class="pp-list-bar" style="background:#d9773a;"></div>
+          <div>
+            <div class="pp-list-title">${esc(nextSessionTitle(snapshot.nextSession))}</div>
+            <div class="pp-list-sub">${esc(nextSessionSub(snapshot.nextSession))}</div>
+          </div>
         </div>
       </div>
     `
     : '';
 
-  const nextInfo = snapshot
+  const nextInfo = (snapshot || refreshingSnapshot)
     ? `
       <div>
         <div class="pp-section-heading">Stan danych</div>
         <div class="pp-list-item">
           <div class="pp-list-bar" style="background:oklch(55% 0.15 45);"></div>
           <div>
-            <div class="pp-list-title">${snapshot.planEventCount || 0} poz. w planie · ${snapshot.examCount || 0} egzaminów</div>
-            <div class="pp-list-sub">${snapshot.user && snapshot.user.name ? esc(snapshot.user.name) : 'Nie rozpoznano użytkownika'}</div>
+            <div class="pp-list-title">${snapshot ? `${snapshot.planEventCount || 0} poz. w planie · ${snapshot.examCount || 0} egzaminów` : '…'}</div>
+            <div class="pp-list-sub">${snapshot && snapshot.user && snapshot.user.name ? esc(snapshot.user.name) : refreshingSnapshot ? '…' : 'Nie rozpoznano użytkownika'}</div>
           </div>
         </div>
       </div>
@@ -301,7 +387,7 @@ function renderMainBody() {
         ${enabled ? 'Wyłącz panel USOS++' : 'Włącz panel USOS++'}
       </button>
 
-      ${stats}
+      ${nextSession}
       ${nextInfo}
 
       <div style="margin-top:8px;">
@@ -318,8 +404,8 @@ function renderMainBody() {
         `}
         <div class="pp-quick-grid">
           ${QUICK_ACTIONS.map((qa) => `
-            <div class="pp-quick-action ${!state.myUniversity ? 'disabled' : ''}" data-action="quick" data-view="${qa.view}" data-path="${qa.path}">
-              <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7"></circle></svg>
+            <div class="pp-quick-action ${!state.myUniversity ? 'disabled' : ''}" data-action="quick" data-view="${qa.view}">
+              <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${qa.icon}</svg>
               <span>${qa.label}</span>
             </div>
           `).join('')}
@@ -382,6 +468,10 @@ function renderIrkBody() {
 
 function renderFeaturesBody() {
   const f = state.features;
+  // The plugin kill switch lives at the bottom as a danger zone — and its
+  // label now states the STATE ("Wtyczka włączona/wyłączona"), not the
+  // action. The old "Wyłącz wtyczkę" + ON-switch read as a double negative
+  // (switch ON while the label said "turn off").
   return `
     <div class="pp-body">
       ${state.myUniversity ? `
@@ -393,18 +483,6 @@ function renderFeaturesBody() {
           </div>
         </div>
       ` : ''}
-      <div>
-        <div class="pp-section-heading">Rozszerzenie</div>
-        <div class="pp-features-list">
-          <div class="pp-feature-row">
-            <div>
-              <div class="pp-feature-label">Wyłącz wtyczkę</div>
-              <div class="pp-feature-hint">Wyłącza panel USOS++, IRK i wszystkie funkcje niezależne (pasek szybkich akcji, widżety, odświeżanie) na wszystkich stronach</div>
-            </div>
-            ${switchHtml(state.pluginEnabled, '__plugin')}
-          </div>
-        </div>
-      </div>
       ${FEATURE_GROUPS.map((group) => `
         <div>
           <div class="pp-section-heading">${esc(group.label)}</div>
@@ -421,6 +499,18 @@ function renderFeaturesBody() {
           </div>
         </div>
       `).join('')}
+      <div>
+        <div class="pp-section-heading pp-danger-heading">Strefa niebezpieczna</div>
+        <div class="pp-features-list">
+          <div class="pp-feature-row pp-danger-row">
+            <div>
+              <div class="pp-feature-label">${state.pluginEnabled ? 'Wtyczka włączona' : 'Wtyczka wyłączona'}</div>
+              <div class="pp-feature-hint">Wyłączenie ukrywa panel USOS++, IRK i wszystkie funkcje niezależne na wszystkich stronach. Ustawienia zostają zachowane.</div>
+            </div>
+            ${switchHtml(state.pluginEnabled, '__plugin')}
+          </div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -471,6 +561,18 @@ async function onAction(el) {
   if (action === 'removeMyUniversity') { state = await setState({ myUniversity: null }); render(); return; }
   if (action === 'setMyUniversity') {
     if (!tab || !tab.url) return;
+    // "Moja Uczelnia" drives every quick tile's URL, so it must be a real
+    // USOSweb origin — previously the hint link set literally any open page
+    // (e.g. google.com) and all tiles silently opened garbage there. Off-USOS
+    // the error banner's retry re-runs this same action once the user HAS
+    // navigated to their university.
+    if (!looksLikeUsos) {
+      actionError = 'Otwórz stronę swojej uczelni (USOSweb), a potem kliknij ponawianie.';
+      actionErrorRetry = 'setMyUniversity';
+      actionErrorRetryView = null;
+      render();
+      return;
+    }
     const origin = new URL(tab.url).origin;
     state = await setState({ myUniversity: origin });
     render();
@@ -484,7 +586,8 @@ async function onAction(el) {
   }
 
   if (action === 'openExtensionPage') {
-    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+    view = 'about';
+    render();
     return;
   }
 
@@ -506,9 +609,17 @@ async function onAction(el) {
     if (alive) {
       state = await setState({ enabled: true });
       render();
+      // Snapshot refetch no longer holds `busy` (which froze the whole
+      // popup, dark-mode toggle included, for ~700ms) — `refreshingSnapshot`
+      // only paints '…' into the data cards until the data lands.
+      busy = false;
+      refreshingSnapshot = true;
+      render();
       setTimeout(async () => {
-        snapshot = await fetchSnapshot();
-        busy = false;
+        try {
+          snapshot = await fetchSnapshot();
+        } catch (e) { /* keep the old snapshot; placeholders clear anyway */ }
+        refreshingSnapshot = false;
         render();
       }, 700);
       return;
@@ -534,6 +645,7 @@ async function onAction(el) {
     // popup open with a "Spróbuj ponownie" banner instead of the old silence.
     actionError = null;
     actionErrorRetry = 'toggleEnabled';
+    actionErrorRetryView = null;
     render();
     try {
       const granted = await chrome.permissions.request({ origins: [pattern] });
@@ -576,6 +688,7 @@ async function onAction(el) {
     // content script to actually run.
     busy = true;
     actionError = null;
+    actionErrorRetryView = null;
     render();
     try {
       const pattern = originPatternFor(tab.url);
@@ -602,24 +715,31 @@ async function onAction(el) {
     const qa = QUICK_ACTIONS.find(q => q.view === el.dataset.view);
     if (!qa) return;
 
-    if (state.myUniversity) {
-      chrome.tabs.create({ url: `${state.myUniversity}/${qa.path}` });
+    // Already on a live USOS tab: switch the view in place, no new tab.
+    // (This branch used to sit AFTER myUniversity, so with a university set
+    // every tile opened a new tab and the in-place path was dead.)
+    if (hasHostPermission && looksLikeUsos && state.enabled) {
+      chrome.tabs.sendMessage(tab.id, { type: 'usospp:navigate', view: el.dataset.view });
       window.close();
       return;
     }
 
-    if (hasHostPermission && looksLikeUsos && state.enabled) {
-      chrome.tabs.sendMessage(tab.id, { type: 'usospp:navigate', view: el.dataset.view });
+    if (state.myUniversity) {
+      chrome.tabs.create({ url: quickUrl(state.myUniversity, qa.view) });
       window.close();
-    } else if (tab.url && looksLikeUsos) {
+      return;
+    }
+
+    if (tab.url && looksLikeUsos) {
       const origin = new URL(tab.url).origin;
       state = await setState({ myUniversity: origin });
       render();
-      chrome.tabs.create({ url: `${origin}/${qa.path}` });
+      chrome.tabs.create({ url: quickUrl(origin, qa.view) });
       window.close();
     } else {
       actionError = 'Wejdź na stronę swojej uczelni, kliknij jeszcze raz aby ustawić daną uczelnię jako Moja Uczelnia';
       actionErrorRetry = 'quick';
+      actionErrorRetryView = el.dataset.view || null;
       render();
     }
     return;
@@ -632,6 +752,7 @@ async function onAction(el) {
     const module = el.dataset.module || 'usos';
     busy = true;
     actionError = null;
+    actionErrorRetryView = null;
     render();
     try {
       const granted = await chrome.permissions.request({ origins: [pattern] });

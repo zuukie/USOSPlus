@@ -25,8 +25,16 @@
 
   function fmtGrade(raw) {
     if (raw === null || raw === undefined) return null;
-    const m = String(raw).replace(',', '.').match(/[0-9]([.,][0-9])?/);
-    return m ? m[0].replace(',', '.') : null;
+    try {
+      const strict = window.USOSPP_ADAPTERS && window.USOSPP_ADAPTERS.parseStrictGrade;
+      if (typeof strict === 'function') return strict(raw);
+    } catch (e) { /* fall through to local copy */ }
+    // Local copy of the strict rule (same as adapters.js parseStrictGrade):
+    // only a whole cell exactly equal to a Polish final grade counts, so
+    // subject codes, cycles and ECTS numbers never become phantom grades.
+    const t = String(raw).trim().replace(/\s+/g, '');
+    if (!/^(2(?:[.,]0)?|3(?:[.,]0|[.,]5)?|4(?:[.,]0|[.,]5)?|5(?:[.,]0|[.,]5)?)$/.test(t)) return null;
+    return t.replace(',', '.').replace(/^([2-5])$/, '$1.0');
   }
 
   function gradeBadge(gradeStr) {
@@ -107,6 +115,48 @@
     if (/projekt/.test(s)) return 'P';
     if (/lektorat/.test(s)) return 'LE';
     return (label || '?').trim().charAt(0).toUpperCase() || '?';
+  }
+
+  // Panel lookahead: how far ahead the "next sessions" box searches for
+  // the nearest upcoming session when the current week has nothing left.
+  const PANEL_LOOKAHEAD_DAYS = 21;
+
+  // Human countdown in Polish for a future timestamp: "za 5 min",
+  // "za 2 godz. 15 min", "za 3 dni". Mode picks the verb: reaching the
+  // session start vs reaching its end while it's already running.
+  function formatCountdownPl(targetMs, nowMs, mode) {
+    const diff = Math.max(0, targetMs - nowMs);
+    const verb = mode === 'end' ? 'Koniec' : 'Zaczyna się';
+    if (diff < 60 * 1000) return mode === 'end' ? 'Zaraz koniec' : 'Zaczyna się za chwilę';
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${verb} za ${mins} min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) {
+      const rest = mins % 60;
+      return rest ? `${verb} za ${hours} godz. ${rest} min` : `${verb} za ${hours} godz.`;
+    }
+    const days = Math.floor(hours / 24);
+    return `${verb} za ${days} ${days === 1 ? 'dzień' : 'dni'}`;
+  }
+
+  // Minute ticker for panel countdowns. Updates only the [data-countdown]
+  // spans in place — never a full re-render (which would replay the page
+  // fade-in). Started lazily on first panel render; no-ops when the box
+  // isn't on screen. Safe to call in non-DOM contexts (tests).
+  let countdownTickerStarted = false;
+  function ensureCountdownTicker() {
+    if (countdownTickerStarted) return;
+    if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+    if (typeof setInterval === 'undefined') return;
+    countdownTickerStarted = true;
+    setInterval(() => {
+      const now = Date.now();
+      document.querySelectorAll('[data-countdown]').forEach((el) => {
+        const target = Number(el.getAttribute('data-target') || 0);
+        if (!target) return;
+        el.textContent = formatCountdownPl(target, now, el.getAttribute('data-mode') || 'start');
+      });
+    }, 60000);
   }
 
   // USOS appends a rotating `callback=` token to every katalog2 subject
@@ -196,7 +246,7 @@
   }
 
   const NAV_ITEMS = [
-    { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
+    { id: 'dashboard', label: 'Panel', icon: 'grid' },
     { id: 'aktualnosci', label: 'Aktualności', icon: 'bell' },
     { id: 'plan', label: 'Plan zajęć', icon: 'calendar' },
     { id: 'oceny', label: 'Oceny', icon: 'bars' },
@@ -217,6 +267,7 @@
     { id: 'stypendia', label: 'Stypendia', icon: 'coins' },
     { id: 'podania', label: 'Podania', icon: 'send' },
     { id: 'ankiety', label: 'Ankiety', icon: 'star' },
+    { id: 'studenci', label: 'Studenci', icon: 'users' },
     // USOSmail's own UI is 100% client-rendered against an internal,
     // CSRF-walled endpoint whose own error message says not to use it as an
     // API — and every USOSweb page sends X-Frame-Options: deny, so it can't
@@ -246,8 +297,9 @@
   // Per-view list of `this.data` result keys whose *shape* — not just
   // whether the fetch itself succeeded — hasn't been confirmed against real
   // populated USOS markup yet (see the "UNVERIFIED" comments on
-  // adapter.getPlan/getGrades/getExams and adapter.genericInfoTable). Drives
-  // renderBetaNotice: a view shows the banner whenever one of its sources
+  // adapter.getExams and adapter.genericInfoTable; getPlan's static
+  // register() literal and getGrades were verified live 2026-09-28).
+  // Drives renderBetaNotice: a view shows the banner whenever one of its sources
   // actually has data (`supported`) that we're not yet sure we parsed
   // correctly (`!verified`), rather than every reviewer having to remember
   // to wire up a warning by hand on each new unverified page.
@@ -260,6 +312,7 @@
     sprawdziany: ['testsResult'],
     podania: ['petitionsResult'],
     ankiety: ['surveysResult'],
+    studenci: ['participantsResult'],
   };
 
   // A plain document reload (classic USOSweb navigation, not an SPA route
@@ -289,6 +342,10 @@
   // Keyed by origin so a future second-university install (see
   // background.js's registerUniversity) doesn't mix the two up.
   const NEWS_SEEN_KEY = 'usospp:newsSeenSignature:' + location.origin;
+  // Persisted Studenci filters (excluded subjects + hide-lectures), same
+  // device-local storage pattern as NEWS_SEEN_KEY — view state itself
+  // stays in-memory, but the user explicitly asked these to survive reloads.
+  const STUDENCI_FILTERS_KEY = 'usospp:studenciFilters:' + location.origin;
   function newsSignature(newsResult) {
     return ((newsResult && newsResult.items) || []).map((it) => it.title).join('|');
   }
@@ -327,6 +384,7 @@
     more: '<circle cx="5" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="10" cy="10" r="1.3" fill="currentColor" stroke="none"></circle><circle cx="15" cy="10" r="1.3" fill="currentColor" stroke="none"></circle>',
     chevron: '<path d="M7.5 5l5.5 5-5.5 5" stroke-width="2"></path>',
     pin: '<path d="M10 2.6c-3.3 0-6 2.6-6 5.9 0 4.4 6 9.1 6 9.1s6-4.7 6-9.1c0-3.3-2.7-5.9-6-5.9z"></path><circle cx="10" cy="8.3" r="2.1"></circle>',
+    users: '<circle cx="7" cy="7" r="3"></circle><path d="M2.5 16.5a4.5 4.5 0 0 1 9 0"></path><circle cx="13.5" cy="8" r="2.4"></circle><path d="M14.5 12.6a3.6 3.6 0 0 1 3 3.9"></path>',
     lock: '<rect x="5" y="9" width="10" height="7.5" rx="1.5"></rect><path d="M7 9V6.3a3 3 0 0 1 6 0V9"></path>',
   };
 
@@ -448,7 +506,7 @@
   }
 
   const TITLES = {
-    dashboard: ['Dashboard', 'Podsumowanie'],
+    dashboard: ['Panel', 'Podsumowanie'],
     aktualnosci: ['Aktualności', 'Ogłoszenia i komunikaty z USOSweb'],
     plan: ['Plan zajęć', 'Bieżący tydzień'],
     oceny: ['Oceny', 'Aktualny widok z USOSweb'],
@@ -465,6 +523,7 @@
     sprawdziany: ['Sprawdziany', 'Zasady rozliczania przedmiotów'],
     podania: ['Podania', 'Złożone wnioski i ich rozpatrzenie'],
     ankiety: ['Ankiety', 'Ankiety do wypełnienia'],
+    studenci: ['Studenci', 'Wspólne zajęcia z Twoich grup'],
     ustawienia: ['Ustawienia', 'Profil, wygląd i powiadomienia'],
     subjectPage: ['Przedmiot', 'Szczegóły z katalogu USOS'],
     catalogPage: ['Katalog', 'Szczegóły z katalogu USOS'],
@@ -556,6 +615,21 @@
           initialView = saved.view;
         }
       }
+      // Explicit deep-link (?usospp_view=…) — e.g. from the extension
+      // popup's quick tiles opening a fresh tab. Takes precedence over the
+      // sessionStorage restore (explicit user intent beats remembered
+      // state); sanitized against VALID_VIEWS. Parameterized views
+      // (subjectPage/catalogPage/zapisTura/zapisGrupy) are intentionally
+      // excluded — they need a saved payload the URL can't carry, so the
+      // param is ignored for those and the restore/default stands.
+      try {
+        const deepView = new URLSearchParams(location.search).get('usospp_view');
+        if (deepView && VALID_VIEWS.has(deepView)
+          && deepView !== 'subjectPage' && deepView !== 'catalogPage'
+          && deepView !== 'zapisTura' && deepView !== 'zapisGrupy') {
+          initialView = deepView;
+        }
+      } catch (e) { /* non-URL contexts — keep the restore */ }
 
       this.state = {
         view: initialView,
@@ -581,6 +655,15 @@
         calcGrade: '5.0',
         calcNewEcts: '5',
         zapisyFilter: '',
+        planWeekOffset: 0,
+        planViewMode: 'week', // 'week' (siatka) | 'list' (lista)
+        planScope: 'concrete', // 'concrete' (aktualny tydzień) | 'generic' (szablon ogólny)
+        planDetailsLoading: false,
+        planSessionModal: null, // weeklyPlan session object or null
+        studenciQuery: '',
+        studenciExcluded: [], // subject names excluded from Studenci matching
+        studenciHideLectures: false, // hide Wykład groups from Studenci matching
+        studenciFiltersReady: false, // persisted filters loaded from storage
         zapisTuraKey: initialZapisTura ? initialZapisTura.key : null,
         zapisTuraTitle: initialZapisTura ? initialZapisTura.title : '',
         zapisTuraCode: initialZapisTura ? initialZapisTura.code : '',
@@ -785,12 +868,27 @@
       if (initialView === 'mapa') {
         this.ensureMapaData();
       }
+      if (initialView === 'plan' || initialView === 'dashboard') {
+        this.ensurePlanDetails();
+      }
       if (initialView === 'katalogJednostki' || initialView === 'katalogPrzedmioty' || initialView === 'katalogKierunki') {
         this.ensureKatalogRoot();
       }
       if (initialView === 'katalogBudynki') {
         this.ensureMapaData();
       }
+      if (initialView === 'studenci') {
+        this.loadStudenciFilters();
+      }
+      if (initialView === 'planer') {
+        this.ensurePlannerTourBanner();
+      }
+      // Deferred per-view fetches (exams, registrations, stage subjects,
+      // participants) — navigate() fires this on every view entry, so the
+      // boot path must too; otherwise a refresh ON such a view sticks on
+      // its loading state forever (nothing ever triggers the fetch).
+      // No-op for views without deferred data or already-loaded flags.
+      this.ensureDeferredData(initialView);
     }
 
     destroy() {
@@ -1013,6 +1111,7 @@
       } else {
         this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
       }
+      if (view === 'plan' || view === 'dashboard') this.ensurePlanDetails();
       saveViewState(this.viewStatePayload());
     }
 
@@ -1126,11 +1225,11 @@
     // At most one of these is ever open at once, but data-modal-root holds
     // whichever it is — each renderer returns '' when it isn't the open one.
     renderModals() {
-      return this.renderPaymentDetailsModal() + this.renderGroupsModal() + this.renderLinksModal();
+      return this.renderPaymentDetailsModal() + this.renderGroupsModal() + this.renderLinksModal() + this.renderPlanSessionModal();
     }
 
     closeAnyModal() {
-      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false });
+      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false, planSessionModal: null });
     }
 
     // The search dropdown patches on every keystroke (after a debounce) —
@@ -1215,10 +1314,12 @@
       this.persistViewState();
       if (view === 'mapa') this.ensureMapaData();
       if (view === 'planer') this.ensurePlannerTourBanner();
+      if (view === 'plan' || view === 'dashboard') this.ensurePlanDetails();
       if (view === 'katalogJednostki') this.ensureKatalogRoot();
       if (view === 'katalogPrzedmioty') this.ensureKatalogRoot();
       if (view === 'katalogKierunki') this.ensureKatalogRoot();
       if (view === 'katalogBudynki') this.ensureMapaData();
+      if (view === 'studenci') this.loadStudenciFilters();
       this.ensureDeferredData(view);
     }
 
@@ -1243,6 +1344,11 @@
       }
       if ((view === 'przedmiotyLista' || view === 'zapisy' || view === 'dashboard') && !this.data.stageSubjectsResultLoaded && scrape.fetchStageSubjectsResult) {
         scrape.fetchStageSubjectsResult(adapter, this.data).then(() => {
+          if (this.state.view === view) this.render();
+        }).catch(() => {});
+      }
+      if (view === 'studenci' && !this.data.participantsResultLoaded && scrape.fetchParticipantsResult) {
+        scrape.fetchParticipantsResult(adapter, this.data).then(() => {
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
@@ -1392,6 +1498,36 @@
         case 'newsRetry':
           this.newsRetry();
           break;
+        case 'planWeekPrev':
+          this.setState((s) => ({ planWeekOffset: Number(s.planWeekOffset || 0) - 1 }));
+          break;
+        case 'planWeekNext':
+          this.setState((s) => ({ planWeekOffset: Number(s.planWeekOffset || 0) + 1 }));
+          break;
+        case 'planWeekToday':
+          this.setState({ planWeekOffset: 0 });
+          break;
+        case 'planViewWeek':
+          this.setState({ planViewMode: 'week' });
+          break;
+        case 'planViewList':
+          this.setState({ planViewMode: 'list' });
+          break;
+        case 'planScopeConcrete':
+          this.setState({ planScope: 'concrete' });
+          break;
+        case 'planScopeGeneric':
+          this.setState({ planScope: 'generic' });
+          break;
+        case 'planSessionDetails': {
+          const idx = parseInt(el.dataset.idx || '-1', 10);
+          const sess = this.planVisibleSessions()[idx];
+          if (sess) this.setModalState({ planSessionModal: sess });
+          break;
+        }
+        case 'closePlanSessionModal':
+          this.setModalState({ planSessionModal: null });
+          break;
         case 'katalogPrzedmiotyLoadMore':
           this.loadMoreKatalogPrzedmioty();
           break;
@@ -1428,6 +1564,18 @@
         case 'mapaSetFilter':
           this.setMapaFilter(el.dataset.unit || '');
           break;
+        case 'studenciToggleSubject':
+          this.toggleStudenciSubject(el.dataset.subject || '');
+          break;
+        case 'studenciToggleLectures':
+          this.toggleStudenciLectures();
+          break;
+        case 'studenciClearFilters':
+          this.clearStudenciFilters();
+          break;
+        case 'studenciRetryLoad':
+          this.retryStudenciLoad();
+          break;
         case 'mapaRefresh':
           this.mapaRefresh();
           break;
@@ -1462,6 +1610,9 @@
           break;
         case 'plannerToggleSubject':
           this.plannerToggleSubject(el.dataset.url);
+          break;
+        case 'plannerFocusSubject':
+          this.plannerFocusSubject(el.dataset.url);
           break;
         case 'plannerLoadGroups':
           this.plannerLoadGroups(el.dataset.url);
@@ -1807,6 +1958,41 @@
             ` : s.linksModalLinks.map((l) => `
               <div class="usospp-dropdown-item" data-action="openUsos" data-url="${esc(l.href)}">${esc(l.label)}</div>
             `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    planDayName(day) {
+      return { PN: 'Poniedziałek', WT: 'Wtorek', 'ŚR': 'Środa', CZ: 'Czwartek', PT: 'Piątek', SO: 'Sobota', ND: 'Niedziela' }[day] || day;
+    }
+
+    // Full details of one weekly-plan session (click a grid block or list
+    // row). Everything shown here already lives in weeklyPlan — the modal
+    // just gives short blocks a readable home for all of it.
+    renderPlanSessionModal() {
+      const s = this.state.planSessionModal;
+      if (!s) return '';
+      const weeksText = s.weeks === 'even' ? 'tydzień parzysty (P)' : s.weeks === 'odd' ? 'tydzień nieparzysty (N)' : 'każdy tydzień';
+      const roomLine = this.planRoomLine(s);
+      const groupUrl = s.detailsUrl
+        ? (s.detailsUrl.includes('?') ? `${s.detailsUrl}&usospp_off=1` : `${s.detailsUrl}?usospp_off=1`)
+        : null;
+      return `
+        <div class="usospp-modal-backdrop" data-action="closeModalBackdrop">
+          <div class="usospp-modal">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">${esc(s.subject)}</div>
+              <button class="usospp-icon-btn" data-action="closePlanSessionModal" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            <table class="usospp-table"><tbody>
+              <tr><td>Termin</td><td><strong>${esc(this.planDayName(s.day))} ${esc(s.start)}–${esc(s.end)}</strong> · ${esc(weeksText)}</td></tr>
+              <tr><td>Zajęcia</td><td>${esc(s.type || '—')}${s.nr ? `, grupa ${esc(String(s.nr))}` : ''}${s.code ? ` <span class="usospp-muted-text">[${esc(s.code)}]</span>` : ''}</td></tr>
+              <tr><td>Sala</td><td>${roomLine ? esc(roomLine) : '—'}</td></tr>
+              ${s.building ? `<tr><td>Budynek</td><td>${esc(s.building)}</td></tr>` : ''}
+              <tr><td>Prowadzący</td><td>${s.teacher ? esc(s.teacher) : '<span class="usospp-muted-text">brak danych w USOS</span>'}</td></tr>
+            </tbody></table>
+            ${groupUrl ? `<div style="margin-top:12px;"><button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(groupUrl)}">Otwórz grupę w USOS →</button></div>` : ''}
           </div>
         </div>
       `;
@@ -4004,11 +4190,35 @@
         });
     }
 
+    // Clicking a block on the preview grid expands its subject in the
+    // left list and scrolls to it — so a block can be traced back to the
+    // group rows it came from. A different subject goes through the exact
+    // same expand path as a manual toggle (including clearing the preview,
+    // per the focus decision); an already-expanded one just scrolls.
+    // setPlannerState patches synchronously, so the row can be queried
+    // right away — unless the subject list itself never loaded, in which
+    // case there's nothing to scroll to and we stop after expanding.
+    plannerFocusSubject(url) {
+      if (!url) return;
+      if (this.state.plannerExpandedUrl !== url) this.plannerToggleSubject(url);
+      if (!this.root || typeof this.root.querySelector !== 'function') return;
+      let row = null;
+      try {
+        row = this.root.querySelector(`[data-planner-subject="${url}"]`);
+      } catch (e) { row = null; }
+      if (!row) return;
+      try { row.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* ignore */ }
+      try {
+        row.classList.add('usospp-planner-flash');
+        setTimeout(() => { try { row.classList.remove('usospp-planner-flash'); } catch (e) { /* ignore */ } }, 1600);
+      } catch (e) { /* ignore */ }
+    }
+
     plannerLoadGroups(groupsUrl) {
       if (!groupsUrl) return;
       const cached = this.state.plannerGroupsCache[groupsUrl];
       if (cached && (cached.loading || cached.data)) return;
-      this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [groupsUrl]: { loading: true, data: null } } }));
+this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [groupsUrl]: { loading: true, data: null } } }));
       const scrape = window.USOSPP_SCRAPE;
       const adapters = window.USOSPP_ADAPTERS;
       if (!scrape || !adapters) return;
@@ -4237,6 +4447,7 @@
       else if (e.target.dataset.action === 'catalogSubjectQueryInput') this.setCatalogSubjectsState({ catalogSubjectQuery: e.target.value });
       else if (e.target.dataset.action === 'katalogPrzedmiotyQueryInput') this.setKatalogPrzedmiotyQueryState({ katalogPrzedmiotyQuery: e.target.value });
       else if (e.target.dataset.action === 'katalogBudynkiQueryInput') this.setKatalogBudynkiQueryState({ katalogBudynkiQuery: e.target.value });
+      else if (e.target.dataset.action === 'studenciQueryInput') this.setStudenciQueryState({ studenciQuery: e.target.value });
     }
 
     handleKeydown(e) {
@@ -4648,6 +4859,7 @@
         case 'sprawdziany': return this.renderSprawdziany();
         case 'podania': return this.renderPodania();
         case 'ankiety': return this.renderAnkiety();
+        case 'studenci': return this.renderStudenci();
         case 'ustawienia': return this.renderUstawienia();
         case 'subjectPage': return this.renderSubjectPage();
         case 'mapa': return this.renderMapa();
@@ -4676,6 +4888,16 @@
     get numericGrades() {
       return this.gradeRows
         .map((row) => {
+          // New shape from getGrades: {subject, code, program, grade} —
+          // only the parsed Ocena column counts (grade is null when the
+          // subject has "(brak ocen)").
+          if (row && typeof row === 'object' && !Array.isArray(row)) {
+            if (row.grade) {
+              const g = fmtGrade(row.grade);
+              if (g) return g;
+            }
+            return null;
+          }
           const cells = Array.isArray(row) ? row : [row.text];
           for (let i = cells.length - 1; i >= 0; i--) {
             const g = fmtGrade(cells[i]);
@@ -4689,6 +4911,530 @@
     get planEvents() {
       const p = this.data.planResult || {};
       return Array.isArray(p.raw) ? p.raw : [];
+    }
+
+    // Weekly plan reconstructed from home/grupy (getMyGroups): every
+    // enrolled group flattened to {day, start, end, weeks, subject, code,
+    // type, nr}. Recurring every week by nature (USOS renders "każdy X" /
+    // "co drugi X (parzyste/nieparzyste)"), so the week switcher only moves
+    // the displayed week label — the sessions repeat.
+    get weeklyPlan() {
+      const mg = this.data.myGroupsResult || {};
+      if (!Array.isArray(mg.subjects)) return [];
+      const details = (this.data.groupDetails && typeof this.data.groupDetails === 'object')
+        ? this.data.groupDetails : {};
+      const out = [];
+      mg.subjects.forEach((s) => {
+        (s.groups || []).forEach((g) => {
+          const det = (g.detailsUrl && details[g.detailsUrl]) || null;
+          const teachers = det && Array.isArray(det.teachers) ? det.teachers.filter(Boolean) : [];
+          (g.sessions || []).forEach((sess) => {
+            out.push({
+              day: sess.day,
+              start: sess.start,
+              end: sess.end,
+              weeks: sess.weeks || 'every',
+              subject: s.name,
+              code: s.code,
+              type: g.type,
+              nr: g.nr,
+              detailsUrl: g.detailsUrl,
+              room: (det && det.room) || null,
+              roomUrl: (det && det.roomUrl) || null,
+              building: (det && det.building) || null,
+              teacher: teachers.length ? teachers.join(', ') : null,
+            });
+          });
+        });
+      });
+      const order = { PN: 0, WT: 1, 'ŚR': 2, CZ: 3, PT: 4, SO: 5, ND: 6 };
+      out.sort((a, b) => (order[a.day] ?? 9) - (order[b.day] ?? 9) || (a.start || '').localeCompare(b.start || ''));
+      out.forEach((e, i) => { e.idx = i; });
+      return out;
+    }
+
+    // Monday of the displayed week (offset 0 = current week), returned as a
+    // Date at local midnight.
+    planWeekMonday(off = Number(this.state.planWeekOffset || 0)) {
+      const now = new Date();
+      const dow = (now.getDay() + 6) % 7; // Monday = 0
+      const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow + off * 7);
+      monday.setHours(0, 0, 0, 0);
+      return monday;
+    }
+
+    planWeekLabel(off = Number(this.state.planWeekOffset || 0)) {
+      const monday = this.planWeekMonday(off);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+      return `${fmt(monday)} – ${fmt(sunday)}`;
+    }
+
+    // The seven days of a week (offset 0 = current): {date (Date), iso
+    // (YYYY-MM-DD), day (PN..ND)}.
+    planWeekDates(off = Number(this.state.planWeekOffset || 0)) {
+      const monday = this.planWeekMonday(off);
+      const keys = ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'];
+      return keys.map((day, i) => {
+        const date = new Date(monday);
+        date.setDate(monday.getDate() + i);
+        const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        return { date, iso, day };
+      });
+    }
+
+    // Concrete week sessions: group meetings (see getGroupDetails) whose
+    // date falls into the given week offset. Room/teacher come from the
+    // concrete meeting itself (a meeting can move rooms), falling back to
+    // the group's header info. Days without meetings are simply absent —
+    // the renderer shows them as free.
+    concreteSessionsForOffset(off) {
+      const range = this.planWeekDates(off);
+      const dayByIso = {};
+      range.forEach((r) => { dayByIso[r.iso] = r.day; });
+      const mg = this.data.myGroupsResult || {};
+      if (!Array.isArray(mg.subjects)) return [];
+      const details = (this.data.groupDetails && typeof this.data.groupDetails === 'object')
+        ? this.data.groupDetails : {};
+      const out = [];
+      mg.subjects.forEach((s) => {
+        (s.groups || []).forEach((g) => {
+          const det = (g.detailsUrl && details[g.detailsUrl]) || null;
+          const meetings = det && Array.isArray(det.meetings) ? det.meetings : [];
+          meetings.forEach((m) => {
+            if (!m.date || !dayByIso[m.date] || !m.start || !m.end) return;
+            const detTeachers = det && Array.isArray(det.teachers) ? det.teachers.filter(Boolean) : [];
+            out.push({
+              date: m.date,
+              day: dayByIso[m.date],
+              start: m.start,
+              end: m.end,
+              weeks: 'every', // concrete date needs no parity tag
+              subject: s.name,
+              code: s.code,
+              type: g.type,
+              nr: g.nr,
+              detailsUrl: g.detailsUrl,
+              room: m.room || (det && det.room) || null,
+              roomUrl: (det && det.roomUrl) || null,
+              building: m.building || (det && det.building) || null,
+              teacher: m.teacher || (detTeachers.length ? detTeachers.join(', ') : null),
+            });
+          });
+        });
+      });
+      out.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
+      out.forEach((e, i) => { e.idx = i; });
+      return out;
+    }
+
+    get concreteWeekSessions() {
+      return this.concreteSessionsForOffset(Number(this.state.planWeekOffset || 0));
+    }
+
+    // Epoch ms for a concrete session's start/end ("2026-10-05" + "15:15").
+    // Null when the session has no usable date/time.
+    sessionDateTime(e, which = 'start') {
+      const t = which === 'end' ? e.end : e.start;
+      if (!e.date || !t || !/^\d{2}:\d{2}$/.test(t)) return null;
+      const dt = new Date(`${e.date}T${t}:00`);
+      return Number.isNaN(dt.getTime()) ? null : dt.getTime();
+    }
+
+    // Nearest sessions for the panel box: merges concrete weeks 0..2,
+    // keeps everything not yet finished, capped at PANEL_LOOKAHEAD_DAYS
+    // ahead. Splits into currently-running vs upcoming, both chronological.
+    panelUpcomingSessions(nowMs = Date.now()) {
+      const seen = new Map();
+      for (let off = 0; off < 3; off++) {
+        this.concreteSessionsForOffset(off).forEach((e) => {
+          const start = this.sessionDateTime(e, 'start');
+          const end = this.sessionDateTime(e, 'end');
+          if (start == null || end == null) return;
+          if (end < nowMs) return;
+          if (start > nowMs + PANEL_LOOKAHEAD_DAYS * 86400000) return;
+          const key = `${e.date}|${e.start}|${e.end}|${e.subject}|${e.type}|${e.nr}`;
+          if (!seen.has(key)) seen.set(key, { ...e, _start: start, _end: end });
+        });
+      }
+      const all = [...seen.values()].sort((a, b) => a._start - b._start || a._end - b._end);
+      return {
+        ongoing: all.filter((e) => e._start <= nowMs && nowMs < e._end),
+        upcoming: all.filter((e) => e._start > nowMs),
+      };
+    }
+
+    // One panel entry row: subject colour bar, name, location, time and a
+    // live countdown span (ticked in place every 60 s, no re-render).
+    renderPanelSessionRow(e, mode, nowMs) {
+      const c = subjectColor(hashStr(e.code || e.subject || ''), this.settings.darkMode);
+      const roomLine = this.planRoomLine(e);
+      const target = mode === 'end' ? e._end : e._start;
+      const dd = (e.date || '').slice(8);
+      const mm = (e.date || '').slice(5, 7);
+      return `
+        <div class="usospp-list-row" style="border-left:4px solid ${c.bg};">
+          <div style="padding-left:8px;">
+            <div style="font-weight:600;">${esc(e.subject)}${e.type ? ` <span class="usospp-muted-text" style="font-weight:400;">· ${esc(e.type)}${e.nr ? `, gr. ${esc(String(e.nr))}` : ''}</span>` : ''}</div>
+            <div class="usospp-muted-text" style="font-size:12.5px;">${esc(e.day || '')} ${esc(dd)}.${esc(mm)} · ${esc(e.start)}–${esc(e.end)}${roomLine ? ` · ${esc(roomLine)}` : ''}</div>
+            <div class="usospp-stat-hint" style="font-weight:600;"><span data-countdown data-target="${target}" data-mode="${mode}">${esc(formatCountdownPl(target, nowMs, mode))}</span></div>
+          </div>
+        </div>`;
+    }
+
+    // Dynamic panel box replacing "Zaliczenia etapów": currently-running
+    // sessions + what's next, with a 21-day lookahead. One box, sections
+    // stacked and separated.
+    renderPanelSessions(nowMs = Date.now()) {
+      ensureCountdownTicker();
+      const { ongoing, upcoming } = this.panelUpcomingSessions(nowMs);
+      const section = (title, rows, separated) => rows.length ? `
+        <div${separated ? ' style="border-top:1px solid var(--border);margin-top:12px;padding-top:4px;"' : ''}>
+          <div class="usospp-card-title" style="margin:8px 0;font-size:14px;">${esc(title)}</div>
+          ${rows.join('')}
+        </div>` : '';
+      if (!ongoing.length && !upcoming.length) {
+        return `
+          <div class="usospp-card-head"><div class="usospp-card-title">Zajęcia</div><a data-action="nav" data-view="plan" style="font-size:12.5px;font-weight:600;cursor:pointer;">plan →</a></div>
+          <div class="usospp-empty-hint">Brak zajęć w ciągu następnych ${PANEL_LOOKAHEAD_DAYS} dni.</div>`;
+      }
+      const head = ongoing.length
+        ? section('Aktualne zajęcia', ongoing.map((e) => this.renderPanelSessionRow(e, 'end', nowMs)), false)
+          + section('Następne zajęcia', upcoming.slice(0, 2).map((e) => this.renderPanelSessionRow(e, 'start', nowMs)), true)
+        : section('Kolejne zajęcia', upcoming.slice(0, 1).map((e) => this.renderPanelSessionRow(e, 'start', nowMs)), false)
+          + section('Późniejsze zajęcia', upcoming.slice(1, 3).map((e) => this.renderPanelSessionRow(e, 'start', nowMs)), true);
+      return `
+        <div class="usospp-card-head"><div class="usospp-card-title">Zajęcia</div><a data-action="nav" data-view="plan" style="font-size:12.5px;font-weight:600;cursor:pointer;">plan →</a></div>
+        ${head}`;
+    }
+
+    // Weekly aggregate for the panel's left box: counts and hours from
+    // the concrete current-week sessions (offset 0), busiest day with its
+    // load, free days, per-type counts. Pure computation — no new loads.
+    get panelWeekSummary() {
+      const events = this.concreteSessionsForOffset(0);
+      const toMin = (t) => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(t || '');
+        return m ? (+m[1]) * 60 + (+m[2]) : null;
+      };
+      const byDay = {};
+      const byType = {};
+      let minutes = 0;
+      events.forEach((e) => {
+        const s = toMin(e.start);
+        const en = toMin(e.end);
+        if (s !== null && en !== null && en > s) {
+          minutes += en - s;
+          byDay[e.day] = (byDay[e.day] || 0) + (en - s);
+        }
+        const t = e.type || 'inne';
+        byType[t] = (byType[t] || 0) + 1;
+      });
+      const order = ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'];
+      let busiest = null;
+      order.forEach((d) => {
+        if (byDay[d] && (!busiest || byDay[d] > byDay[busiest])) busiest = d;
+      });
+      const busyDays = new Set(events.map((e) => e.day));
+      const freeDays = order.filter((d) => !busyDays.has(d));
+      return { count: events.length, minutes, byDay, busiest, freeDays, byType };
+    }
+
+    // Left panel box: this week's load at a glance. The right box
+    // (renderPanelSessions) owns exact times + countdowns, so this one
+    // stays an aggregate — deliberately no per-session rows.
+    renderPanelWeekSummary() {
+      const s = this.panelWeekSummary;
+      const head = `
+        <div class="usospp-card-head"><div class="usospp-card-title">Ten tydzień — ${esc(this.planWeekLabel(0))}</div><a data-action="nav" data-view="plan" style="font-size:12.5px;font-weight:600;cursor:pointer;">szczegóły →</a></div>`;
+      if (!s.count) {
+        return `${head}<div class="usospp-empty-hint">W tym tygodniu nie masz żadnych zajęć — wolne.</div>`;
+      }
+      const fmtDur = (min) => {
+        const h = Math.floor(min / 60);
+        const m = min % 60;
+        if (h && m) return `${h} h ${m} min`;
+        if (h) return `${h} h`;
+        return `${m} min`;
+      };
+      const zajeciaWord = s.count === 1 ? '1 zajęcie'
+        : [2, 3, 4].includes(s.count % 10) && ![12, 13, 14].includes(s.count % 100) ? `${s.count} zajęcia`
+        : `${s.count} zajęć`;
+      const types = Object.entries(s.byType)
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `${esc(t)} ×${n}`)
+        .join(' · ');
+      return `${head}
+        <div class="usospp-list-row">
+          <div style="font-size:13px;"><strong>${zajeciaWord}</strong> · łącznie ${fmtDur(s.minutes)} na uczelni</div>
+        </div>
+        ${s.busiest ? `
+        <div class="usospp-list-row">
+          <div style="font-size:13px;">Najbardziej zapracowany: <strong>${esc(s.busiest)}</strong> (${fmtDur(s.byDay[s.busiest])})</div>
+        </div>` : ''}
+        <div class="usospp-list-row">
+          <div style="font-size:13px;">${s.freeDays.length ? `Wolne: <strong>${esc(s.freeDays.join(', '))}</strong>` : 'Brak dni wolnych w tym tygodniu.'}</div>
+        </div>
+        ${types ? `<p class="usospp-muted-text" style="margin:8px 0 0 0;">${types}</p>` : ''}`;
+    }
+
+    // Sessions actually on screen right now (concrete week or generic
+    // template) — the plan modal indexes into this via data-idx.
+    planVisibleSessions() {
+      return this.state.planScope === 'generic' ? this.weeklyPlan : this.concreteWeekSessions;
+    }
+
+    // Normalized "names surname" key for cross-group student dedup.
+    studentKey(surname, names) {
+      return `${names || ''} ${surname || ''}`.replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
+    // Fellow students aggregated from all visible group lists
+    // (data.participantsResult): [{key, display, isSelf,
+    // subjects:[{subject, code, type, nr}], count}], most shared first.
+    // Self-match is by name against getUser() (cas-bar logged-user); when
+    // the formats don't align there's simply no "Ty" badge — nothing breaks.
+    get studentIndex() {
+      const res = (this.data && this.data.participantsResult) || {};
+      const groups = Array.isArray(res.groups) ? res.groups : [];
+      const rawSelf = this.data && this.data.user && this.data.user.name;
+      const selfName = rawSelf ? String(rawSelf).replace(/\s+/g, ' ').trim().toLowerCase() : null;
+      const map = new Map();
+      groups.forEach((g) => {
+        if (!g || g.hidden || !Array.isArray(g.students)) return;
+        g.students.forEach((s) => {
+          const key = this.studentKey(s.surname, s.names);
+          if (!key) return;
+          if (!map.has(key)) {
+            map.set(key, {
+              key,
+              display: `${(s.names || '').trim()} ${(s.surname || '').trim()}`.trim(),
+              isSelf: !!selfName && key === selfName,
+              subjects: [],
+            });
+          }
+          map.get(key).subjects.push({ subject: g.subject, code: g.code, type: g.type, nr: g.nr });
+        });
+      });
+      const out = [...map.values()];
+      out.forEach((e) => { e.count = e.subjects.length; });
+      out.sort((a, b) => (b.count - a.count) || a.display.localeCompare(b.display, 'pl'));
+      return out;
+    }
+
+    setStudenciQueryState(patch) {
+      Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch);
+      if (this.state.view !== 'studenci') return;
+      // Same focus-preserving pattern as setKatalogPrzedmiotyQueryState.
+      this.render();
+      const input = this.root.querySelector('[data-action="studenciQueryInput"]');
+      if (input) {
+        const val = this.state.studenciQuery || '';
+        if (input.value !== val) input.value = val;
+        input.focus();
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) { /* ignore */ }
+      }
+    }
+
+    // Persisted Studenci filters: load once (fire-and-forget on view entry,
+    // re-renders only if still on the view), save on every toggle.
+    loadStudenciFilters() {
+      if (this.state.studenciFiltersReady) return;
+      try {
+        const p = chrome.storage.local.get(STUDENCI_FILTERS_KEY);
+        const apply = (stored) => {
+          this.state.studenciFiltersReady = true;
+          if (stored && typeof stored === 'object') {
+            if (Array.isArray(stored.excluded)) this.state.studenciExcluded = stored.excluded.filter((x) => typeof x === 'string');
+            if (typeof stored.hideLectures === 'boolean') this.state.studenciHideLectures = stored.hideLectures;
+          }
+          if (this.state.view === 'studenci') this.render();
+        };
+        if (p && typeof p.then === 'function') p.then((res) => apply(res && res[STUDENCI_FILTERS_KEY])).catch(() => apply(null));
+        else apply(null);
+      } catch (e) { this.state.studenciFiltersReady = true; }
+    }
+
+    persistStudenciFilters() {
+      try {
+        chrome.storage.local.set({ [STUDENCI_FILTERS_KEY]: {
+          excluded: this.state.studenciExcluded || [],
+          hideLectures: !!this.state.studenciHideLectures,
+        } });
+      } catch (e) { /* ignore */ }
+    }
+
+    toggleStudenciSubject(name) {
+      const cur = new Set(this.state.studenciExcluded || []);
+      if (cur.has(name)) cur.delete(name);
+      else cur.add(name);
+      this.setState({ studenciExcluded: [...cur] });
+      this.persistStudenciFilters();
+    }
+
+    toggleStudenciLectures() {
+      this.setState((s) => ({ studenciHideLectures: !s.studenciHideLectures }));
+      this.persistStudenciFilters();
+    }
+
+    clearStudenciFilters() {
+      this.setState({ studenciExcluded: [], studenciHideLectures: false });
+      this.persistStudenciFilters();
+    }
+
+    // Manual retry for the Studenci loading state (covers a genuinely hung
+    // fetch, not just the missing boot trigger). In-flight guard —
+    // fetchParticipantsResult has none, so double-clicks would otherwise
+    // duplicate all per-group fetches. Mirrors ensureDeferredData's
+    // studenci branch, plus completion handling to clear the guard.
+    retryStudenciLoad() {
+      if (this.state.view !== 'studenci') return;
+      if (this._participantsLoading) return;
+      if (this.data && this.data.participantsResultLoaded) { this.render(); return; }
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+      if (!scrape || !scrape.fetchParticipantsResult || !adapter) return;
+      this._participantsLoading = true;
+      this.loadStudenciFilters();
+      scrape.fetchParticipantsResult(adapter, this.data).then(() => {
+        this._participantsLoading = false;
+        if (this.state.view === 'studenci') this.render();
+      }).catch(() => { this._participantsLoading = false; });
+    }
+
+    // studentIndex pruned by the Studenci filters: excluded subjects and,
+    // optionally, Wykład groups are removed from each person's shared
+    // list; people left with nothing drop out; counts re-derived.
+    get visibleStudentIndex() {
+      const excluded = new Set(this.state.studenciExcluded || []);
+      const hideLectures = !!this.state.studenciHideLectures;
+      if (!excluded.size && !hideLectures) return this.studentIndex;
+      const out = [];
+      this.studentIndex.forEach((e) => {
+        const subjects = e.subjects.filter((s) => !excluded.has(s.subject || '')
+          && !(hideLectures && /wykład/i.test(s.type || '')));
+        if (!subjects.length) return;
+        out.push({ ...e, subjects, count: subjects.length });
+      });
+      out.sort((a, b) => (b.count - a.count) || a.display.localeCompare(b.display, 'pl'));
+      return out;
+    }
+
+    // Distinct subject names across visible group lists, for filter chips.
+    get studenciFilterSubjects() {
+      const res = (this.data && this.data.participantsResult) || {};
+      const groups = Array.isArray(res.groups) ? res.groups : [];
+      const names = [...new Set(groups.filter((g) => g && !g.hidden && g.subject).map((g) => g.subject))];
+      names.sort((a, b) => a.localeCompare(b, 'pl'));
+      return names;
+    }
+
+    // The Studenci view: everyone visible on your groups' public lists,
+    // with the subjects/groups you share. Search filters by person or
+    // subject name; chips exclude whole subjects (or all lectures) from
+    // matching — exclusions persist in chrome.storage.local.
+    renderStudenci() {
+      const res = (this.data && this.data.participantsResult) || {};
+      const loaded = !!(this.data && this.data.participantsResultLoaded);
+      if (!loaded) {
+        return `<div class="usospp-view"><div class="usospp-card"><div class="usospp-empty-hint">Pobieranie list uczestników z Twoich grup…<br><a data-action="studenciRetryLoad" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div></div></div>`;
+      }
+      const index = this.visibleStudentIndex;
+      const q = (this.state.studenciQuery || '').trim().toLowerCase();
+      const matchesQuery = (e) => e.display.toLowerCase().includes(q)
+        || e.subjects.some((s) => (s.subject || '').toLowerCase().includes(q));
+      const filtered = q ? index.filter(matchesQuery) : index;
+      const excluded = new Set(this.state.studenciExcluded || []);
+      const hideLectures = !!this.state.studenciHideLectures;
+      const filtersActive = excluded.size > 0 || hideLectures;
+      // Searching something only the exclusions hide (e.g. a chipped-off
+      // subject) yields zero silently — count full-index matches so the
+      // empty state can name the filters as the culprit. The "wyczyść
+      // filtry →" link in the card head is the way out.
+      const hiddenMatchCount = (q && !filtered.length && filtersActive)
+        ? this.studentIndex.filter(matchesQuery).length
+        : 0;
+      const chipStyle = 'flex:0 0 auto;border-radius:99px;padding:6px 13px;font-size:12.5px;';
+      const subjectChips = this.studenciFilterSubjects.map((name) => {
+        const off = excluded.has(name);
+        return `<button class="usospp-mode-btn${off ? '' : ' active'}" style="${chipStyle}${off ? 'opacity:.45;' : ''}" data-action="studenciToggleSubject" data-subject="${esc(name)}" title="${off ? 'Kliknij, aby uwzględnić' : 'Kliknij, aby wykluczyć'}">${esc(name)}</button>`;
+      }).join('');
+      const chip = (s) => {
+        const c = subjectColor(hashStr(s.code || s.subject || ''), this.settings.darkMode);
+        return `<span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);border-left:3px solid ${c.bg};">${esc(s.subject || '')}${s.type ? ` · ${esc(s.type)}${s.nr ? `, gr. ${esc(String(s.nr))}` : ''}` : ''}</span>`;
+      };
+      const row = (e) => `
+        <div class="usospp-list-row">
+          <div>
+            <div style="font-weight:600;">${esc(e.display)}${e.isSelf ? ' <span class="usospp-badge">Ty</span>' : ''}</div>
+            ${e.isSelf ? '' : `<div class="usospp-muted-text" style="font-size:12px;">${e.count === 1 ? '1 wspólny przedmiot' : `${e.count} wspólne przedmioty`}</div>`}
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">${e.subjects.map(chip).join('')}</div>
+          </div>
+        </div>`;
+      return `
+        <div class="usospp-view">
+          <div class="usospp-card">
+            <div class="usospp-card-head"><div class="usospp-card-title">Studenci (${filtered.length})</div>${filtersActive ? `<a data-action="studenciClearFilters" style="font-size:12.5px;font-weight:600;cursor:pointer;">wyczyść filtry →</a>` : ''}</div>
+            <input class="usospp-input" style="margin-bottom:12px;" placeholder="Szukaj po nazwisku lub przedmiocie…" value="${esc(this.state.studenciQuery || '')}" data-action="studenciQueryInput">
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;">
+              <button class="usospp-mode-btn${hideLectures ? ' active' : ''}" style="${chipStyle}${hideLectures ? '' : 'opacity:.45;'}" data-action="studenciToggleLectures" title="${hideLectures ? 'Kliknij, aby uwzględnić wykłady' : 'Kliknij, aby ukryć wykłady'}">Bez wykładów</button>
+              ${subjectChips}
+            </div>
+            ${!this.studentIndex.length ? `<div class="usospp-empty-hint">Żadna z Twoich grup nie ma publicznej listy uczestników.</div>`
+              : !filtered.length ? (hiddenMatchCount === 1
+                ? `<div class="usospp-empty-hint">Nic wśród uwzględnionych — 1 pasująca osoba jest ukryta przez filtry.</div>`
+                : hiddenMatchCount > 1 && hiddenMatchCount < 5
+                  ? `<div class="usospp-empty-hint">Nic wśród uwzględnionych — ${hiddenMatchCount} pasujące osoby są ukryte przez filtry.</div>`
+                  : hiddenMatchCount >= 5
+                    ? `<div class="usospp-empty-hint">Nic wśród uwzględnionych — ${hiddenMatchCount} pasujących osób jest ukrytych przez filtry.</div>`
+                    : `<div class="usospp-empty-hint">Brak wyników — zmień zapytanie lub dostosuj filtry.</div>`)
+              : filtered.map(row).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Short room line for plan blocks: "sala 311d · D-1" (building code
+    // from "Gmach - Nowy Elektryczny [D-1]"). Null when nothing known yet.
+    planRoomLine(e) {
+      const code = (e.building || '').match(/\[([^\]]+)\]/);
+      const parts = [];
+      if (e.room) parts.push(e.room);
+      if (code) parts.push(code[1]);
+      else if (e.building) parts.push(e.building);
+      return parts.length ? parts.join(' · ') : null;
+    }
+
+    // Lazy room/lecturer enrichment for the weekly plan: one read-only
+    // fetch per enrolled group (cached in scraping.js), fired on plan and
+    // dashboard entry — never on mount, to keep it fast. Re-renders the
+    // view when the details land.
+    async ensurePlanDetails() {
+      const mg = this.data.myGroupsResult || {};
+      if (!Array.isArray(mg.subjects) || !mg.subjects.length) return;
+      if (!this.data.groupDetails) this.data.groupDetails = {};
+      const urls = [];
+      mg.subjects.forEach((s) => (s.groups || []).forEach((g) => {
+        if (g.detailsUrl && !this.data.groupDetails[g.detailsUrl] && !urls.includes(g.detailsUrl)) urls.push(g.detailsUrl);
+      }));
+      if (!urls.length) return;
+      const adapter = (window.USOSPP_ADAPTERS && typeof window.USOSPP_ADAPTERS.selectAdapter === 'function')
+        ? window.USOSPP_ADAPTERS.selectAdapter() : null;
+      const fetchDetails = window.USOSPP_SCRAPE && window.USOSPP_SCRAPE.fetchGroupDetails;
+      if (!adapter || typeof fetchDetails !== 'function') return;
+      this.setState({ planDetailsLoading: true });
+      try {
+        const results = await Promise.all(urls.map((u) => fetchDetails(adapter, u)));
+        urls.forEach((u, i) => { this.data.groupDetails[u] = results[i]; });
+      } finally {
+        if (this.state.view === 'plan' || this.state.view === 'dashboard') {
+          this.setState({ planDetailsLoading: false });
+        } else {
+          this.state.planDetailsLoading = false;
+        }
+      }
     }
 
     get etapy() {
@@ -4811,13 +5557,14 @@
     renderDashboard() {
       const grades = this.numericGrades;
       const avg = grades.length ? (grades.reduce((a, b) => a + parseFloat(b), 0) / grades.length).toFixed(2) : null;
-      const events = this.planEvents;
+      // Dashboard boxes always follow the concrete current week
+      // (offset 0), independently of the plan view's own week offset.
       const etapy = this.etapy;
       const currentEtap = etapy[0];
 
       return `
         <div class="usospp-view">
-          <div class="usospp-stat-grid">
+          <div class="usospp-stat-grid usospp-stat-grid--3">
             <div class="usospp-card usospp-stat">
               <div class="usospp-stat-label">Średnia (z widocznych ocen)</div>
               <div class="usospp-stat-value">${avg ? esc(avg) : '—'}</div>
@@ -4829,11 +5576,6 @@
               <div class="usospp-stat-hint">${currentEtap ? esc(currentEtap.status || '') : 'brak danych'}</div>
             </div>
             <div class="usospp-card usospp-stat">
-              <div class="usospp-stat-label">Kolejne zajęcia</div>
-              <div class="usospp-stat-value" style="font-size:19px;">${events.length ? 'zobacz plan →' : 'brak'}</div>
-              <div class="usospp-stat-hint">${events.length ? `${events.length} poz. w bieżącym tygodniu` : 'brak zajęć w planie'}</div>
-            </div>
-            <div class="usospp-card usospp-stat">
               <div class="usospp-stat-label">Egzaminy</div>
               <div class="usospp-stat-value">${this.exams.length || 0}</div>
               <div class="usospp-stat-hint" data-action="nav" data-view="egzaminy" style="cursor:pointer;font-weight:600;color:oklch(58% 0.15 45);">zobacz →</div>
@@ -4842,17 +5584,10 @@
 
           <div class="usospp-two-col">
             <div class="usospp-card">
-              <div class="usospp-card-head"><div class="usospp-card-title">Plan zajęć — bieżący tydzień</div><a data-action="nav" data-view="plan" style="font-size:12.5px;font-weight:600;cursor:pointer;">szczegóły →</a></div>
-              ${events.length ? `<div class="usospp-raw-dump">${esc(JSON.stringify(events.slice(0, 5), null, 2))}</div>` : `<div class="usospp-empty-hint">Brak zajęć zaplanowanych w tym tygodniu.</div>`}
+              ${this.renderPanelWeekSummary()}
             </div>
             <div class="usospp-card">
-              <div class="usospp-card-head"><div class="usospp-card-title">Zaliczenia etapów</div></div>
-              ${etapy.length ? etapy.map((e) => `
-                <div class="usospp-list-row">
-                  <div style="font-size:13px;">${esc(e.label)}</div>
-                  <div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${esc(e.status || '—')}</div>
-                </div>
-              `).join('') : `<div class="usospp-empty-hint">Brak danych o etapach.</div>`}
+              ${this.renderPanelSessions()}
             </div>
           </div>
         </div>
@@ -4887,34 +5622,190 @@
     }
 
     renderPlan() {
-      const events = this.planEvents;
-      const p = this.data.planResult || {};
+      const scope = this.state.planScope === 'generic' ? 'generic' : 'concrete';
+      const sessions = scope === 'generic' ? this.weeklyPlan : this.concreteWeekSessions;
+      const mg = this.data.myGroupsResult || {};
+      const rawEvents = this.planEvents;
+      const offset = Number(this.state.planWeekOffset || 0);
+      const mode = this.state.planViewMode === 'list' ? 'list' : 'week';
+      const hasTemplate = this.weeklyPlan.length > 0;
       return `
         <div class="usospp-view">
           <div class="usospp-card">
             <div class="usospp-card-head">
               <div class="usospp-card-title">Plan zajęć</div>
               <div style="display:flex;gap:10px;align-items:center;">
-                <span class="usospp-tag-muted">${p.verified ? '' : 'podgląd eksperymentalny'}</span>
                 <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=home/plan&usospp_off=1">Otwórz w USOS →</button>
               </div>
             </div>
-            ${!p.supported ? `
-              <div class="usospp-empty-hint">Nie udało się odczytać planu zajęć ze strony USOS.</div>
-            ` : events.length ? `
-              <p class="usospp-muted-text">Struktura pojedynczych zajęć w planie USOS nie została jeszcze w pełni potwierdzona (Twój plan jest obecnie pusty) — poniżej surowe dane odczytane ze strony, żeby nic nie zgubić:</p>
-              <div class="usospp-raw-dump">${esc(JSON.stringify(events, null, 2))}</div>
-            ` : `
-              <div class="usospp-empty-hint">Brak zajęć zaplanowanych w tym tygodniu.</div>
-            `}
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+              <button class="usospp-mode-btn${scope === 'concrete' ? ' active' : ''}" data-action="planScopeConcrete">Aktualny</button>
+              <button class="usospp-mode-btn${scope === 'generic' ? ' active' : ''}" data-action="planScopeGeneric">Ogólny</button>
+              <span style="flex:1;"></span>
+              <button class="usospp-mode-btn${mode === 'week' ? ' active' : ''}" data-action="planViewWeek">Tydzień</button>
+              <button class="usospp-mode-btn${mode === 'list' ? ' active' : ''}" data-action="planViewList">Lista</button>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+              ${scope === 'concrete' ? `
+                <button class="usospp-btn-ghost" data-action="planWeekPrev">← Poprzedni</button>
+                <button class="usospp-btn-ghost" data-action="planWeekToday" ${offset === 0 ? 'disabled style="opacity:.4;"' : ''}>Bieżący tydzień</button>
+                <button class="usospp-btn-ghost" data-action="planWeekNext">Następny →</button>
+                <span class="usospp-muted-text" style="font-weight:600;">${esc(this.planWeekLabel())}</span>
+              ` : ''}
+            </div>
+            ${this.state.planDetailsLoading ? `<div class="usospp-empty-hint" style="padding:0 0 8px 0;">Dociąganie sal i prowadzących…</div>` : ''}
+            ${!hasTemplate ? `
+              ${!mg.supported ? `<div class="usospp-empty-hint">Nie udało się odczytać planu zajęć (ani terminarza, ani Twoich grup) ze strony USOS.</div>`
+                : `<div class="usospp-empty-hint">Brak zajęć w Twoich grupach — nie jesteś zapisany na żadne zajęcia ze stałym terminem.</div>`}
+            ` : !sessions.length ? `
+              <div class="usospp-empty-hint">W tym tygodniu nie masz żadnych zajęć — wolne.</div>
+            ` : mode === 'week' ? this.renderPlanWeekGrid(sessions, scope) : this.renderPlanList(sessions, scope)}
+            ${!hasTemplate && rawEvents.length ? `
+              <p class="usospp-muted-text">Surowe dane terminarza USOS:</p>
+              <div class="usospp-raw-dump">${esc(JSON.stringify(rawEvents, null, 2))}</div>
+            ` : ''}
           </div>
         </div>
+      `;
+    }
+
+    // Horizontal week timetable: day columns, full morning-to-evening hour
+    // axis, sessions as positioned blocks. Same .usospp-timetable CSS as
+    // the planner grid. Concrete scope renders all 7 days with dates and
+    // marks empty days as free; generic scope shows only days that have
+    // sessions (recurring template, no dates).
+    renderPlanWeekGrid(weekly, scope = 'generic') {
+      const dark = this.settings.darkMode;
+      const concrete = scope !== 'generic';
+      const ROW_H = 60;
+      const allMins = weekly.flatMap((e) => [toMin(e.start), toMin(e.end)]).filter((n) => n !== null);
+      const hourStart = allMins.length ? Math.min(7, Math.floor(Math.min(...allMins) / 60)) : 7;
+      const hourEnd = allMins.length ? Math.max(21, Math.ceil(Math.max(...allMins) / 60)) : 21;
+      const totalHeight = Math.max(1, hourEnd - hourStart) * ROW_H;
+      const hours = [];
+      for (let h = hourStart; h <= hourEnd; h++) hours.push(h);
+      const shortDayName = { PN: 'Pon', WT: 'Wto', 'ŚR': 'Śro', CZ: 'Czw', PT: 'Pią', SO: 'Sob', ND: 'Nie' };
+      const weekDates = concrete ? this.planWeekDates() : [];
+      const dateByDay = {};
+      weekDates.forEach((r) => { dateByDay[r.day] = r.date; });
+      const dayKeys = concrete
+        ? ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND']
+        : ['PN', 'WT', 'ŚR', 'CZ', 'PT'].concat(
+          ['SO', 'ND'].filter((dk) => weekly.some((e) => e.day === dk)));
+      const cols = dayKeys.map((dk) => ({ day: dk, entries: weekly.filter((e) => e.day === dk) }));
+      const fmtDate = (d) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return `
+        <div class="usospp-plan-week">
+        <div class="usospp-timetable">
+          <div class="usospp-tt-hours" style="height:${totalHeight}px;">
+            ${hours.map((h) => `<div class="usospp-tt-hour" style="top:${(h - hourStart) * ROW_H}px;">${h}:00</div>`).join('')}
+          </div>
+          <div class="usospp-tt-days">
+            ${cols.map((col, ci) => {
+              const date = dateByDay[col.day] || (() => {
+                const m = this.planWeekMonday();
+                const d = new Date(m);
+                d.setDate(m.getDate() + (['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'].indexOf(col.day)));
+                return d;
+              })();
+              // Lane assignment for same-day overlaps: entry gets
+              // lane/total so overlapping blocks sit side by side.
+              const sorted = [...col.entries].sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+              const lanes = [];
+              const placed = sorted.map((e) => {
+                let lane = lanes.findIndex((end) => (e.start || '') >= end);
+                if (lane === -1) { lane = lanes.length; lanes.push(e.end || ''); }
+                else lanes[lane] = e.end || '';
+                return { e, lane };
+              });
+              const laneCount = Math.max(1, lanes.length);
+              return `
+              <div class="usospp-tt-daycol">
+                <div class="usospp-tt-daylabel">${esc(shortDayName[col.day])} <span class="usospp-muted-text">${esc(fmtDate(date))}</span></div>
+                <div class="usospp-tt-daybody" style="height:${totalHeight}px;background-size:100% ${ROW_H}px;">
+                  ${!placed.length ? (concrete ? `<div class="usospp-muted-text" style="position:absolute;top:10px;left:0;right:0;text-align:center;font-size:12px;">wolne</div>` : '') : placed.map(({ e, lane }) => {
+                    const startMin = toMin(e.start);
+                    const endMin = toMin(e.end);
+                    const top = (startMin - hourStart * 60) * (ROW_H / 60);
+                    const height = Math.max(36, (endMin - startMin) * (ROW_H / 60));
+                    const color = subjectColor(hashStr(e.code || e.subject || ''), dark);
+                    const weeksTag = weeksLabel(e.weeks);
+                    const widthPct = 100 / laneCount;
+                    const leftPct = lane * widthPct;
+                    const full = [e.subject, e.type + (e.nr ? `, grupa ${e.nr}` : ''), `${e.start}–${e.end}`, this.planRoomLine(e), e.teacher ? `Prowadzący: ${e.teacher}` : null].filter(Boolean).join(' — ')
+                      + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '');
+                    // Short blocks (e.g. 45-min classes) can't fit all five
+                    // lines — compact mode shows only time + subject and the
+                    // rest lives one click away in the session modal.
+                    const compact = height < 90;
+                    return `
+                      <div class="usospp-tt-entry${compact ? ' usospp-tt-entry--compact' : ''}" title="${esc(full)}" data-action="planSessionDetails" data-idx="${e.idx}" style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);right:auto;background:${color.bg};">
+                        <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${!compact && weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
+                        <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(shortClassType(e.type))} · ${esc(e.subject)}</div>
+                        ${compact ? '' : `
+                        <div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(e.type || '')}${e.nr ? ` · grupa ${esc(String(e.nr))}` : ''}</div>
+                        ${this.planRoomLine(e) ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(this.planRoomLine(e))}</div>` : ''}
+                        ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(e.teacher)}</div>` : ''}
+                        `}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+        </div>
+      `;
+    }
+
+    renderPlanList(weekly, scope = 'generic') {
+      const concrete = scope !== 'generic';
+      const DAY_NAMES = { PN: 'Poniedziałek', WT: 'Wtorek', 'ŚR': 'Środa', CZ: 'Czwartek', PT: 'Piątek', SO: 'Sobota', ND: 'Niedziela' };
+      const dayKeys = concrete
+        ? ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND']
+        : ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'].filter((d) => weekly.some((e) => e.day === d));
+      const dateByDay = {};
+      if (concrete) this.planWeekDates().forEach((r) => {
+        const d = r.date;
+        dateByDay[r.day] = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+      });
+      const weeksTag = (w) => w === 'even' ? ' <span class="usospp-badge">P</span>' : w === 'odd' ? ' <span class="usospp-badge">N</span>' : '';
+      return `
+        ${dayKeys.map((d) => {
+          const entries = weekly.filter((e) => e.day === d);
+          return `
+          <div class="usospp-card-title" style="margin:14px 0 8px 0;">${DAY_NAMES[d]}${concrete && dateByDay[d] ? ` <span class="usospp-muted-text">${esc(dateByDay[d])}</span>` : ''}</div>
+          ${!entries.length ? `<div class="usospp-empty-hint" style="padding:4px 0;">wolne</div>` : entries.map((e) => {
+            const c = subjectColor(hashStr(e.code || e.subject || ''), this.settings.darkMode);
+            const roomLine = this.planRoomLine(e);
+            return `
+            <div class="usospp-list-row" style="border-left:4px solid ${c.bg};cursor:pointer;" data-action="planSessionDetails" data-idx="${e.idx}">
+              <div style="padding-left:8px;">
+                <div style="font-weight:600;">${esc(e.start)} – ${esc(e.end)}${weeksTag(e.weeks)}</div>
+                <div style="font-size:13px;">${esc(e.subject)}${e.code ? ` <span class="usospp-muted-text">[${esc(e.code)}]</span>` : ''}</div>
+                <div class="usospp-muted-text" style="font-size:12px;">${esc(e.type || '')}${e.nr ? `, grupa ${esc(String(e.nr))}` : ''}${roomLine ? ` · ${esc(roomLine)}` : ''}</div>
+                ${e.teacher ? `<div class="usospp-muted-text" style="font-size:12px;">${esc(e.teacher)}</div>` : ''}
+              </div>
+            </div>`;
+          }).join('')}
+          `;
+        }).join('')}
       `;
     }
 
     renderOceny() {
       const rows = this.gradeRows;
       const g = this.data.gradesResult || {};
+      const grades = this.numericGrades;
+      const avg = grades.length ? (grades.reduce((a, b) => a + parseFloat(b), 0) / grades.length).toFixed(2) : null;
+      const cellOf = (row) => {
+        if (row && typeof row === 'object' && !Array.isArray(row)) {
+          return { subject: row.subject || '', program: row.program || '', grade: row.grade, gradeText: row.gradeText || '' };
+        }
+        const cells = Array.isArray(row) ? row : [row.label, row.text];
+        return { subject: cells[0] || '', program: cells[1] || '', grade: null, gradeText: cells[2] || '' };
+      };
       return `
         <div class="usospp-view">
           <div class="usospp-card">
@@ -4922,14 +5813,22 @@
               <div class="usospp-card-title">Oceny końcowe z przedmiotów</div>
               <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dla_stud/studia/oceny/index&usospp_off=1">Otwórz w USOS →</button>
             </div>
+            <div class="usospp-stat-hint" style="margin-bottom:10px;">${avg ? `Średnia: <strong>${esc(avg)}</strong> na podstawie ${grades.length} ${grades.length === 1 ? 'oceny' : 'ocen'}` : 'Brak ocen końcowych — średnia niepoliczona.'}</div>
             ${!g.supported ? `
               <div class="usospp-empty-hint">Nie udało się odczytać ocen ze strony USOS.</div>
             ` : rows.length === 0 ? `
               <div class="usospp-empty-hint">Brak ocen końcowych — jeszcze nic tu nie ma w tym cyklu.</div>
             ` : `
               <table class="usospp-table">
+                <thead><tr><th>Przedmiot</th><th>Program</th><th>Ocena</th></tr></thead>
                 <tbody>
-                  ${rows.map((row) => `<tr>${(Array.isArray(row) ? row : [row.label, row.text]).map((cell) => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}
+                  ${rows.map((row) => {
+                    const c = cellOf(row);
+                    const badge = c.grade ? gradeBadge(c.grade) : null;
+                    return `<tr><td>${esc(c.subject)}</td><td>${esc(c.program)}</td><td>${c.grade
+                      ? `<span class="usospp-badge" style="background:${badge.bg};color:${badge.color};">${esc(c.grade.replace('.', ','))}</span>`
+                      : `<span class="usospp-muted-text">—</span>`}</td></tr>`;
+                  }).join('')}
                 </tbody>
               </table>
             `}
@@ -6473,7 +7372,7 @@
       const color = subjectColor(this.plannerColorSeed(s.name), this.settings.darkMode);
       const already = this.state.plannerPicks.some((p) => subjectId(p.subjectUrl) === subjectId(url));
       return `
-        <div class="usospp-planner-subject">
+        <div class="usospp-planner-subject" data-planner-subject="${esc(url)}">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;cursor:pointer;" data-action="plannerToggleSubject" data-url="${esc(url)}">
             <div style="display:flex;align-items:center;gap:8px;min-width:0;">
               <span style="width:9px;height:9px;border-radius:999px;flex-shrink:0;background:${already ? color.time : 'var(--border)'};"></span>
@@ -6508,10 +7407,22 @@
       const previewable = cycle.classTypes.filter((ct) => ct.groupsUrl);
       const allPreviewed = previewable.length > 0
         && previewable.every((ct) => this.state.plannerPreviewKeys[classTypeKey(url, cycle.cycleName, ct.label)]);
+      // Class types whose draft points at a different group than the saved
+      // pick: committing replaces them. Say so explicitly — on the grid the
+      // old block is marked, but the button row is where the decision lands.
+      const replacements = cycle.classTypes.map((ct) => {
+        const key = classTypeKey(url, cycle.cycleName, ct.label);
+        const draft = this.state.plannerDraftSelection[key];
+        if (!draft || draft.removed || !draft.nr) return null;
+        const pick = this.state.plannerPicks.find((p) => p.key === key);
+        if (!pick || pick.nr === draft.nr) return null;
+        return `${shortClassType(ct.label)}: gr. ${pick.nr} → gr. ${draft.nr}`;
+      }).filter(Boolean);
       return `
         <div style="padding:2px 0 12px 0;">
           <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${esc(cycle.cycleName)}${cycle.period ? ` · ${esc(cycle.period)}` : ''}</div>
           ${cycle.classTypes.map((ct) => this.renderPlannerClassType(url, cycle.cycleName, ct)).join('')}
+          ${replacements.length ? `<div style="font-size:11.5px;font-weight:600;margin-bottom:8px;">Po zapisaniu zastąpi: ${esc(replacements.join(' · '))}</div>` : ''}
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
             <button class="usospp-btn-primary" data-action="plannerAddSubject" data-url="${esc(url)}" data-subject-name="${esc(details.subjectName)}" data-cycle-name="${esc(cycle.cycleName)}">
               Dodaj do planu
@@ -6614,15 +7525,26 @@
     renderPlannerGrid() {
       const dark = this.settings.darkMode;
       const draftSelection = this.state.plannerExpandedUrl ? this.state.plannerDraftSelection : {};
+      // Sessions with no usable time can't be placed on the grid — count
+      // them so the grid can say so instead of dropping them silently.
+      let skippedNoTime = 0;
       const flat = [];
       this.state.plannerPicks.forEach((p) => {
         const pendingRemoval = !!(draftSelection[p.key] && draftSelection[p.key].removed);
+        // The draft for this class type points at a DIFFERENT group than
+        // the committed pick: "Dodaj do planu" will silently REPLACE this
+        // entry (plannerAddSubject replaces by key), so mark it as such
+        // instead of letting it look like it stays.
+        const draft = draftSelection[p.key];
+        const willBeReplaced = !!(draft && !draft.removed && draft.nr && draft.nr !== p.nr);
         (p.sessions || []).forEach((s, i) => {
-          if (!s.start || !s.end) return;
+          if (!s.start || !s.end) { skippedNoTime++; return; }
           flat.push({
             day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
             subjectName: p.subjectName, classTypeShort: p.classTypeShort, teacher: p.teacher,
-            seed: this.plannerColorSeed(p.subjectName), pickKey: `${p.key}::${i}`, key: p.key, draft: false, pendingRemoval,
+            seed: this.plannerColorSeed(p.subjectName), pickKey: `${p.key}::${i}`, key: p.key, nr: p.nr, draft: false, pendingRemoval,
+            subjectUrl: p.subjectUrl,
+            willBeReplaced, replacedByNr: willBeReplaced ? draft.nr : null, coveredBy: [],
           });
         });
       });
@@ -6647,11 +7569,12 @@
           const matchesCommitted = this.state.plannerPicks.some((p) => p.key === key && p.nr === g.nr);
           if (matchesCommitted) return;
           (g.sessions || []).forEach((s, i) => {
-            if (!s.start || !s.end) return;
+            if (!s.start || !s.end) { skippedNoTime++; return; }
             flat.push({
               day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
               subjectName, classTypeShort: shortClassType(g.classTypeLabel), teacher: g.teacher,
               seed: this.plannerColorSeed(subjectName), pickKey: `${key}::draft::${i}`, key, draft: true,
+              subjectUrl: expandedUrl,
             });
           });
         });
@@ -6676,14 +7599,26 @@
             // is re-picking, so its group belongs back in the candidates.
             if (draft && !draft.removed && draft.nr === g.nr) return;
             const removalPending = !!(draft && draft.removed);
-            if (!removalPending && this.state.plannerPicks.some((p) => p.key === key && p.nr === g.nr)) return;
+            const committedPick = this.state.plannerPicks.find((p) => p.key === key && p.nr === g.nr);
+            // The committed group of this class type stays visible in the
+            // preview as a hybrid "current" ghost (solid subject colour +
+            // dashed preview outline) — so the preview reads as "these are
+            // this subject's terms, and THIS one is currently chosen". Only
+            // while no diverging draft re-points the type elsewhere (then
+            // the willBeReplaced marking + draft ghost already tell that
+            // story and a hybrid would triple-draw), and never while the
+            // pick is pending removal (it's on its way out).
+            const isCurrent = !removalPending && !!committedPick
+              && (!draft || draft.nr === committedPick.nr);
+            if (committedPick && !isCurrent && !removalPending) return;
             (g.sessions || []).forEach((s) => {
-              if (!s.start || !s.end) return;
+              if (!s.start || !s.end) { skippedNoTime++; return; }
               flat.push({
                 day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
                 subjectName, classTypeShort: shortClassType(meta.classTypeLabel), teacher: g.teacher,
                 seed: this.plannerColorSeed(subjectName), pickKey: `cand::${key}::${g.nr}`, key,
                 draft: false, pendingRemoval: false, candidate: true, candGroup: `${key}::${g.nr}`,
+                current: isCurrent,
                 candRef: { key, groupsUrl: meta.groupsUrl, classTypeLabel: meta.classTypeLabel, nr: g.nr, teacher: g.teacher },
               });
             });
@@ -6692,7 +7627,7 @@
       }
 
       if (!flat.length) {
-        return `<div class="usospp-empty-hint">Dodaj przedmioty po lewej, żeby zobaczyć tu podgląd planu.</div>`;
+        return `<div class="usospp-empty-hint">Dodaj przedmioty po lewej, żeby zobaczyć tu podgląd planu.${skippedNoTime ? ` Pominięto ${skippedNoTime} ${skippedNoTime === 1 ? 'termin' : 'terminów'} bez podanych godzin.` : ''}</div>`;
       }
 
       const allMins = flat.flatMap((e) => [toMin(e.start), toMin(e.end)]).filter((n) => n !== null);
@@ -6715,6 +7650,13 @@
             const a = list[i];
             const b = list[j];
             if (a.candidate || b.candidate) continue;
+            // A draft ghost always REPLACES the committed pick of the same
+            // class type (same key) — flagging the pair as a conflict would
+            // be a false alarm, they'd never coexist.
+            if (a.key && a.key === b.key) continue;
+            // Entries pending removal vanish on commit — overlapping them
+            // is not a conflict either.
+            if (a.pendingRemoval || b.pendingRemoval) continue;
             if (sessionsOverlap(a, b)) {
               conflicts.add(a.pickKey);
               conflicts.add(b.pickKey);
@@ -6724,26 +7666,38 @@
       });
 
       // Which candidate groups would collide with the schedule as it
-      // stands. Same-key entries are exempt — a different group of the
-      // same class type REPLACES the current choice, it doesn't stack on
-      // it — as are picks pending removal (the student is already
-      // re-choosing there). Purely candidate-vs-candidate overlap never
+      // stands. Picks pending removal are exempt (the student is already
+      // re-choosing there). Same-key entries are NOT exempt anymore: a
+      // different group of the same class type replaces the current choice,
+      // but the overlap has to stay visible so the two terms can be
+      // compared — the candidate just gets a "replaces" note instead of the
+      // generic warning. Purely candidate-vs-candidate overlap never
       // counts: parallel groups sharing one slot are the normal case.
+      // Covered saved entries are collected too: the grid paints saved
+      // blocks OVER candidate ghosts, so an overlap buried underneath
+      // would otherwise be completely invisible.
       const riskyGids = new Set();
       Object.values(byDay).forEach((list) => {
         list.forEach((c) => {
-          if (!c.candidate) return;
+          // "Current" hybrids are display duplicates of their solid twin —
+          // neither a risk themselves nor a reason to flag others.
+          if (!c.candidate || c.current) return;
           list.forEach((r) => {
-            if (r.candidate || r.pendingRemoval || r.key === c.key) return;
-            if (sessionsOverlap(c, r)) riskyGids.add(c.candGroup);
+            if (r.candidate || r.pendingRemoval || r.draft) return;
+            if (!sessionsOverlap(c, r)) return;
+            riskyGids.add(c.candGroup);
+            if (r.key === c.key) c.replaceNr = r.nr;
+            r.coveredBy.push({ nr: c.candRef.nr, type: c.classTypeShort, sameKey: r.key === c.key });
           });
         });
       });
 
       const dayGroups = DAY_KEYS.map((dk) => ({ day: dk, entries: byDay[dk] || [] })).filter((d) => d.entries.length);
+      const conflictInvolvesDraft = flat.some((e) => e.draft && conflicts.has(e.pickKey));
 
       return `
-        ${conflicts.size ? `<div style="font-size:12px;font-weight:600;color:oklch(55% 0.19 25);margin-bottom:10px;">⚠ Wybrane zajęcia nakładają się w czasie — zaznaczone poniżej.</div>` : ''}
+        ${conflicts.size ? `<div style="font-size:12px;font-weight:600;color:oklch(55% 0.19 25);margin-bottom:10px;">⚠ Wybrane zajęcia nakładają się w czasie — zaznaczone poniżej.${conflictInvolvesDraft ? ' (w tym Twój niezapisany wybór)' : ''}</div>` : ''}
+        ${skippedNoTime ? `<div style="font-size:12px;color:var(--ink-3);margin-bottom:10px;">Pominięto ${skippedNoTime} ${skippedNoTime === 1 ? 'termin' : skippedNoTime % 10 >= 2 && skippedNoTime % 10 <= 4 && (skippedNoTime % 100 < 12 || skippedNoTime % 100 > 14) ? 'terminy' : 'terminów'} bez podanych godzin — nie pokazano ${skippedNoTime === 1 ? 'go' : 'ich'} na siatce.</div>` : ''}
         <div class="usospp-timetable" data-planner-grid>
           <div class="usospp-tt-hours" style="height:${totalHeight}px;">
             ${hours.map((h) => `<div class="usospp-tt-hour" style="top:${(h - hourStart) * ROW_H}px;">${h}:00</div>`).join('')}
@@ -6774,24 +7728,37 @@
                       : '';
                     const full = [e.subjectName, e.teacher, e.place].filter(Boolean).join(' — ')
                       + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '')
-                      + (e.draft ? ' (jeszcze niedodane)' : e.pendingRemoval ? ' (zostanie usunięte po zapisaniu)' : '')
+                      + (e.draft ? ' (jeszcze niedodane)' : e.pendingRemoval ? ' (zostanie usunięte po zapisaniu)' : e.willBeReplaced ? ` (zostanie zastąpione grupą ${e.replacedByNr} po zapisaniu)` : '')
                       + rejTitle;
+                    const coveredBy = e.coveredBy || [];
+                    const coveredTitle = coveredBy.length
+                      ? `Podglądane grupy na ten termin: ${coveredBy.map((c) => `gr. ${c.nr}${c.sameKey ? ' (zastąpi obecną)' : ''}`).join(', ')}`
+                      : '';
                     const entryStyle = e.draft
                       ? `background:transparent;border:2px dashed ${color.time};opacity:0.85;`
                       : e.pendingRemoval
                         ? `background:transparent;border:2px dashed ${removeColor};opacity:0.55;`
-                        : `background:${color.bg};`;
-                    const labelStyle = `color:${e.pendingRemoval ? removeColor : color.label};${e.pendingRemoval ? 'text-decoration:line-through;' : ''}`;
+                        : e.willBeReplaced
+                          ? `background:transparent;border:2px dashed ${color.time};opacity:0.6;`
+                          : `background:${color.bg};`;
+                    const struck = e.pendingRemoval || e.willBeReplaced;
+                    const labelStyle = `color:${e.pendingRemoval ? removeColor : color.label};${struck ? 'text-decoration:line-through;' : ''}`;
                     const rejAction = badge && badge.groupsUrl
                       ? ` data-action="plannerOpenRejGroups" data-pick-key="${esc(e.key)}" style="top:${top}px;height:${height}px;${entryStyle}cursor:pointer;"`
-                      : ` style="top:${top}px;height:${height}px;${entryStyle}"`;
+                      : e.subjectUrl
+                        ? ` data-action="plannerFocusSubject" data-url="${esc(e.subjectUrl)}" style="top:${top}px;height:${height}px;${entryStyle}cursor:pointer;"`
+                        : ` style="top:${top}px;height:${height}px;${entryStyle}"`;
+                    // Clicking a grid block expands its subject in the left
+                    // list (plannerFocusSubject) — except blocks linked to
+                    // Zapisy, which keep their tour action.
+                    const focusNote = (badge && badge.groupsUrl) || !e.subjectUrl ? '' : ' — kliknij, aby pokazać na liście';
                     const rejBadgeHtml = rejLinked
                       ? ` <span class="usospp-tt-entry-rej${badge.full ? ' full' : ''}">${badge.enrollment === 'registered' ? '✓ ' : ''}${esc(badge.seatsText || 'zapisy')}</span>`
                       : '';
                     return `
-                      <div class="usospp-tt-entry${conflict ? ' usospp-tt-entry--conflict' : ''}${rejClass}"${rejAction} title="${esc(full)}">
-                        <div class="usospp-tt-entry-time" style="color:${e.pendingRemoval ? removeColor : color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}${rejBadgeHtml}</div>
-                        <div class="usospp-tt-entry-label" style="${labelStyle}">${esc(e.classTypeShort)} · ${esc(e.subjectName)}</div>
+                      <div class="usospp-tt-entry${conflict ? ' usospp-tt-entry--conflict' : ''}${rejClass}"${rejAction} title="${esc(full + (coveredTitle ? ` — ${coveredTitle}` : '') + focusNote)}">
+                        <div class="usospp-tt-entry-time" style="color:${e.pendingRemoval ? removeColor : color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}${rejBadgeHtml}${coveredTitle ? ` <span class="usospp-cand-risk-dot" title="${esc(coveredTitle)}"></span>` : ''}</div>
+                        <div class="usospp-tt-entry-label" style="${labelStyle}">${esc(e.classTypeShort)} · ${esc(e.subjectName)}${e.willBeReplaced ? ` → gr. ${esc(e.replacedByNr)}` : ''}</div>
                         ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${e.pendingRemoval ? removeColor : color.meta};">${esc(e.teacher)}</div>` : ''}
                         ${e.place ? `<div class="usospp-tt-entry-meta" style="color:${e.pendingRemoval ? removeColor : color.meta};">${esc(shortPlace(e.place))}</div>` : ''}
                       </div>
@@ -6819,8 +7786,13 @@
     renderPlannerCandDay(dayKey, candEntries, hourStart, dark, riskyGids, dayIndex, dayCount) {
       if (!candEntries.length) return '';
       const ROW_H = 60;
+      // "Current" hybrids (the already-committed group of a previewed
+      // type) never join the "N grup" clusters — they're rendered as
+      // standalone hybrid boxes so the chosen term stays identifiable.
+      const current = candEntries.filter((e) => e.current);
       const bySlot = new Map();
       candEntries.forEach((e) => {
+        if (e.current) return;
         const cid = `${dayKey}::${e.start}::${e.end}::${e.weeks || ''}`;
         if (!bySlot.has(cid)) bySlot.set(cid, []);
         bySlot.get(cid).push(e);
@@ -6849,7 +7821,7 @@
             <div class="usospp-cand-row-main">
               Grupa ${esc(e.candRef.nr)}
               <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:10px;padding:1px 7px;">${esc(e.classTypeShort)}</span>
-              ${riskyGids.has(e.candGroup) ? '<span class="usospp-cand-risk-dot" title="Nachodzi na zajęcia już wybrane w planie"></span>' : ''}${this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr)}
+              ${riskyGids.has(e.candGroup) ? `<span class="usospp-cand-risk-dot" title="${esc(e.replaceNr ? 'Nachodzi na obecny termin — wybór go zastąpi' : 'Nachodzi na zajęcia już wybrane w planie')}"></span>` : ''}${this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr)}
             </div>
             <div class="usospp-cand-row-sub">${esc(e.candRef.teacher || 'brak danych o prowadzącym')}${e.place ? ` · ${esc(shortPlace(e.place))}` : ''}</div>
           </div>
@@ -6857,12 +7829,16 @@
         const labels = [...new Set(entries.map((e) => e.classTypeShort))];
         const color = subjectColor(this.plannerColorSeed(first.subjectName), dark);
         const weeksTag = weeksLabel(first.weeks);
+        // The neutral cluster box hides every group inside it — if any of
+        // them collides, the box itself has to carry the warning, otherwise
+        // the overlap stays invisible until hover.
+        const clusterRisky = entries.some((e) => riskyGids.has(e.candGroup));
         return `
           <div class="usospp-tt-entry usospp-tt-entry--cand usospp-cand-neutral" data-cand-neutral="1" data-cand-cluster="${esc(cid)}"
                style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:0.45;"
-               title="${esc(`${byGid.size} równoległych grup na ten termin — najedź, aby je porównać`)}">
+               title="${esc(`${byGid.size} równoległych grup na ten termin — najedź, aby je porównać${clusterRisky ? ' — uwaga: część grup nachodzi na zajęcia już wybrane' : ''}`)}">
             <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(first.start)}–${esc(first.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
-            <div class="usospp-tt-entry-label" style="color:${color.label};">${labels.length === 1 ? `${esc(labels[0])} · ` : ''}${byGid.size} grup — wybierz</div>
+            <div class="usospp-tt-entry-label" style="color:${color.label};">${labels.length === 1 ? `${esc(labels[0])} · ` : ''}${byGid.size} grup — wybierz${clusterRisky ? ' ⚠' : ''}</div>
             <div class="usospp-tt-entry-meta" style="color:${color.meta};">najedź, aby porównać terminy</div>
           </div>
           ${boxes}
@@ -6871,7 +7847,37 @@
             ${rows}
           </div>
         `;
+      }).join('') + current.map((e) => {
+        const top = (toMin(e.start) - hourStart * 60) * (ROW_H / 60);
+        const height = Math.max(36, (toMin(e.end) - toMin(e.start)) * (ROW_H / 60));
+        return this.renderPlannerCurrentBox(e, { top, height, dark });
       }).join('');
+    }
+
+    // The hybrid "current" ghost: the already-committed group of a
+    // previewed class type. Half solid (subject colour fill, full label —
+    // this term IS in the plan) and half preview (dashed outline, lighter
+    // than a saved block) so it reads as "this subject, currently chosen"
+    // among the proposal ghosts. Deliberately not clickable (no
+    // data-action): clicking would only be able to un-pick it, which is
+    // what the list's radio rows are for.
+    renderPlannerCurrentBox(e, { top, height, dark }) {
+      const color = subjectColor(e.seed, dark);
+      const weeksTag = weeksLabel(e.weeks);
+      const full = `${e.subjectName} — ${e.candRef.classTypeLabel} — grupa ${e.candRef.nr}`
+        + (e.teacher ? ` — ${e.teacher}` : '')
+        + (e.place ? ` — ${e.place}` : '')
+        + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '')
+        + ' — obecnie wybrana grupa, ten termin jest w planie';
+      return `
+        <div class="usospp-tt-entry usospp-cand-current"
+             style="top:${top}px;height:${height}px;background:${color.bg};border:2px dashed ${color.time};opacity:0.9;"
+             title="${esc(full)}">
+          <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
+          <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)} · teraz</div>
+          ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(e.teacher)}</div>` : ''}
+        </div>
+      `;
     }
 
     // One candidate group's ghost box. Same visual family as a draft ghost
@@ -6882,11 +7888,14 @@
     renderPlannerCandBox(e, { top, height, dark, stacked, risky }) {
       const color = subjectColor(e.seed, dark);
       const weeksTag = weeksLabel(e.weeks);
+      const riskyNote = risky
+        ? (e.replaceNr ? ` — nachodzi na obecny termin (gr. ${e.replaceNr}) — wybór go zastąpi` : ' — nachodzi na zajęcia już wybrane w planie')
+        : '';
       const full = `${e.subjectName} — ${e.candRef.classTypeLabel} — grupa ${e.candRef.nr}`
         + (e.teacher ? ` — ${e.teacher}` : '')
         + (e.place ? ` — ${e.place}` : '')
         + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '')
-        + (risky ? ' — nachodzi na zajęcia już wybrane w planie' : '')
+        + riskyNote
         + ' — propozycja, kliknij, aby wybrać';
       return `
         <div class="usospp-tt-entry usospp-tt-entry--cand${stacked ? ' usospp-cand-in-stack' : ''}${risky ? ' usospp-cand-risk' : ''}"

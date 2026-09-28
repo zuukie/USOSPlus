@@ -165,22 +165,39 @@
     chrome.runtime.sendMessage({ type: 'usospp:setBadge', text: '' }).catch(() => {});
   }
 
+  // Strict grade check shared with app.js: only a whole cell exactly
+  // equal to a Polish final grade (2.0–5.5) counts — subject codes and
+  // dates must never become phantom grades.
+  function strictGrade(raw) {
+    if (raw === null || raw === undefined) return null;
+    const t = String(raw).trim().replace(/\s+/g, '');
+    if (!/^(2(?:[.,]0)?|3(?:[.,]0|[.,]5)?|4(?:[.,]0|[.,]5)?|5(?:[.,]0|[.,]5)?)$/.test(t)) return null;
+    return t.replace(',', '.').replace(/^([2-5])$/, '$1.0');
+  }
+
+  function gradesFromRows(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => {
+        if (row && typeof row === 'object' && !Array.isArray(row)) {
+          return row.grade ? strictGrade(row.grade) : null;
+        }
+        const cells = Array.isArray(row) ? row : [row.text];
+        for (let i = cells.length - 1; i >= 0; i--) {
+          const g = strictGrade(cells[i]);
+          if (g) return g;
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }
+
   function maybeUpdateBadge(data) {
     if (!currentSettings || !currentSettings.features.gradeBadge) {
       clearBadge();
       return;
     }
     const grades = Array.isArray(data.gradesResult && data.gradesResult.rows) ? data.gradesResult.rows : [];
-    const nums = grades
-      .map((row) => {
-        const cells = Array.isArray(row) ? row : [row.text];
-        for (let i = cells.length - 1; i >= 0; i--) {
-          const m = String(cells[i]).replace(',', '.').match(/[0-9]([.][0-9])?/);
-          if (m) return m[0];
-        }
-        return null;
-      })
-      .filter(Boolean);
+    const nums = gradesFromRows(grades);
     const text = nums.length ? (nums.reduce((a, b) => a + parseFloat(b), 0) / nums.length).toFixed(1) : '';
     chrome.runtime.sendMessage({ type: 'usospp:setBadge', text }).catch(() => {});
   }
@@ -251,6 +268,19 @@
       container = null;
     }
     showNative();
+    syncCanvasTheme();
+  }
+
+  // Overscroll rubber-banding + scrollbar paint from <html>, outside the
+  // .usospp-root theme scope — without this, dark mode bounces into white.
+  // Set only while the redesign is mounted (classic USOS pages are light; a
+  // leaked dark canvas would be wrong there); the matching
+  // html[data-usospp-theme] rules live in core/ui/design-system.css.
+  function syncCanvasTheme() {
+    try {
+      if (app) document.documentElement.dataset.usosppTheme = currentSettings && currentSettings.darkMode ? 'dark' : 'light';
+      else delete document.documentElement.dataset.usosppTheme;
+    } catch (e) { /* canvas theming is cosmetic — never break mount/unmount */ }
   }
 
   // Replaces the whole redesign with one card when USOSweb itself is down
@@ -384,16 +414,7 @@
   }
 
   function averageFromGradeRows(rows) {
-    const nums = (Array.isArray(rows) ? rows : [])
-      .map((row) => {
-        const cells = Array.isArray(row) ? row : [row.text];
-        for (let i = cells.length - 1; i >= 0; i--) {
-          const m = String(cells[i]).replace(',', '.').match(/[0-9]([.][0-9])?/);
-          if (m) return m[0];
-        }
-        return null;
-      })
-      .filter(Boolean);
+    const nums = gradesFromRows(rows);
     return nums.length ? { avg: (nums.reduce((a, b) => a + parseFloat(b), 0) / nums.length).toFixed(2), count: nums.length } : null;
   }
 
@@ -440,24 +461,39 @@
     classicWidgetEl = el;
   }
 
-  // UNVERIFIED: same caveat as adapter.getPlan — the shape of a populated
-  // event has never been observed live, so this reports only a count, never
-  // per-event details (same restraint usos/app.js's renderPlan takes).
+  // Classic home/plan page: count sessions from the student's own groups
+  // (server-rendered on home/grupy) instead of the client-side timetable
+  // register(), which fetch()+DOMParser never sees populated. Falls back
+  // to the static register() literal when groups are unavailable.
   function injectPlanWidget() {
     const adapter = selectAdapter();
     const wrapper = document.querySelector('.timetable-wrapper');
     if (!adapter || !wrapper) return;
+    const show = (count) => {
+      if (!count) return;
+      const el = document.createElement('div');
+      el.className = 'usospp-classic-widget usospp-classic-widget--info';
+      const strong = document.createElement('strong');
+      strong.textContent = String(count);
+      const desc = document.createElement('span');
+      desc.textContent = count === 1 ? 'zajęcia w tygodniu (z Twoich grup)' : 'zajęć w tygodniu (z Twoich grup)';
+      el.append(strong, desc, widgetTag());
+      wrapper.prepend(el);
+      classicWidgetEl = el;
+    };
+    if (typeof adapter.getMyGroups === 'function') {
+      try {
+        const res = adapter.getMyGroups();
+        if (res && res.supported) {
+          const count = (res.subjects || []).reduce(
+            (n, s) => n + (s.groups || []).reduce((m, g) => m + (g.sessions || []).length, 0), 0);
+          if (count) { show(count); return; }
+        }
+      } catch (e) { /* fall through to register() */ }
+    }
     const events = adapter.getPlan().raw;
     if (!Array.isArray(events) || !events.length) return;
-    const el = document.createElement('div');
-    el.className = 'usospp-classic-widget usospp-classic-widget--info';
-    const strong = document.createElement('strong');
-    strong.textContent = String(events.length);
-    const desc = document.createElement('span');
-    desc.textContent = events.length === 1 ? 'zajęcia w tym tygodniu' : 'zajęć w tym tygodniu';
-    el.append(strong, desc, widgetTag());
-    wrapper.prepend(el);
-    classicWidgetEl = el;
+    show(events.length);
   }
 
   // Cross-page card for "Mój USOSweb" (home/index) — the only classic widget
@@ -568,7 +604,7 @@
   }
 
   // A whole-extension kill switch, distinct from `enabled` (which only
-  // toggles the full-page panel) — see popup.js's "Wyłącz wtyczkę". When
+  // toggles the full-page panel) — see popup.js's danger zone. When
   // off, nothing below (panel, quickbar, keyboard nav, autorefresh, classic
   // widgets) is allowed to run, regardless of what's individually toggled
   // on. Gated only here, at runtime — `enabled`/`features` in storage are
@@ -585,6 +621,7 @@
     if (effective.enabled) {
       if (!app) await mountRedesign();
       else app.updateSettings({ darkMode: effective.darkMode, features: effective.features });
+      syncCanvasTheme();
     } else if (app || container) {
       unmountRedesign();
     }
@@ -614,6 +651,30 @@
       }
       const grades = app.numericGrades;
       const avg = grades.length ? (grades.reduce((a, b) => a + parseFloat(b), 0) / grades.length).toFixed(2) : null;
+      // Earliest session starting now-or-later across the next 8 weeks
+      // (verified concreteSessions shape: {date 'YYYY-MM-DD', start 'HH:MM',
+      // subject, type, room, building}). Null when the plan details aren't
+      // loaded yet or nothing is scheduled — the popup hides the card then.
+      let nextSession = null;
+      try {
+        if (typeof app.concreteSessionsForOffset === 'function') {
+          const now = Date.now();
+          outer: for (let off = 0; off < 8; off++) {
+            const list = app.concreteSessionsForOffset(off) || [];
+            for (const s of list) {
+              const t = Date.parse(`${s.date}T${s.start}:00`);
+              if (Number.isFinite(t) && t >= now) {
+                nextSession = {
+                  date: s.date, start: s.start, end: s.end || null,
+                  subject: s.subject || null, type: s.type || null,
+                  room: s.room || null, building: s.building || null,
+                };
+                break outer;
+              }
+            }
+          }
+        }
+      } catch (e) { nextSession = null; }
       sendResponse({
         user: app.data.user,
         avg,
@@ -621,6 +682,7 @@
         planEventCount: app.planEvents.length,
         examCount: app.exams.length,
         etap: app.etapy[0] || null,
+        nextSession,
       });
       return undefined;
     }

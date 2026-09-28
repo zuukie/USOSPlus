@@ -43,6 +43,11 @@ a:hover { color: oklch(48% 0.16 45); }
   --ink-critical: oklch(60% 0.15 25);
 }
 
+/* Same overscroll story as the main page (see design-system.css): the
+   bounce area paints from <html>, outside .pp-root's theme scope. */
+html[data-theme="dark"] { background-color: oklch(18% 0.01 55); color-scheme: dark; }
+html[data-theme="light"] { background-color: oklch(97.5% 0.006 60); color-scheme: light; }
+
 .pp-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 14px 18px; }
 .pp-brand { display: flex; align-items: center; gap: 9px; cursor: pointer; }
 .pp-logo { width: 26px; height: 26px; flex-shrink: 0; display: flex; }
@@ -106,6 +111,8 @@ a:hover { color: oklch(48% 0.16 45); }
 
 .pp-feature-row { display: flex; justify-content: space-between; align-items: center; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px; gap: 10px; }
 .pp-feature-label { font-size: 13px; font-weight: 600; color: var(--ink); }
+.pp-danger-heading { color: var(--ink-critical); }
+.pp-danger-row { border-color: var(--ink-critical); }
 .pp-feature-hint { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
 .pp-features-list { display: flex; flex-direction: column; gap: 6px; }
 .pp-features-intro { font-size: 11.5px; color: var(--ink-3); margin-bottom: 6px; }
