@@ -794,6 +794,19 @@
         const note = val.querySelector('span.note');
         if (note) building = textOf(note);
       });
+      // Group-level lecturer ("Prowadzący: X" row in the same grey table).
+      // Meeting rows often carry no per-meeting teacher, so without this
+      // teachers ends up [] even though USOS shows the lecturer plainly.
+      // Nested meeting rows can't false-match (their first cell is a date).
+      let groupTeacher = null;
+      grey.querySelectorAll('tbody > tr, tr').forEach((tr) => {
+        if (groupTeacher) return;
+        const cells = tr.querySelectorAll(':scope > td');
+        if (cells.length < 2) return;
+        if (!/prowadz[ąa]cy/i.test(textOf(cells[0]) || '')) return;
+        const link = cells[1].querySelector('a[href*="pokazOsobe"]');
+        groupTeacher = link ? textOf(link) : textOf(cells[1]);
+      });
       const meetings = [];
       doc.querySelectorAll('table#lista_dat_spotkan tbody tr').forEach((tr) => {
         const cells = tr.querySelectorAll(':scope > td');
@@ -813,7 +826,7 @@
           teacher: teacher || null,
         });
       });
-      const teachers = [...new Set(meetings.map((m) => m.teacher).filter(Boolean))];
+      const teachers = [...new Set([groupTeacher, ...meetings.map((m) => m.teacher)].filter(Boolean))];
       const meetingRoom = meetings.map((m) => m.room).find(Boolean) || null;
       const meetingBuilding = meetings.map((m) => m.building).find(Boolean) || null;
       return {

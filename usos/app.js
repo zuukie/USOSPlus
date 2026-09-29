@@ -86,6 +86,38 @@
     return toMin(a.start) < toMin(b.end) && toMin(b.start) < toMin(a.end);
   }
 
+  // Stats for one saved planner plan (the "Moje plany" cards): distinct
+  // subjects, picks (= groups), weekly hours and same-day overlapping
+  // session pairs (parity-aware via sessionsOverlap — P/N never collide).
+  // Pure and defensive: unusable times are skipped, never counted.
+  function plannerPlanStats(picks) {
+    const list = Array.isArray(picks) ? picks : [];
+    const subjects = new Set(list.map((p) => subjectId(p.subjectUrl)).filter(Boolean)).size;
+    let minutes = 0;
+    const byDay = new Map();
+    list.forEach((p) => {
+      (p.sessions || []).forEach((s) => {
+        const a = toMin(s.start);
+        const b = toMin(s.end);
+        if (a === null || b === null || b <= a) return;
+        minutes += b - a;
+        const day = String(s.day || '').toUpperCase();
+        if (!byDay.has(day)) byDay.set(day, []);
+        byDay.get(day).push(s);
+      });
+    });
+    let collisions = 0;
+    byDay.forEach((sessions) => {
+      for (let i = 0; i < sessions.length; i++) {
+        for (let j = i + 1; j < sessions.length; j++) {
+          if (sessionsOverlap(sessions[i], sessions[j])) collisions++;
+        }
+      }
+    });
+    const hours = Math.round((minutes / 60) * 10) / 10;
+    return { subjects, groups: list.length, hours, collisions };
+  }
+
   // Assigns each subject in the planner a distinct hue, one per integer
   // index (see plannerColorSeed) rather than picking from a short fixed
   // list — a small palette runs out and starts repeating colours on
@@ -100,7 +132,7 @@
     return h;
   }
   function subjectColor(seed, dark) {
-    const hue = ((seed * GOLDEN_ANGLE) % 360 + 360) % 360;
+    const hue = planExportHue(seed);
     return dark
       ? { bg: `oklch(36% 0.09 ${hue})`, time: `oklch(80% 0.06 ${hue})`, label: `oklch(90% 0.05 ${hue})`, meta: `oklch(76% 0.06 ${hue})` }
       : { bg: `oklch(85% 0.08 ${hue})`, time: `oklch(38% 0.12 ${hue})`, label: `oklch(30% 0.14 ${hue})`, meta: `oklch(40% 0.1 ${hue})` };
@@ -115,6 +147,161 @@
     if (/projekt/.test(s)) return 'P';
     if (/lektorat/.test(s)) return 'LE';
     return (label || '?').trim().charAt(0).toUpperCase() || '?';
+  }
+
+  // Week-grid day columns, shared by the HTML grid, the list view and the
+  // PNG exporter: weekdays always stay, Saturday/Sunday appear only when
+  // something actually happens there — an empty weekend isn't rendered.
+  const PLAN_WEEKDAY_KEYS = ['PN', 'WT', 'ŚR', 'CZ', 'PT'];
+  const PLAN_WEEKEND_KEYS = ['SO', 'ND'];
+  function planGridDayKeys(weekly) {
+    const list = Array.isArray(weekly) ? weekly : [];
+    return PLAN_WEEKDAY_KEYS.concat(
+      PLAN_WEEKEND_KEYS.filter((dk) => list.some((e) => e && e.day === dk)));
+  }
+
+  // Geometry shared by the HTML week grid and the PNG exporter so the
+  // image can't drift from what's on screen: hour range, per-day lane
+  // assignment for overlaps, pixel top/height per block (ROW_H px/hour).
+  const PLAN_GRID_ROW_H = 60;
+  function planWeekGridLayout(weekly, dayKeys) {
+    const list = Array.isArray(weekly) ? weekly : [];
+    const allMins = list.flatMap((e) => [toMin(e.start), toMin(e.end)]).filter((n) => n !== null);
+    const hourStart = allMins.length ? Math.min(7, Math.floor(Math.min(...allMins) / 60)) : 7;
+    const hourEnd = allMins.length ? Math.max(21, Math.ceil(Math.max(...allMins) / 60)) : 21;
+    const totalHeight = Math.max(1, hourEnd - hourStart) * PLAN_GRID_ROW_H;
+    const hours = [];
+    for (let h = hourStart; h <= hourEnd; h++) hours.push(h);
+    const days = (Array.isArray(dayKeys) ? dayKeys : []).map((dk) => {
+      const sorted = list.filter((e) => e.day === dk)
+        .sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+      const lanes = [];
+      const blocks = sorted.map((e) => {
+        let lane = lanes.findIndex((end) => (e.start || '') >= end);
+        if (lane === -1) { lane = lanes.length; lanes.push(e.end || ''); }
+        else lanes[lane] = e.end || '';
+        const startMin = toMin(e.start);
+        const endMin = toMin(e.end);
+        return {
+          e,
+          lane,
+          laneCount: 0, // filled in below, once all lanes are known
+          top: (startMin - hourStart * 60) * (PLAN_GRID_ROW_H / 60),
+          height: Math.max(36, (endMin - startMin) * (PLAN_GRID_ROW_H / 60)),
+        };
+      });
+      const laneCount = Math.max(1, lanes.length);
+      blocks.forEach((b) => { b.laneCount = laneCount; });
+      return { day: dk, blocks };
+    });
+    return { hourStart, hourEnd, rowH: PLAN_GRID_ROW_H, totalHeight, hours, days };
+  }
+
+  // Canvas-safe twin of subjectColor's hue: canvas fillStyle can't be
+  // trusted with oklch() (the canvas color parser lags CSS), so the PNG
+  // painters re-derive the same golden-angle hue as plain hsl().
+  function planExportHue(seed) {
+    return (((seed * GOLDEN_ANGLE) % 360) + 360) % 360;
+  }
+
+  // Polish count noun (1 / 2-4 / 5+, teens exception) — pluralOsoba is
+  // the "osoba" special case of this.
+  function pluralPl(n, one, few, many) {
+    if (n === 1) return one;
+    const d10 = n % 10, d100 = n % 100;
+    if (d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14)) return few;
+    return many;
+  }
+
+  function pluralOsoba(n) {
+    if (n === 1) return 'osoba';
+    const d10 = n % 10, d100 = n % 100;
+    if (d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14)) return 'osoby';
+    return 'osób';
+  }
+
+  // Truncates canvas text with an ellipsis to fit maxW (measureText loop).
+  function fitText(ctx, text, maxW) {
+    const s = String(text || '');
+    if (ctx.measureText(s).width <= maxW || s.length <= 1) return s;
+    let out = s;
+    while (out.length > 1 && ctx.measureText(`${out}…`).width > maxW) out = out.slice(0, -1);
+    return `${out}…`;
+  }
+
+  // Brand lockup for the PNG export (see design/USOS++ Brand System.dc.html:
+  // orange ++ mark + "USOS" ink / "++" orange, one row, General Sans 700).
+  // Drawn with canvas primitives — no image loading, so it cannot fail to
+  // appear. Returns the lockup width.
+  // Brand lockup for the PNG export (see design/USOS++ Brand System.dc.html:
+  // orange ++ mark + "USOS" ink / "++" orange, one row, General Sans 700).
+  // Drawn with canvas primitives — no image loading, so it cannot fail to
+  // appear. Proportions follow the brand spec, scaled to a 36px tile:
+  // radius 23%, "++" 59% at tracking -0.04em, optical shift -3% up,
+  // tile-to-text gap 1/4 of the tile, wordmark tracking -0.015em.
+  // Returns the lockup width.
+  function paintPlanLogo(ctx, W, pad, centerY) {
+    const FONT = '"General Sans", system-ui, -apple-system, sans-serif';
+    const ORANGE = '#d9773a';
+    const iconSize = 36;
+    const markPx = iconSize * 0.59;
+    const gap = iconSize / 4;
+    const fontPx = 20;
+    const setSpacing = (em, px) => {
+      try { ctx.letterSpacing = `${(-em * px).toFixed(2)}px`; } catch (e) { /* pre-99 canvas: ignore */ }
+    };
+    const x0 = W - pad - (iconSize + gap + ctx.measureText('USOS').width + ctx.measureText('++').width);
+    const y = centerY - iconSize / 2;
+    // The ++ mark: orange rounded square, white bold "++" optically
+    // centered (metrics-based, minus the 3% upward correction).
+    ctx.fillStyle = ORANGE;
+    if (typeof ctx.roundRect === 'function') {
+      ctx.beginPath();
+      ctx.roundRect(x0, y, iconSize, iconSize, iconSize * 0.23);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x0, y, iconSize, iconSize);
+    }
+    ctx.font = `700 ${markPx.toFixed(2)}px ${FONT}`;
+    setSpacing(0.04, markPx);
+    const mm = ctx.measureText('++');
+    const capHalf = Number.isFinite(mm.actualBoundingBoxAscent) && Number.isFinite(mm.actualBoundingBoxDescent)
+      ? (mm.actualBoundingBoxAscent - mm.actualBoundingBoxDescent) / 2
+      : markPx * 0.35; // mock contexts without font metrics
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('++', x0 + (iconSize - mm.width) / 2, y + iconSize / 2 - iconSize * 0.03 + capHalf);
+    // The wordmark, vertically centered on the mark.
+    const x = x0 + iconSize + gap;
+    const baseline = y + iconSize / 2 + fontPx * 0.35;
+    ctx.font = `700 ${fontPx}px ${FONT}`;
+    setSpacing(0.015, fontPx);
+    const wUsos = ctx.measureText('USOS').width;
+    ctx.fillStyle = '#18181b';
+    ctx.fillText('USOS', x, baseline);
+    ctx.fillStyle = ORANGE;
+    ctx.fillText('++', x + wUsos, baseline);
+    try { ctx.letterSpacing = '0px'; } catch (e) { /* reset is best-effort */ }
+    return W - pad - x0;
+  }
+
+  // Fit-to-one-page zoom for the PDF export: A4 at 96 CSS px/in minus our
+  // own print padding (see usos.css — @page margin is 0 so the browser
+  // prints no date/title/URL header or footer). Never scales up.
+  const PLAN_PRINT_PAD_MM = 12;
+  const PLAN_PRINT_PX_PER_MM = 96 / 25.4;
+  // Usable print content box (page minus our own padding, px) — the box
+  // planPrintZoom fits into and planPrintContentH centers within.
+  function planPrintContentH(landscape = true) {
+    const pad = PLAN_PRINT_PAD_MM * PLAN_PRINT_PX_PER_MM;
+    return (landscape ? 210 : 297) * PLAN_PRINT_PX_PER_MM - pad * 2;
+  }
+  function planPrintContentW(landscape = true) {
+    const pad = PLAN_PRINT_PAD_MM * PLAN_PRINT_PX_PER_MM;
+    return (landscape ? 297 : 210) * PLAN_PRINT_PX_PER_MM - pad * 2;
+  }
+  function planPrintZoom(cardH, cardW, landscape) {
+    const z = Math.min(planPrintContentH(landscape) / cardH, planPrintContentW(landscape) / cardW, 1);
+    return Number.isFinite(z) && z > 0 ? z : 1;
   }
 
   // Panel lookahead: how far ahead the "next sessions" box searches for
@@ -657,9 +844,10 @@
         zapisyFilter: '',
         planWeekOffset: 0,
         planViewMode: 'week', // 'week' (siatka) | 'list' (lista)
-        planScope: 'concrete', // 'concrete' (aktualny tydzień) | 'generic' (szablon ogólny)
+        planScope: 'concrete', // 'concrete' (dynamiczny: konkretny tydzień) | 'generic' (szablon ogólny)
         planDetailsLoading: false,
         planSessionModal: null, // weeklyPlan session object or null
+        planGroupList: null, // session snapshot for the group roster modal or null
         studenciQuery: '',
         studenciExcluded: [], // subject names excluded from Studenci matching
         studenciHideLectures: false, // hide Wykład groups from Studenci matching
@@ -759,6 +947,10 @@
         plannerPreviewKeys: {},
         plannerPicks: [],
         plannerPlans: [],
+        // Full plan records for the "Moje plany" section (stats need every
+        // plan's picks, not just the active one's) — kept next to the
+        // projections above, refreshed at the same four sites.
+        plannerPlansFull: [],
         plannerActivePlanId: null,
         // The "my plan" integrations (Zapisy badges, tour banner, seat
         // guardian) read this plan — not necessarily the tab being looked
@@ -767,13 +959,18 @@
         // id of the plan tab currently showing an inline rename <input>,
         // or null when no rename is in progress.
         plannerRenamingPlanId: null,
+        // id of the plan with an armed delete confirm ("Usuń?" → Potwierdź),
+        // or null. Disarmed by switching plans or firing elsewhere.
+        plannerConfirmDeleteId: null,
         // Direction A of the Plan × Zapisy bridge: seat badges on the
-        // visible grid's blocks. Explicit check only (button above the
-        // grid) — never auto-fetched, so opening the planner costs USOS
-        // zero requests. Badges keyed by pick key.
+        // visible grid's blocks. plannerZapisyMode (Planowanie/Zapisy
+        // toggle above the grid) decides what block clicks do — Zapisy
+        // opens the tour group list, Planowanie expands the left column.
+        // Entering Zapisy auto-runs the check; badges stay for both modes.
         plannerRejCheck: 'idle', // idle | loading | done
         plannerRejBadges: {},
         plannerRejSummary: null,
+        plannerZapisyMode: false,
         // Direction C: tour banner over the plan. Null = not loaded yet
         // (ensurePlannerTourBanner fills it once per page lifetime);
         // { tours: [] } = loaded, empty when no active tour covers the
@@ -1225,11 +1422,11 @@
     // At most one of these is ever open at once, but data-modal-root holds
     // whichever it is — each renderer returns '' when it isn't the open one.
     renderModals() {
-      return this.renderPaymentDetailsModal() + this.renderGroupsModal() + this.renderLinksModal() + this.renderPlanSessionModal();
+      return this.renderPaymentDetailsModal() + this.renderGroupsModal() + this.renderLinksModal() + this.renderPlanSessionModal() + this.renderPlanGroupListModal();
     }
 
     closeAnyModal() {
-      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false, planSessionModal: null });
+      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false, planSessionModal: null, planGroupList: null });
     }
 
     // The search dropdown patches on every keystroke (after a debounce) —
@@ -1519,6 +1716,12 @@
         case 'planScopeGeneric':
           this.setState({ planScope: 'generic' });
           break;
+        case 'planExportPdf':
+          this.exportPlanPdf();
+          break;
+        case 'planExportPng':
+          this.exportPlanPng();
+          break;
         case 'planSessionDetails': {
           const idx = parseInt(el.dataset.idx || '-1', 10);
           const sess = this.planVisibleSessions()[idx];
@@ -1527,6 +1730,33 @@
         }
         case 'closePlanSessionModal':
           this.setModalState({ planSessionModal: null });
+          break;
+        case 'openPlanGroupList': {
+          this.setModalState({ planGroupList: this.state.planSessionModal });
+          // Participants are normally fetched on Studenci entry — from the
+          // plan modal they may not be loaded yet, so pull them lazily
+          // (same fetch + guard as retryStudenciLoad, re-rendering only
+          // the modal root when they land).
+          if (!this.data.participantsResultLoaded && !this._participantsLoading) {
+            const scrape = window.USOSPP_SCRAPE;
+            const adapters = window.USOSPP_ADAPTERS;
+            const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+            if (scrape && scrape.fetchParticipantsResult && adapter) {
+              this._participantsLoading = true;
+              scrape.fetchParticipantsResult(adapter, this.data).then(() => {
+                this._participantsLoading = false;
+                this.setModalState({});
+              }).catch(() => { this._participantsLoading = false; });
+            }
+          }
+          break;
+        }
+        case 'closePlanGroupList':
+          this.setModalState({ planGroupList: null });
+          break;
+        case 'closePlanGroupListBackdrop':
+          // Only the list goes away — the session details stay open behind.
+          if (e.target === el) this.setModalState({ planGroupList: null });
           break;
         case 'katalogPrzedmiotyLoadMore':
           this.loadMoreKatalogPrzedmioty();
@@ -1612,8 +1842,16 @@
           this.plannerToggleSubject(el.dataset.url);
           break;
         case 'plannerFocusSubject':
-          this.plannerFocusSubject(el.dataset.url);
+          this.plannerFocusSubject(el.dataset.url || '');
           break;
+        case 'plannerFocusPreview': {
+          const url = el.dataset.url || '';
+          const key = el.dataset.key || '';
+          if (url && this.state.plannerExpandedUrl !== url) this.plannerToggleSubject(url);
+          else this.plannerFocusSubject(url);
+          this.plannerTogglePreviewForKey(key, !!this.state.plannerZapisyMode);
+          break;
+        }
         case 'plannerLoadGroups':
           this.plannerLoadGroups(el.dataset.url);
           break;
@@ -1632,9 +1870,6 @@
         case 'plannerRemovePick':
           this.plannerRemovePick(el.dataset.key);
           break;
-        case 'plannerClearAll':
-          this.savePlannerPicks([]);
-          break;
         case 'plannerSwitchPlan':
           this.plannerSwitchPlan(el.dataset.id);
           break;
@@ -1642,10 +1877,23 @@
           this.plannerNewPlan();
           break;
         case 'plannerDuplicatePlan':
-          this.plannerDuplicatePlan();
+          this.plannerDuplicatePlan(el.dataset.id || null);
           break;
-        case 'plannerDeletePlan':
-          this.plannerDeletePlan();
+        case 'plannerDeletePlan': {
+          // Two-click confirm: first click arms ("Usuń?" → Potwierdź),
+          // second fires. Anything switching plans disarms (see
+          // applyPlannerSwitchResult).
+          const id = el.dataset.id || this.state.plannerActivePlanId;
+          if (this.state.plannerConfirmDeleteId !== id) {
+            this.setPlannerState({ plannerConfirmDeleteId: id });
+          } else {
+            this.setPlannerState({ plannerConfirmDeleteId: null });
+            this.plannerDeletePlan(id);
+          }
+          break;
+        }
+        case 'plannerCancelDelete':
+          this.setPlannerState({ plannerConfirmDeleteId: null });
           break;
         case 'plannerSetMainPlan':
           this.plannerSetMainPlan(el.dataset.id);
@@ -1672,9 +1920,31 @@
         case 'plannerCheckRejSeats':
           this.plannerCheckRejSeats();
           break;
-        case 'plannerOpenRejGroups':
-          this.plannerOpenRejGroups(el.dataset.pickKey || '');
+        case 'plannerSubjectEnroll': {
+          const nr = el.dataset.nr;
+          this.openZapisGrupy({
+            tourKey: el.dataset.tour || null,
+            subjKod: el.dataset.kod || null,
+            title: el.dataset.name || '',
+            kod: el.dataset.kod || '',
+            cykl: el.dataset.cykl || '',
+            groupsUrl: el.dataset.url || '',
+            registerUrl: el.dataset.register || '',
+            highlightNr: nr === '' ? null : nr,
+          });
           break;
+        }
+        case 'plannerSetZapisyMode': {
+          const zapisy = el.dataset.mode === 'zapisy';
+          this.setPlannerState({ plannerZapisyMode: zapisy });
+          // Entering Zapisy pulls seat data: first the picks' check (fills
+          // the tour-subject cache), then group lists for the remaining
+          // candidate subjects so the list filter has full coverage.
+          if (zapisy) {
+            this.plannerCheckRejSeats().then(() => this.plannerPrefetchCandidateSeats());
+          }
+          break;
+        }
         case 'plannerOpenTourBanner':
           this.plannerOpenTourBanner(parseInt(el.dataset.index || '0', 10));
           break;
@@ -1991,8 +2261,82 @@
               <tr><td>Sala</td><td>${roomLine ? esc(roomLine) : '—'}</td></tr>
               ${s.building ? `<tr><td>Budynek</td><td>${esc(s.building)}</td></tr>` : ''}
               <tr><td>Prowadzący</td><td>${s.teacher ? esc(s.teacher) : '<span class="usospp-muted-text">brak danych w USOS</span>'}</td></tr>
+              ${this.planSessionRosterRow(s)}
             </tbody></table>
             ${groupUrl ? `<div style="margin-top:12px;"><button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(groupUrl)}">Otwórz grupę w USOS →</button></div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // Roster of the exact group behind a plan session: by detailsUrl first,
+    // same subject+type+nr fallback. {state, students}: 'loading' (not
+    // fetched yet), 'ready', 'hidden' (USOS doesn't share the list),
+    // 'missing' (no matching group).
+    planSessionRoster(s) {
+      if (!this.data || !this.data.participantsResultLoaded) return { state: 'loading', students: [] };
+      const res = this.data.participantsResult || {};
+      const groups = Array.isArray(res.groups) ? res.groups : [];
+      const group = (s && s.detailsUrl && res.byUrl && res.byUrl[s.detailsUrl])
+        || (s && groups.find((g) => g && g.subject === s.subject && g.type === s.type && String(g.nr) === String(s.nr)))
+        || null;
+      if (!group) return { state: 'missing', students: [] };
+      if (group.hidden || !group.supported) return { state: 'hidden', students: [] };
+      return { state: 'ready', students: Array.isArray(group.students) ? group.students : [] };
+    }
+
+    // Roster rows for the list modal: "Imię Nazwisko" + isSelf, alphabetical (pl).
+    planSessionRosterRows(s) {
+      const { students } = this.planSessionRoster(s);
+      const rawSelf = this.data && this.data.user && this.data.user.name;
+      const selfName = rawSelf ? String(rawSelf).replace(/\s+/g, ' ').trim().toLowerCase() : null;
+      return students
+        .map((st) => ({
+          display: `${(st.names || '').trim()} ${(st.surname || '').trim()}`.trim(),
+          isSelf: !!selfName && this.studentKey(st.surname, st.names) === selfName,
+        }))
+        .filter((r) => r.display)
+        .sort((a, b) => a.display.localeCompare(b.display, 'pl'));
+    }
+
+    planSessionRosterRow(s) {
+      const r = this.planSessionRoster(s);
+      if (r.state === 'ready') {
+        const n = r.students.length;
+        return `<tr><td>Studenci</td><td><strong>${n} ${pluralOsoba(n)}</strong> <a data-action="openPlanGroupList" style="font-weight:600;cursor:pointer;">Zobacz listę →</a></td></tr>`;
+      }
+      if (r.state === 'loading') {
+        return `<tr><td>Studenci</td><td><span class="usospp-muted-text">…</span> <a data-action="openPlanGroupList" style="font-weight:600;cursor:pointer;">Zobacz listę →</a></td></tr>`;
+      }
+      return `<tr><td>Studenci</td><td><span class="usospp-muted-text">lista niedostępna</span></td></tr>`;
+    }
+
+    renderPlanGroupListModal() {
+      const s = this.state.planGroupList;
+      if (!s) return '';
+      const r = this.planSessionRoster(s);
+      const title = `Studenci — ${s.subject}${s.type ? `, ${s.type}` : ''}${s.nr ? `, grupa ${s.nr}` : ''}`;
+      let body;
+      if (r.state === 'ready') {
+        const rows = this.planSessionRosterRows(s);
+        body = rows.length
+          ? rows.map((p) => `<div class="usospp-list-row"><div style="font-weight:600;">${esc(p.display)}${p.isSelf ? ' <span class="usospp-badge">Ty</span>' : ''}</div></div>`).join('')
+          : `<div class="usospp-empty-hint">Brak danych.</div>`;
+      } else if (r.state === 'loading') {
+        body = `<div class="usospp-empty-hint">Pobieranie listy…</div>`;
+      } else if (r.state === 'hidden') {
+        body = `<div class="usospp-empty-hint">USOS nie udostępnia listy studentów tej grupy.</div>`;
+      } else {
+        body = `<div class="usospp-empty-hint">Nie znaleziono listy tej grupy.</div>`;
+      }
+      return `
+        <div class="usospp-modal-backdrop" data-action="closePlanGroupListBackdrop">
+          <div class="usospp-modal">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">${esc(title)}</div>
+              <button class="usospp-icon-btn" data-action="closePlanGroupList" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            ${body}
           </div>
         </div>
       `;
@@ -3352,6 +3696,18 @@
       }));
     }
 
+    // Full records for the "Moje plany" section: projection above plus the
+    // picks (for stats) — refreshed at the same sites as plannerPlans.
+    projectPlannerFullPlans(plans, mainPlanId) {
+      return (plans || []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        picks: p.picks || [],
+        isMain: p.id === mainPlanId,
+        stats: plannerPlanStats(p.picks),
+      }));
+    }
+
     // Full main-plan record ({id, name, picks}) for the Zapisy
     // integrations — reads the store directly instead of local state,
     // which only ever holds the ACTIVE plan's picks.
@@ -3405,9 +3761,11 @@
       this.seedPlannerAutoSelected();
       this.setPlannerState({
         plannerPlans: this.projectPlannerPlans(migratedPlans, mainPlanId),
+        plannerPlansFull: this.projectPlannerFullPlans(migratedPlans, mainPlanId),
         plannerActivePlanId: activePlanId,
         plannerMainPlanId: mainPlanId,
         plannerPicks: this.state.plannerPicks,
+        plannerConfirmDeleteId: null,
       });
       if (changed) {
         const planner = window.USOSPP_PLANNER;
@@ -3440,6 +3798,7 @@
       }).then((next) => {
         this.setPlannerState({
           plannerPlans: this.projectPlannerPlans(next.plans, next.mainPlanId),
+          plannerPlansFull: this.projectPlannerFullPlans(next.plans, next.mainPlanId),
           plannerMainPlanId: next.mainPlanId,
         });
       });
@@ -3466,12 +3825,13 @@
       }).then((next) => this.applyPlannerSwitchResult(next));
     }
 
-    plannerDuplicatePlan() {
+    plannerDuplicatePlan(id) {
       const planner = window.USOSPP_PLANNER;
       if (!planner) return;
+      const srcId = id || this.state.plannerActivePlanId;
       planner.setData((data) => {
         if (data.plans.length >= planner.MAX_PLANS) return data;
-        const source = data.plans.find((p) => p.id === data.activePlanId) || data.plans[0];
+        const source = data.plans.find((p) => p.id === srcId) || data.plans[0];
         if (!source) return data;
         const plan = { id: planner.genId(), name: `${source.name} (kopia)`, picks: JSON.parse(JSON.stringify(source.picks || [])) };
         return { plans: [...data.plans, plan], activePlanId: plan.id };
@@ -3479,18 +3839,22 @@
     }
 
     // Never removes the last remaining plan — there must always be
-    // something to show/edit.
-    plannerDeletePlan() {
+    // something to show/edit. id defaults to the active plan (old callers).
+    plannerDeletePlan(id) {
       const planner = window.USOSPP_PLANNER;
       if (!planner) return;
+      const delId = id || this.state.plannerActivePlanId;
       planner.setData((data) => {
         if (data.plans.length <= 1) return data;
-        const nextPlans = data.plans.filter((p) => p.id !== data.activePlanId);
+        const nextPlans = data.plans.filter((p) => p.id !== delId);
+        if (nextPlans.length === data.plans.length) return data;
         const mainAlive = nextPlans.some((p) => p.id === data.mainPlanId);
+        const activeAlive = nextPlans.some((p) => p.id === data.activePlanId);
+        const activeId = activeAlive ? data.activePlanId : nextPlans[0].id;
         return {
           plans: nextPlans,
-          activePlanId: nextPlans[0].id,
-          mainPlanId: mainAlive ? data.mainPlanId : nextPlans[0].id,
+          activePlanId: activeId,
+          mainPlanId: mainAlive ? data.mainPlanId : activeId,
         };
       }).then((next) => this.applyPlannerSwitchResult(next));
     }
@@ -3502,12 +3866,14 @@
       const plan = next.plans.find((p) => p.id === next.activePlanId);
       this.setPlannerState({
         plannerPlans: this.projectPlannerPlans(next.plans, next.mainPlanId),
+        plannerPlansFull: this.projectPlannerFullPlans(next.plans, next.mainPlanId),
         plannerActivePlanId: next.activePlanId,
         plannerMainPlanId: next.mainPlanId,
         plannerPicks: (plan && plan.picks) || [],
         plannerExpandedUrl: null,
         plannerDraftSelection: {},
         plannerRenamingPlanId: null,
+        plannerConfirmDeleteId: null,
       });
     }
 
@@ -3522,13 +3888,14 @@
         .then((next) => {
           this.setPlannerState({
             plannerPlans: this.projectPlannerPlans(next.plans, next.mainPlanId),
+            plannerPlansFull: this.projectPlannerFullPlans(next.plans, next.mainPlanId),
             plannerMainPlanId: next.mainPlanId,
           });
         });
     }
 
-    // Inline rename: the tab label becomes an <input> (see
-    // renderPlannerPlanTabs); commit on Enter/✓, cancel on Escape/✕.
+    // Inline rename: the card name becomes an <input> (see
+    // renderPlannerVersionCard); commit on Enter/✓, cancel on Escape/✕.
     // Anything else re-rendering the planner abandons the edit — rename is
     // an explicit mode, not ambient state.
     plannerStartRename(id) {
@@ -3566,21 +3933,24 @@
       });
     }
 
-    // Direction A of the Plan × Zapisy bridge: seat badges on the visible
-    // grid's blocks. Explicit check only (the button above the grid calls
-    // plannerCheckRejSeats) — opening the planner never fetches tour data
-    // on its own, so idle browsing costs USOS zero requests. Results ride
-    // in-memory (this._plannerRejCache, keyed by tour/groupsUrl) for the
-    // page lifetime; a reload re-checks from scratch.
+    // Planowanie/Zapisy mode toggle above the grid (replaces the old
+    // one-shot "Sprawdź miejsca" button): entering Zapisy auto-runs the
+    // seat check whose badges and subject filter need its data.
     renderPlannerRejCheck() {
       if (!this.state.plannerPicks.length) return '';
+      const zapisy = !!this.state.plannerZapisyMode;
       const loading = this.state.plannerRejCheck === 'loading';
       const summary = this.state.plannerRejSummary;
       return `
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-          <button class="usospp-btn-ghost" style="font-size:12px;${loading ? 'opacity:0.6;' : ''}" ${loading ? 'disabled' : ''} data-action="plannerCheckRejSeats">${loading ? 'Sprawdzam miejsca…' : 'Sprawdź miejsca w zapisach'}</button>
-          ${summary ? `<span style="font-size:12px;color:var(--ink-3);">${esc(summary)}</span>` : ''}
+        <div style="display:flex;gap:6px;margin-bottom:12px;">
+          <button class="usospp-mode-btn${!zapisy ? ' active' : ''}" data-action="plannerSetZapisyMode" data-mode="plan">Planowanie</button>
+          <button class="usospp-mode-btn${zapisy ? ' active' : ''}" data-action="plannerSetZapisyMode" data-mode="zapisy">Zapisy</button>
         </div>
+        ${zapisy ? `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <button class="usospp-btn-ghost" style="font-size:12px;${loading ? 'opacity:0.6;' : ''}" ${loading ? 'disabled' : ''} data-action="plannerCheckRejSeats">${loading ? 'Sprawdzam miejsca…' : 'Odśwież miejsca'}</button>
+          ${summary ? `<span style="font-size:12px;color:var(--ink-3);">${esc(summary)}</span>` : ''}
+        </div>` : ''}
       `;
     }
 
@@ -3594,7 +3964,7 @@
         return;
       }
       const summary = res.matchedKods.size
-        ? `${[...res.tourLabels].join(', ')} · ${res.matchedKods.size}/${res.totalKods} przedmiotów z planu w turze — kliknij blok, żeby zobaczyć grupy`
+        ? `${[...res.tourLabels].join(', ')} · ${res.matchedKods.size}/${res.totalKods} przedmiotów z planu w turze — kliknij blok, aby pokazać wolne terminy`
         : 'Brak Twoich przedmiotów w aktywnych turach zapisów.';
       this.setPlannerState({ plannerRejCheck: 'done', plannerRejBadges: res.badges, plannerRejSummary: summary });
     }
@@ -3705,21 +4075,166 @@
       }
     }
 
+    // Tour subject matching one planner candidate: prz_kod first, then
+    // normalized name (stage subject URLs don't always carry prz_kod).
+    // Pure lookup over the cached tour subjects — no fetching.
+    plannerMatchTourSubject(candidate, tourSubjs) {
+      const all = this.plannerMatchTourSubjects(candidate, tourSubjs);
+      return all.length ? all[0] : null;
+    }
+
+    // All matching tour subjects, best first: kod, then exact name, then
+    // name containment either way (tour vs catalog names skew — suffixes
+    // like "(L)", abbreviations). Exact is always tried everywhere before
+    // any fuzzy hit, so "Fizyka 1A" never loses to "Fizyka 1". Deduped.
+    plannerMatchTourSubjects(candidate, tourSubjs) {
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      const out = [];
+      const seen = new Set();
+      if (!bridge || !candidate) return out;
+      const list = Array.isArray(tourSubjs) ? tourSubjs : [];
+      const push = (t) => {
+        if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+      };
+      const kod = bridge.przKodFromUrl(candidate.detailsUrl || '');
+      if (kod) {
+        const byKod = list.find((t) => t && t.kod === kod);
+        if (byKod) push(byKod);
+      }
+      const wantName = bridge.normType(candidate.name || '');
+      if (wantName) {
+        list.forEach((t) => {
+          if (t && bridge.normType(t.name || '') === wantName) push(t);
+        });
+        list.forEach((t) => {
+          const n = t ? bridge.normType(t.name || '') : '';
+          if (n && (n.includes(wantName) || wantName.includes(n))) push(t);
+        });
+      }
+      return out;
+    }
+
+    plannerCachedTourSubjects() {
+      const out = [];
+      Object.entries(this._plannerRejCache || {}).forEach(([k, v]) => {
+        if (k.startsWith('subj:') && Array.isArray(v)) v.forEach((t) => out.push(t));
+      });
+      return out;
+    }
+
+    // Seat class of a planner candidate subject in Zapisy mode, from cached
+    // tour data: 'free' (some group with free seats), 'full' (all known
+    // groups full), 'unknown' (not in tour / no data — never filtered on,
+    // only dimmed with a tag explaining why).
+    plannerCandidateSeatClass(s) {
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      const cache = this._plannerRejCache;
+      if (!bridge || !cache) return { cls: 'unknown', tag: null };
+      const matches = this.plannerMatchTourSubjects(s, this.plannerCachedTourSubjects());
+      if (!matches.length) return { cls: 'unknown', tag: 'spoza tury' };
+      // A subject may sit in several tours — free anywhere counts; data
+      // missing everywhere (but matched) is "brak danych", not "full".
+      const withData = matches.filter((m) => m.groupsUrl && (cache[`grp:${m.groupsUrl}`] || {}).supported);
+      if (!withData.length) return { cls: 'unknown', tag: 'brak danych' };
+      let anyKnown = false;
+      let anyFree = false;
+      withData.forEach((m) => {
+        const rejGroups = cache[`grp:${m.groupsUrl}`];
+        (rejGroups.sections || []).forEach((sec) => (sec.groups || []).forEach((g) => {
+          const st = bridge.groupSeatState(g);
+          if (!st.known) return;
+          anyKnown = true;
+          if (!st.full) anyFree = true;
+        }));
+      });
+      if (anyFree) return { cls: 'free', tag: null };
+      if (anyKnown) return { cls: 'full', tag: 'brak miejsc' };
+      return { cls: 'unknown', tag: 'brak danych' };
+    }
+
+    // After the zapisy-mode check fills the tour-subject cache, pull group
+    // lists for candidate subjects matched to a tour (bounded: matched
+    // only, cached for the page lifetime) so the list filter and ghost
+    // dimming have data beyond the picked groups.
+    async plannerPrefetchCandidateSeats() {
+      if (this._candidateSeatsFetching) return;
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+      if (!bridge || !scrape || !adapter) return;
+      const cache = this._plannerRejCache || {};
+      const tourSubjs = this.plannerCachedTourSubjects();
+      if (!tourSubjs.length) return;
+      const urls = new Set();
+      (this.plannerSubjectCandidates.subjects || []).forEach((s) => {
+        const subj = this.plannerMatchTourSubject(s, tourSubjs);
+        if (subj && subj.groupsUrl && cache[`grp:${subj.groupsUrl}`] === undefined) urls.add(subj.groupsUrl);
+      });
+      if (!urls.size) return;
+      this._candidateSeatsFetching = true;
+      try {
+        await Promise.all([...urls].map(async (groupsUrl) => {
+          const res = await scrape.fetchRejGroups(adapter, groupsUrl).catch(() => null);
+          this._plannerRejCache[`grp:${groupsUrl}`] = (res && res.supported) ? res : null;
+        }));
+      } finally {
+        this._candidateSeatsFetching = false;
+        if (this.state.view === 'planer') this.setPlannerState({});
+      }
+    }
+
+    // Seat state of one preview candidate group, from the cached tour
+    // groups: {full, known, seatsText} or null when uncovered. The subject
+    // match is kod-first (detailsUrl), name-exact, then name containment —
+    // shared with the candidate list via plannerMatchTourSubjects — and the
+    // first tour WITH usable group data wins (a name hit without data never
+    // blocks a later tour that has it). Ghosts are hints; exact numbers
+    // live one click away in Zapisy.
+    plannerCandSeats(subjectName, classTypeLabel, nr, subjectDetailsUrl) {
+      const bridge = window.USOSPP_ZAPISY_PLAN;
+      const cache = this._plannerRejCache;
+      if (!bridge || !cache || !subjectName) return null;
+      const matches = this.plannerMatchTourSubjects(
+        { name: subjectName, detailsUrl: subjectDetailsUrl || '' },
+        this.plannerCachedTourSubjects());
+      for (const subj of matches) {
+        if (!subj || !subj.groupsUrl) continue;
+        const rejGroups = cache[`grp:${subj.groupsUrl}`];
+        if (!rejGroups || !rejGroups.supported) continue;
+        const hits = bridge.matchPickGroups(
+          { classTypeLabel, nr: String(nr), sessions: [] }, rejGroups);
+        const hit = hits.find((h) => String(h.group.nr) === String(nr));
+        if (!hit) continue;
+        const st = hit.seats || {};
+        return {
+          full: !!st.full,
+          known: !!st.known,
+          seatsText: st.known && !st.full && Number.isInteger(st.free) ? `${st.free}/${st.cap}` : null,
+        };
+      }
+      return null;
+    }
+
     // Clicking a badged grid block jumps to direction B (zapisGrupy) with
     // the block's own group pre-highlighted (see zapisGrupyHighlightNr).
-    plannerOpenRejGroups(pickKey) {
-      const b = (this.state.plannerRejBadges || {})[pickKey];
-      if (!b || !b.groupsUrl) return;
-      this.openZapisGrupy({
-        tourKey: b.tourKey,
-        subjKod: b.kod,
-        title: b.title,
-        kod: b.kod,
-        cykl: b.cykl,
-        groupsUrl: b.groupsUrl,
-        registerUrl: b.registerUrl,
-        highlightNr: b.nr,
-      });
+    // Grid block clicks never navigate: both modes focus the subject and
+    // toggle its free/all-slot ghosts (freeOnly follows Zapisy mode).
+    // Navigation to Zapisy lives only in explicit buttons ("Zapisz się →",
+    // tour banner, subject lists).
+    plannerGridBlockAction({ top, height, entryStyle, key, subjectUrl }) {
+      if (subjectUrl) {
+        const zapisy = !!this.state.plannerZapisyMode;
+        const keyAttr = key ? ` data-key="${esc(key)}"` : '';
+        const preview = key ? 'Preview' : 'Subject';
+        return {
+          attr: ` data-action="plannerFocus${preview}" data-url="${esc(subjectUrl)}"${keyAttr} style="top:${top}px;height:${height}px;${entryStyle}cursor:pointer;"`,
+          note: key
+            ? (zapisy ? ' — kliknij, aby pokazać wolne terminy' : ' — kliknij, aby pokazać terminy')
+            : ' — kliknij, aby pokazać na liście',
+        };
+      }
+      return { attr: ` style="top:${top}px;height:${height}px;${entryStyle}"`, note: '' };
     }
 
     // Direction C of the Plan × Zapisy bridge: a thin banner over the plan
@@ -4123,7 +4638,7 @@
       const planner = window.USOSPP_PLANNER;
       if (!candidate || !planner) return;
       if (this.state.plannerPlans.length >= planner.MAX_PLANS) {
-        this.setPlannerState({ plannerAutoFailure: { kind: 'plan-limit', message: `Masz już zapisanych ${planner.MAX_PLANS} planów — usuń jeden z istniejących w trybie manualnym (zakładki planu), żeby zapisać tę propozycję.` } });
+        this.setPlannerState({ plannerAutoFailure: { kind: 'plan-limit', message: `Masz już zapisanych ${planner.MAX_PLANS} planów — usuń jeden z istniejących w sekcji „Moje plany”, żeby zapisać tę propozycję.` } });
         return;
       }
       const picks = candidate.assignment.map(pickFromAssignment);
@@ -4182,6 +4697,13 @@
               plannerSubjectCache: { ...s.plannerSubjectCache, [url]: (details && details.supported) ? details : { supported: false } },
             };
           });
+          // A block-click preview (plannerTogglePreviewForKey) may be
+          // waiting on exactly this configurator — complete it now.
+          if (this._pendingPreview) {
+            const pk = this._pendingPreview;
+            this._pendingPreview = null;
+            this.plannerTogglePreviewForKey(pk.key, pk.freeOnly);
+          }
         })
         .catch(() => {
           this.setPlannerState((s) => (s.plannerSubjectLoading === url
@@ -4269,23 +4791,79 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       });
     }
 
-    // Toggles one class type's "podgląd w planie". While on, EVERY group of
-    // that class type is drawn on the preview grid as a hoverable ghost
+    // Toggles one class type's "podgląd w planie". While on, groups of
+    // that class type are drawn on the preview grid as hoverable ghosts
     // (renderPlannerGrid) next to the picks already made — the student can
-    // try each group on for size visually before committing to one.
-    // Toggling on also fetches the group list if it isn't cached yet
-    // (plannerLoadGroups is idempotent when it is), so entering visual mode
-    // is a single click — no need to press "Pokaż grupy" first.
+    // try each group on for size visually before committing to one. In
+    // Zapisy mode only free groups ghost (freeOnly + silent seat pull);
+    // Planowanie ghosts all. Toggling on also fetches the group list if it
+    // isn't cached yet (plannerLoadGroups is idempotent when it is), so
+    // entering visual mode is a single click — no need to press
+    // "Pokaż grupy" first.
     plannerTogglePreview(key, groupsUrl, classTypeLabel) {
       if (!key || !groupsUrl) return;
       const on = !this.state.plannerPreviewKeys[key];
+      const freeOnly = !!this.state.plannerZapisyMode;
       this.setPlannerState((s) => {
         const next = { ...s.plannerPreviewKeys };
-        if (on) next[key] = { groupsUrl, classTypeLabel };
+        if (on) next[key] = { groupsUrl, classTypeLabel, freeOnly };
         else delete next[key];
         return { plannerPreviewKeys: next };
       });
-      if (on) this.plannerLoadGroups(groupsUrl);
+      if (!on) return;
+      this.plannerLoadGroups(groupsUrl);
+      this.plannerCheckRejSeats().then(() => this.plannerPrefetchCandidateSeats());
+    }
+
+    // Block click (plannerFocusPreview): focus the subject AND toggle
+    // ghosts for that exact class type. groupsUrl is resolved from the
+    // cached subject configurator — the same source plannerTogglePreview
+    // uses — so no new fetching paths. freeOnly (Zapisy mode) shows only
+    // free groups; Planowanie shows all.
+    plannerTogglePreviewForKey(key, freeOnly = false) {
+      if (!key) return;
+      if (this.state.plannerPreviewKeys[key]) {
+        if (this._pendingPreview && this._pendingPreview.key === key) this._pendingPreview = null;
+        this.setPlannerState((s) => {
+          const next = { ...s.plannerPreviewKeys };
+          delete next[key];
+          return { plannerPreviewKeys: next };
+        });
+        return;
+      }
+      let found = null;
+      Object.entries(this.state.plannerSubjectCache || {}).forEach(([url, details]) => {
+        if (found || !details || !details.supported) return;
+        (details.cycles || []).forEach((cycle) => {
+          (cycle.classTypes || []).forEach((ct) => {
+            if (!found && ct.groupsUrl && classTypeKey(url, cycle.cycleName, ct.label) === key) {
+              found = { groupsUrl: ct.groupsUrl, classTypeLabel: ct.label };
+            }
+          });
+        });
+      });
+      if (!found) {
+        // Subject configurator not cached yet (first expand still
+        // fetching) — retry when it lands (see the fetch completion below).
+        this._pendingPreview = { key, freeOnly };
+        return;
+      }
+      this.setPlannerState((s) => {
+        // Block-click previews are exclusive: enabling one replaces any
+        // other (same subject or not) — otherwise Wykład + Ćwiczenia glow
+        // at once with no way to tell which click owns the ghosts. The
+        // configurator's own toggles (plannerTogglePreview) still stack.
+        const next = {};
+        // Block-click previews from Zapisy mode show only free groups (see
+        // the entries loop); Planowanie and the configurator's own toggle
+        // show all and dim full ones instead.
+        next[key] = { ...found, freeOnly };
+        return { plannerPreviewKeys: next };
+      });
+      this.plannerLoadGroups(found.groupsUrl);
+      // Ghost counters need tour seat data — pull it silently (no mode
+      // change) so free-filtering and N/M tags have coverage.
+      this.plannerCheckRejSeats().then(() => this.plannerPrefetchCandidateSeats());
     }
 
     // "Podgląd wszystkich grup" for the whole active cycle at once — the
@@ -4304,15 +4882,18 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         .map((ct) => [classTypeKey(url, cycle.cycleName, ct.label), { groupsUrl: ct.groupsUrl, classTypeLabel: ct.label }]);
       if (!pairs.length) return;
       const allOn = pairs.every(([key]) => this.state.plannerPreviewKeys[key]);
+      const freeOnly = !!this.state.plannerZapisyMode;
       this.setPlannerState((s) => {
         const next = { ...s.plannerPreviewKeys };
         pairs.forEach(([key, meta]) => {
           if (allOn) delete next[key];
-          else next[key] = meta;
+          else next[key] = { ...meta, freeOnly };
         });
         return { plannerPreviewKeys: next };
       });
-      if (!allOn) pairs.forEach(([, meta]) => this.plannerLoadGroups(meta.groupsUrl));
+      if (allOn) return;
+      pairs.forEach(([, meta]) => this.plannerLoadGroups(meta.groupsUrl));
+      this.plannerCheckRejSeats().then(() => this.plannerPrefetchCandidateSeats());
     }
 
     // Commits every class-type choice made for the currently-expanded
@@ -5631,21 +6212,24 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const hasTemplate = this.weeklyPlan.length > 0;
       return `
         <div class="usospp-view">
-          <div class="usospp-card">
+          <div class="usospp-card usospp-plan-card">
             <div class="usospp-card-head">
               <div class="usospp-card-title">Plan zajęć</div>
-              <div style="display:flex;gap:10px;align-items:center;">
+              <div class="usospp-plan-head-actions" style="display:flex;gap:10px;align-items:center;">
+                <button class="usospp-btn-ghost" data-action="planExportPng">Eksport PNG</button>
+                <button class="usospp-btn-ghost" data-action="planExportPdf">Eksport PDF</button>
                 <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=home/plan&usospp_off=1">Otwórz w USOS →</button>
               </div>
+              <div class="usospp-print-brand"><span class="usospp-print-brand-word">USOS<em>++</em></span></div>
             </div>
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
-              <button class="usospp-mode-btn${scope === 'concrete' ? ' active' : ''}" data-action="planScopeConcrete">Aktualny</button>
+            <div class="usospp-plan-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+              <button class="usospp-mode-btn${scope === 'concrete' ? ' active' : ''}" data-action="planScopeConcrete">Dynamiczny</button>
               <button class="usospp-mode-btn${scope === 'generic' ? ' active' : ''}" data-action="planScopeGeneric">Ogólny</button>
               <span style="flex:1;"></span>
               <button class="usospp-mode-btn${mode === 'week' ? ' active' : ''}" data-action="planViewWeek">Tydzień</button>
               <button class="usospp-mode-btn${mode === 'list' ? ' active' : ''}" data-action="planViewList">Lista</button>
             </div>
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+            <div class="usospp-plan-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
               ${scope === 'concrete' ? `
                 <button class="usospp-btn-ghost" data-action="planWeekPrev">← Poprzedni</button>
                 <button class="usospp-btn-ghost" data-action="planWeekToday" ${offset === 0 ? 'disabled style="opacity:.4;"' : ''}>Bieżący tydzień</button>
@@ -5653,7 +6237,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
                 <span class="usospp-muted-text" style="font-weight:600;">${esc(this.planWeekLabel())}</span>
               ` : ''}
             </div>
-            ${this.state.planDetailsLoading ? `<div class="usospp-empty-hint" style="padding:0 0 8px 0;">Dociąganie sal i prowadzących…</div>` : ''}
+            ${this.state.planDetailsLoading ? `<div class="usospp-empty-hint usospp-plan-loading" style="padding:0 0 8px 0;">Dociąganie sal i prowadzących…</div>` : ''}
             ${!hasTemplate ? `
               ${!mg.supported ? `<div class="usospp-empty-hint">Nie udało się odczytać planu zajęć (ani terminarza, ani Twoich grup) ze strony USOS.</div>`
                 : `<div class="usospp-empty-hint">Brak zajęć w Twoich grupach — nie jesteś zapisany na żadne zajęcia ze stałym terminem.</div>`}
@@ -5671,28 +6255,20 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
 
     // Horizontal week timetable: day columns, full morning-to-evening hour
     // axis, sessions as positioned blocks. Same .usospp-timetable CSS as
-    // the planner grid. Concrete scope renders all 7 days with dates and
-    // marks empty days as free; generic scope shows only days that have
-    // sessions (recurring template, no dates).
+    // the planner grid. Geometry comes from planWeekGridLayout (shared with
+    // the PNG exporter); weekdays always render, an empty weekend doesn't.
     renderPlanWeekGrid(weekly, scope = 'generic') {
       const dark = this.settings.darkMode;
       const concrete = scope !== 'generic';
-      const ROW_H = 60;
-      const allMins = weekly.flatMap((e) => [toMin(e.start), toMin(e.end)]).filter((n) => n !== null);
-      const hourStart = allMins.length ? Math.min(7, Math.floor(Math.min(...allMins) / 60)) : 7;
-      const hourEnd = allMins.length ? Math.max(21, Math.ceil(Math.max(...allMins) / 60)) : 21;
-      const totalHeight = Math.max(1, hourEnd - hourStart) * ROW_H;
-      const hours = [];
-      for (let h = hourStart; h <= hourEnd; h++) hours.push(h);
+      const layout = planWeekGridLayout(weekly, planGridDayKeys(weekly));
+      const ROW_H = layout.rowH;
+      const totalHeight = layout.totalHeight;
+      const hours = layout.hours;
+      const hourStart = layout.hourStart;
       const shortDayName = { PN: 'Pon', WT: 'Wto', 'ŚR': 'Śro', CZ: 'Czw', PT: 'Pią', SO: 'Sob', ND: 'Nie' };
       const weekDates = concrete ? this.planWeekDates() : [];
       const dateByDay = {};
       weekDates.forEach((r) => { dateByDay[r.day] = r.date; });
-      const dayKeys = concrete
-        ? ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND']
-        : ['PN', 'WT', 'ŚR', 'CZ', 'PT'].concat(
-          ['SO', 'ND'].filter((dk) => weekly.some((e) => e.day === dk)));
-      const cols = dayKeys.map((dk) => ({ day: dk, entries: weekly.filter((e) => e.day === dk) }));
       const fmtDate = (d) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
       return `
         <div class="usospp-plan-week">
@@ -5701,33 +6277,20 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             ${hours.map((h) => `<div class="usospp-tt-hour" style="top:${(h - hourStart) * ROW_H}px;">${h}:00</div>`).join('')}
           </div>
           <div class="usospp-tt-days">
-            ${cols.map((col, ci) => {
-              const date = dateByDay[col.day] || (() => {
+            ${layout.days.map((col, ci) => {
+              // Generic scope is a recurring template with no real dates —
+              // weekday names only. Concrete scope adds the week's date.
+              const date = concrete ? (dateByDay[col.day] || (() => {
                 const m = this.planWeekMonday();
                 const d = new Date(m);
                 d.setDate(m.getDate() + (['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'].indexOf(col.day)));
                 return d;
-              })();
-              // Lane assignment for same-day overlaps: entry gets
-              // lane/total so overlapping blocks sit side by side.
-              const sorted = [...col.entries].sort((a, b) => (a.start || '').localeCompare(b.start || ''));
-              const lanes = [];
-              const placed = sorted.map((e) => {
-                let lane = lanes.findIndex((end) => (e.start || '') >= end);
-                if (lane === -1) { lane = lanes.length; lanes.push(e.end || ''); }
-                else lanes[lane] = e.end || '';
-                return { e, lane };
-              });
-              const laneCount = Math.max(1, lanes.length);
+              })()) : null;
               return `
               <div class="usospp-tt-daycol">
-                <div class="usospp-tt-daylabel">${esc(shortDayName[col.day])} <span class="usospp-muted-text">${esc(fmtDate(date))}</span></div>
+                <div class="usospp-tt-daylabel">${esc(shortDayName[col.day])}${date ? ` <span class="usospp-muted-text">${esc(fmtDate(date))}</span>` : ''}</div>
                 <div class="usospp-tt-daybody" style="height:${totalHeight}px;background-size:100% ${ROW_H}px;">
-                  ${!placed.length ? (concrete ? `<div class="usospp-muted-text" style="position:absolute;top:10px;left:0;right:0;text-align:center;font-size:12px;">wolne</div>` : '') : placed.map(({ e, lane }) => {
-                    const startMin = toMin(e.start);
-                    const endMin = toMin(e.end);
-                    const top = (startMin - hourStart * 60) * (ROW_H / 60);
-                    const height = Math.max(36, (endMin - startMin) * (ROW_H / 60));
+                  ${!col.blocks.length ? (concrete ? `<div class="usospp-muted-text" style="position:absolute;top:10px;left:0;right:0;text-align:center;font-size:12px;">wolne</div>` : '') : col.blocks.map(({ e, lane, laneCount, top, height }) => {
                     const color = subjectColor(hashStr(e.code || e.subject || ''), dark);
                     const weeksTag = weeksLabel(e.weeks);
                     const widthPct = 100 / laneCount;
@@ -5763,7 +6326,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const concrete = scope !== 'generic';
       const DAY_NAMES = { PN: 'Poniedziałek', WT: 'Wtorek', 'ŚR': 'Środa', CZ: 'Czwartek', PT: 'Piątek', SO: 'Sobota', ND: 'Niedziela' };
       const dayKeys = concrete
-        ? ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND']
+        ? planGridDayKeys(weekly)
         : ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'].filter((d) => weekly.some((e) => e.day === d));
       const dateByDay = {};
       if (concrete) this.planWeekDates().forEach((r) => {
@@ -5792,6 +6355,255 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           `;
         }).join('')}
       `;
+    }
+
+    // Shared "what's on screen" snapshot for both exporters: current
+    // scope/mode/week, the sessions behind it, a human label and a
+    // filename stem. No DOM — safe in tests. Generic scope is labelled
+    // with the student's kierunek (same getter the Zapisy filter uses),
+    // falling back to "Ogólny" when programmes weren't scraped.
+    planExportSource() {
+      const scope = this.state.planScope === 'generic' ? 'generic' : 'concrete';
+      const mode = this.state.planViewMode === 'list' ? 'list' : 'week';
+      const sessions = scope === 'generic' ? this.weeklyPlan : this.concreteWeekSessions;
+      const label = scope === 'generic' ? (this.kierunek || 'Ogólny') : this.planWeekLabel();
+      const m = this.planWeekMonday();
+      const fileStem = scope === 'generic'
+        ? 'plan-ogolny'
+        : `plan-${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}-${String(m.getDate()).padStart(2, '0')}`;
+      return { scope, mode, sessions, label, fileStem, title: `Plan zajęć – ${label}` };
+    }
+
+    // PDF = the browser's print dialog pointed at a print stylesheet that
+    // isolates the plan card (see usos.css @media print): the user picks
+    // "Save as PDF" there. No new permissions, no new dependencies. The
+    // card is zoomed to fit one A4 landscape page (see planPrintZoom).
+    exportPlanPdf() {
+      if (typeof document === 'undefined' || typeof window === 'undefined') return false;
+      const src = this.planExportSource();
+      const prevTitle = document.title;
+      document.title = src.title;
+      document.body.classList.add('usospp-print-plan');
+      // Fit-to-one-page: measure the card after print styles apply, then
+      // zoom it into the usable page box. minHeight stretches the card to
+      // the full usable height (in unzoomed px) so the flex centering from
+      // print CSS has room to work instead of hugging the top. Both inline
+      // styles removed in cleanup so the screen view is untouched.
+      const card = typeof document.querySelector === 'function'
+        ? document.querySelector('#usospp-container .usospp-plan-card')
+        : null;
+      let zoomed = null;
+      if (card) {
+        const z = planPrintZoom(card.scrollHeight || 0, card.scrollWidth || 0, true);
+        if (z < 1) card.style.zoom = String(z);
+        card.style.minHeight = `${planPrintContentH(true) / z}px`;
+        zoomed = card;
+      }
+      const cleanup = () => {
+        document.title = prevTitle;
+        if (zoomed) { zoomed.style.zoom = ''; zoomed.style.minHeight = ''; }
+        document.body.classList.remove('usospp-print-plan');
+        window.removeEventListener('afterprint', cleanup);
+      };
+      window.addEventListener('afterprint', cleanup);
+      window.print();
+      return true;
+    }
+
+    // PNG = the current plan painted onto a <canvas> (always light, brand
+    // lockup top-right) and downloaded via an object-URL anchor — works
+    // from a content script, no `downloads` permission needed. Returns
+    // false when there's nothing to draw or no DOM (tests).
+    exportPlanPng() {
+      if (typeof document === 'undefined') return false;
+      const src = this.planExportSource();
+      if (!src.sessions.length) return false;
+      const canvas = document.createElement('canvas');
+      const ok = src.mode === 'list'
+        ? this.paintPlanListCanvas(canvas, src)
+        : this.paintPlanWeekCanvas(canvas, src);
+      if (!ok || typeof canvas.toBlob !== 'function') return false;
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${src.fileStem}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }, 'image/png');
+      return true;
+    }
+
+    // Paints the week grid onto a canvas using planWeekGridLayout — the
+    // same geometry as the HTML grid, so the image matches the screen.
+    // Always light (see planExportHue for the canvas-safe palette).
+    paintPlanWeekCanvas(canvas, src) {
+      const dayKeys = planGridDayKeys(src.sessions);
+      const layout = planWeekGridLayout(src.sessions, dayKeys);
+      const names = { PN: 'Poniedziałek', WT: 'Wtorek', 'ŚR': 'Środa', CZ: 'Czwartek', PT: 'Piątek', SO: 'Sobota', ND: 'Niedziela' };
+      const dateByDay = {};
+      if (src.scope !== 'generic') {
+        this.planWeekDates().forEach((r) => {
+          const d = r.date;
+          dateByDay[r.day] = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+        });
+      }
+      const ctx = canvas.getContext && canvas.getContext('2d');
+      if (!ctx) return false;
+      const S = 2; // retina scale for crisp text
+      const gutter = 64, headH = 96, dayH = 32, pad = 24, colW = 230;
+      const gridTop = headH + dayH;
+      const W = gutter + dayKeys.length * colW + pad;
+      const H = gridTop + layout.totalHeight + pad;
+      canvas.width = W * S;
+      canvas.height = H * S;
+      ctx.scale(S, S);
+      const INK = '#18181b', SUB = '#52525b', LINE = '#e4e4e7';
+      const FONT = '"General Sans", system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = INK;
+      ctx.font = `700 22px ${FONT}`;
+      ctx.fillText('Plan zajęć', pad, 36);
+      ctx.fillStyle = SUB;
+      ctx.font = `14px ${FONT}`;
+      ctx.fillText(src.label, pad, 60);
+      paintPlanLogo(ctx, W, pad, 28);
+      ctx.font = `700 14px ${FONT}`;
+      dayKeys.forEach((dk, i) => {
+        const x = gutter + i * colW;
+        ctx.fillStyle = INK;
+        ctx.fillText(dateByDay[dk] ? `${names[dk]} ${dateByDay[dk]}` : names[dk], x + 8, headH + 21);
+      });
+      ctx.font = `12px ${FONT}`;
+      layout.hours.forEach((h) => {
+        const y = gridTop + (h - layout.hourStart) * layout.rowH;
+        ctx.fillStyle = LINE;
+        ctx.fillRect(gutter, y, W - gutter - pad, 1);
+        ctx.fillStyle = SUB;
+        ctx.fillText(`${h}:00`, 10, y + 14);
+      });
+      layout.days.forEach((col, i) => {
+        const x = gutter + i * colW;
+        ctx.fillStyle = LINE;
+        ctx.fillRect(x, gridTop, 1, layout.totalHeight);
+        col.blocks.forEach((b) => {
+          const e = b.e;
+          const laneW = colW / b.laneCount;
+          const bx = x + b.lane * laneW + 3;
+          const bw = laneW - 6;
+          const by = gridTop + b.top;
+          const hue = planExportHue(hashStr(e.code || e.subject || ''));
+          if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath();
+            ctx.roundRect(bx, by, bw, b.height, 6);
+            ctx.fillStyle = `hsl(${hue}, 65%, 88%)`;
+            ctx.fill();
+            ctx.strokeStyle = `hsl(${hue}, 45%, 60%)`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = `hsl(${hue}, 65%, 88%)`;
+            ctx.fillRect(bx, by, bw, b.height);
+            ctx.strokeStyle = `hsl(${hue}, 45%, 60%)`;
+            ctx.strokeRect(bx, by, bw, b.height);
+          }
+          ctx.fillStyle = `hsl(${hue}, 45%, 30%)`;
+          ctx.font = `700 12px ${FONT}`;
+          ctx.fillText(fitText(ctx, `${e.start}–${e.end}`, bw - 12), bx + 6, by + 17);
+          ctx.fillStyle = INK;
+          ctx.font = `12px ${FONT}`;
+          ctx.fillText(fitText(ctx, `${shortClassType(e.type)} · ${e.subject}`, bw - 12), bx + 6, by + 33);
+          if (b.height >= 90) {
+            ctx.fillStyle = SUB;
+            ctx.font = `11.5px ${FONT}`;
+            let line = by + 49;
+            const meta = `${e.type || ''}${e.nr ? ` · grupa ${e.nr}` : ''}`.trim();
+            if (meta) { ctx.fillText(fitText(ctx, meta, bw - 12), bx + 6, line); line += 16; }
+            const room = this.planRoomLine(e);
+            if (room) { ctx.fillText(fitText(ctx, room, bw - 12), bx + 6, line); line += 16; }
+            if (e.teacher) ctx.fillText(fitText(ctx, e.teacher, bw - 12), bx + 6, line);
+          }
+        });
+      });
+      return true;
+    }
+
+    // Paints the list view onto a canvas: day sections with date, rows
+    // with a subject color bar, time, subject and details. Always light.
+    paintPlanListCanvas(canvas, src) {
+      const names = { PN: 'Poniedziałek', WT: 'Wtorek', 'ŚR': 'Środa', CZ: 'Czwartek', PT: 'Piątek', SO: 'Sobota', ND: 'Niedziela' };
+      const order = ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'];
+      const dayKeys = src.scope === 'generic'
+        ? order.filter((d) => src.sessions.some((e) => e.day === d))
+        : planGridDayKeys(src.sessions);
+      const dateByDay = {};
+      if (src.scope !== 'generic') {
+        this.planWeekDates().forEach((r) => {
+          const d = r.date;
+          dateByDay[r.day] = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+        });
+      }
+      const ctx = canvas.getContext && canvas.getContext('2d');
+      if (!ctx) return false;
+      const S = 2;
+      const pad = 32, headH = 96, dayHeadH = 34, rowH = 68, freeH = 20;
+      const W = 1100;
+      const counts = dayKeys.map((d) => src.sessions.filter((e) => e.day === d).length);
+      const entryCount = counts.reduce((n, c) => n + c, 0);
+      const emptyCount = counts.filter((c) => c === 0).length;
+      const H = headH + dayKeys.length * dayHeadH + entryCount * rowH + emptyCount * freeH + pad;
+      canvas.width = W * S;
+      canvas.height = H * S;
+      ctx.scale(S, S);
+      const INK = '#18181b', SUB = '#52525b', LINE = '#e4e4e7';
+      const FONT = '"General Sans", system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = INK;
+      ctx.font = `700 22px ${FONT}`;
+      ctx.fillText('Plan zajęć', pad, 36);
+      ctx.fillStyle = SUB;
+      ctx.font = `14px ${FONT}`;
+      ctx.fillText(src.label, pad, 60);
+      paintPlanLogo(ctx, W, pad, 28);
+      let y = headH;
+      dayKeys.forEach((dk) => {
+        const entries = src.sessions.filter((e) => e.day === dk);
+        ctx.fillStyle = INK;
+        ctx.font = `700 15px ${FONT}`;
+        ctx.fillText(dateByDay[dk] ? `${names[dk]}  ${dateByDay[dk]}` : names[dk], pad, y + 22);
+        y += dayHeadH;
+        if (!entries.length) {
+          ctx.fillStyle = SUB;
+          ctx.font = `12px ${FONT}`;
+          ctx.fillText('wolne', pad + 16, y + 14);
+          y += freeH;
+        }
+        entries.forEach((e) => {
+          const hue = planExportHue(hashStr(e.code || e.subject || ''));
+          ctx.fillStyle = `hsl(${hue}, 55%, 55%)`;
+          ctx.fillRect(pad, y + 6, 5, rowH - 12);
+          ctx.fillStyle = INK;
+          ctx.font = `700 13px ${FONT}`;
+          const tag = e.weeks === 'even' ? ' (P)' : e.weeks === 'odd' ? ' (N)' : '';
+          ctx.fillText(`${e.start} – ${e.end}${tag}`, pad + 16, y + 22);
+          ctx.font = `13px ${FONT}`;
+          ctx.fillText(fitText(ctx, `${e.subject}${e.code ? ` [${e.code}]` : ''}`, W - pad * 2 - 16), pad + 16, y + 41);
+          ctx.fillStyle = SUB;
+          ctx.font = `12px ${FONT}`;
+          const room = this.planRoomLine(e);
+          ctx.fillText(fitText(ctx,
+            `${e.type || ''}${e.nr ? `, grupa ${e.nr}` : ''}${room ? ` · ${room}` : ''}${e.teacher ? ` · ${e.teacher}` : ''}`.trim(),
+            W - pad * 2 - 16), pad + 16, y + 58);
+          ctx.fillStyle = LINE;
+          ctx.fillRect(pad, y + rowH - 1, W - pad * 2, 1);
+          y += rowH;
+        });
+      });
+      return true;
     }
 
     renderOceny() {
@@ -6975,7 +7787,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         </div>
       `;
       if (this.state.plannerMode === 'auto') {
-        return modeTabs + this.renderPlannerTourBanner() + this.renderPlannerAutoBody();
+        return modeTabs + this.renderPlannerAutoIntro() + this.renderPlannerTourBanner() + this.renderPlannerAutoRest();
       }
 
       const { subjects, skippedStages } = this.plannerSubjectCandidates;
@@ -6983,26 +7795,25 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
 
       return `
         ${modeTabs}
-        ${this.renderPlannerTourBanner()}
         <div class="usospp-card">
           <div class="usospp-card-head">
             <div class="usospp-card-title">Generator planu</div>
-            ${this.state.plannerPicks.length ? `<button class="usospp-btn-ghost" data-action="plannerClearAll">Wyczyść plan</button>` : ''}
           </div>
           <p class="usospp-muted-text">
             Ułóż sobie przykładowy plan zajęć na podstawie realnych grup — jeszcze przed zapisami albo w ich trakcie. To tylko podgląd: USOS++ nikogo nigdzie nie zapisuje, wybory zapisują się jedynie lokalnie w tym rozszerzeniu, żeby można było do nich wrócić później.
           </p>
         </div>
+        ${this.renderPlannerTourBanner()}
+        ${this.renderPlannerVersions()}
 
         <div class="usospp-planner-layout">
           <div class="usospp-card">
             <div class="usospp-card-title" style="margin-bottom:12px;">Dodaj przedmiot</div>
-            ${this.renderPlannerPlanTabs()}
-            ${this.renderPlannerCustomSearch()}
             ${skippedStages > 0 ? `<div class="usospp-tag-muted" style="display:block;margin-bottom:10px;">Pominięto ${skippedStages} etap(y) programu z późniejszego cyklu (np. kolejny semestr) — pokazujemy tylko przedmioty z bieżącego cyklu.</div>` : ''}
             ${subjects.length === 0 ? `
-              <div class="usospp-empty-hint">Nie znaleźliśmy listy przedmiotów Twojego kierunku — sprawdź zakładkę „Przedmioty” albo dodaj przedmiot spoza listy powyżej.</div>
-            ` : subjects.map((s) => this.renderPlannerSubjectRow(s)).join('')}
+              <div class="usospp-empty-hint">Nie znaleźliśmy listy przedmiotów Twojego kierunku — sprawdź zakładkę „Przedmioty” albo dodaj przedmiot spoza listy poniżej.</div>
+            ` : this.renderPlannerSubjectList(subjects)}
+            ${this.renderPlannerCustomSearch()}
           </div>
 
           <div style="display:flex;flex-direction:column;gap:20px;">
@@ -7030,7 +7841,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // elective, a course from another kierunek…).
     renderPlannerCustomSearch() {
       if (!this.state.plannerCustomSearchOpen) {
-        return `<button class="usospp-btn-ghost" style="margin-bottom:12px;" data-action="plannerToggleCustomSearch">+ Dodaj przedmiot spoza listy</button>`;
+        return         `<button class="usospp-btn-ghost" style="margin-top:14px;margin-bottom:12px;" data-action="plannerToggleCustomSearch">+ Dodaj przedmiot spoza listy</button>`;
       }
       return `
         <div style="margin-bottom:14px;">
@@ -7066,7 +7877,18 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       `;
     }
 
-    renderPlannerAutoBody() {
+    renderPlannerAutoIntro() {
+      return `
+        <div class="usospp-card">
+          <div class="usospp-card-title" style="margin-bottom:6px;">Generator automatyczny</div>
+          <p class="usospp-muted-text">
+            Wybierz przedmioty, ustaw ograniczenia i preferencje — USOS++ spróbuje ułożyć za Ciebie do 5 pasujących wariantów planu z realnych grup. To wciąż tylko podgląd czasowy: nie sprawdzamy, czy zapisy na dany cykl są otwarte.
+          </p>
+        </div>
+      `;
+    }
+
+    renderPlannerAutoRest() {
       const { subjects } = this.plannerSubjectCandidates;
       // A subject picked via the search box below is checked into
       // plannerAutoSelected immediately (see plannerSelectSearchSubject),
@@ -7084,13 +7906,6 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const status = this.state.plannerAutoStatus;
       const busy = status === 'fetching' || status === 'generating';
       return `
-        <div class="usospp-card">
-          <div class="usospp-card-title" style="margin-bottom:6px;">Generator automatyczny</div>
-          <p class="usospp-muted-text">
-            Wybierz przedmioty, ustaw ograniczenia i preferencje — USOS++ spróbuje ułożyć za Ciebie do 5 pasujących wariantów planu z realnych grup. To wciąż tylko podgląd czasowy: nie sprawdzamy, czy zapisy na dany cykl są otwarte.
-          </p>
-        </div>
-
         <div class="usospp-two-col">
           <div class="usospp-card">
             <div class="usospp-card-title" style="margin-bottom:12px;">Przedmioty do uwzględnienia (${selectedCount})</div>
@@ -7332,53 +8147,96 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       `;
     }
 
-    // A student comparing a few "what if" layouts (e.g. morning vs. evening
-    // lab group) needs more than one saved draft at once — this is a small
-    // tab strip over the saved plans (see planner-store.js), capped at
-    // MAX_PLANS since an unbounded pile of half-abandoned drafts helps no
-    // one. Duplicate/delete act on whichever plan is currently active,
-    // rather than needing per-tab icon buttons. The ★ marks the MAIN plan
-    // (see mainPlanId): the one the Zapisy integrations treat as "my plan".
-    // The ✎ turns the tab label into an inline rename <input>.
-    renderPlannerPlanTabs() {
-      const plans = this.state.plannerPlans;
+    // "Moje plany" — full-width version management above the generator:
+    // rich cards (stats, main star, per-plan actions) instead of the old
+    // tab strip that used to live in the left column. plannerPlansFull
+    // carries every plan's picks so stats don't need extra storage reads.
+    renderPlannerVersions() {
+      const plans = this.state.plannerPlansFull;
       const activeId = this.state.plannerActivePlanId;
       const renamingId = this.state.plannerRenamingPlanId;
+      const confirmId = this.state.plannerConfirmDeleteId;
       const planner = window.USOSPP_PLANNER;
-      const maxPlans = (planner && planner.MAX_PLANS) || 5;
+      const maxPlans = (planner && planner.MAX_PLANS) || 4;
       const atLimit = plans.length >= maxPlans;
       const mainPlan = plans.find((p) => p.isMain);
       return `
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-          ${plans.map((p) => `
-            <button class="usospp-mode-btn${p.id === activeId ? ' active' : ''}" style="flex:none;padding:6px 8px 6px 4px;font-size:12px;display:flex;align-items:center;gap:2px;max-width:220px;" data-action="plannerSwitchPlan" data-id="${esc(p.id)}" title="${esc(`Przełącz na plan ${p.name}`)}">${p.id === renamingId
-              ? `<input data-plan-rename="${esc(p.id)}" data-action="plannerNoop" value="${esc(p.name)}" maxlength="40" style="width:110px;font-size:12px;padding:2px 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--ink);" /><span data-action="plannerCommitRename" data-id="${esc(p.id)}" title="Zapisz nazwę" style="cursor:pointer;font-weight:700;">✓</span><span data-action="plannerCancelRename" title="Anuluj" style="cursor:pointer;color:var(--ink-3);">✕</span>`
-              : `<span data-action="plannerSetMainPlan" data-id="${esc(p.id)}" title="${esc(p.isMain ? 'Plan główny — pokazywany w Zapisach' : 'Ustaw jako plan główny (pokazywany w Zapisach)')}" style="cursor:pointer;font-size:13px;color:${p.isMain ? '#d9773a' : 'var(--ink-3)'};">${p.isMain ? '★' : '☆'}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</span><span data-action="plannerStartRename" data-id="${esc(p.id)}" title="Zmień nazwę" style="cursor:pointer;color:var(--ink-3);font-size:11px;padding:0 2px;">✎</span>`}</button>
-          `).join('')}
-          ${!atLimit ? `<button class="usospp-btn-ghost" style="padding:6px 12px;font-size:12px;" data-action="plannerNewPlan">+ Nowy plan</button>` : ''}
+        <div class="usospp-card">
+          <div class="usospp-card-head">
+            <div class="usospp-card-title">Moje plany</div>
+            <div style="display:flex;gap:10px;align-items:center;">
+              <span class="usospp-muted-text" style="font-size:12px;">${plans.length}/${maxPlans}</span>
+              ${!atLimit ? `<button class="usospp-btn-ghost" style="font-size:12px;" data-action="plannerNewPlan">+ Nowy plan</button>` : `<span class="usospp-tag-muted">limit ${maxPlans} planów</span>`}
+            </div>
+          </div>
+          ${!plans.length ? `
+            <div class="usospp-empty-hint">Brak planów — utwórz pierwszy powyżej.</div>
+          ` : `
+          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;">
+            ${plans.map((p) => this.renderPlannerVersionCard(p, { activeId, renamingId, confirmId, atLimit, count: plans.length })).join('')}
+          </div>`}
+          ${mainPlan && mainPlan.id !== activeId ? `<div style="font-size:12px;color:var(--ink-3);margin-top:12px;">Oglądasz inny plan niż główny — podświetlenie „w planie” w Zapisach dotyczy planu <strong>${esc(mainPlan.name)}</strong>.</div>` : ''}
         </div>
-        <div style="display:flex;gap:14px;margin-bottom:14px;">
-          ${!atLimit ? `<a data-action="plannerDuplicatePlan" style="font-size:12px;font-weight:600;">Duplikuj ten plan</a>` : `<span class="usospp-tag-muted">limit ${maxPlans} planów</span>`}
-          ${plans.length > 1 ? `<a data-action="plannerDeletePlan" style="font-size:12px;font-weight:600;color:oklch(58% 0.19 25);">Usuń ten plan</a>` : ''}
-          ${mainPlan && mainPlan.id !== activeId ? `<a data-action="plannerSetMainPlan" data-id="${esc(activeId || '')}" style="font-size:12px;font-weight:600;">Ustaw ten jako główny</a>` : ''}
-        </div>
-        ${mainPlan && mainPlan.id !== activeId ? `<div style="font-size:12px;color:var(--ink-3);margin-bottom:14px;">Oglądasz inny plan niż główny — podświetlenie „w planie” w Zapisach dotyczy planu <strong>${esc(mainPlan.name)}</strong>.</div>` : ''}
       `;
     }
 
-    renderPlannerSubjectRow(s) {
+    renderPlannerVersionCard(p, { activeId, renamingId, confirmId, atLimit, count }) {
+      const st = (p && p.stats) || { subjects: 0, groups: 0, hours: 0, collisions: 0 };
+      const active = p.id === activeId;
+      const renaming = renamingId === p.id;
+      const confirming = confirmId === p.id;
+      const hours = `${String(st.hours).replace('.', ',')} godz.`;
+      const statsLine = `${st.subjects} ${pluralPl(st.subjects, 'przedmiot', 'przedmioty', 'przedmiotów')} · ${st.groups} ${pluralPl(st.groups, 'grupa', 'grupy', 'grup')}`;
+      return `
+        <div data-action="plannerSwitchPlan" data-id="${esc(p.id)}" title="${esc(active ? `Plan ${p.name} (otwarty)` : `Otwórz plan ${p.name}`)}" style="border:1px solid ${active ? '#d9773a' : 'var(--border)'};border-radius:14px;padding:14px 16px;background:${active ? 'var(--bg-subtle)' : 'var(--bg-card)'};cursor:pointer;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+            <span data-action="plannerSetMainPlan" data-id="${esc(p.id)}" title="${esc(p.isMain ? 'Plan główny — pokazywany w Zapisach' : 'Ustaw jako plan główny (pokazywany w Zapisach)')}" style="cursor:pointer;font-size:14px;color:${p.isMain ? '#d9773a' : 'var(--ink-3)'};flex-shrink:0;">${p.isMain ? '★' : '☆'}</span>
+            ${renaming
+              ? `<input data-plan-rename="${esc(p.id)}" data-action="plannerNoop" value="${esc(p.name)}" maxlength="40" style="flex:1;min-width:0;font-size:13px;font-weight:600;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--ink);" /><span data-action="plannerCommitRename" data-id="${esc(p.id)}" title="Zapisz nazwę" style="cursor:pointer;font-weight:700;flex-shrink:0;">✓</span><span data-action="plannerCancelRename" title="Anuluj" style="cursor:pointer;color:var(--ink-3);flex-shrink:0;">✕</span>`
+              : `<div style="font-size:13.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;">${esc(p.name)}</div>
+                 <span data-action="plannerStartRename" data-id="${esc(p.id)}" title="Zmień nazwę" style="cursor:pointer;color:var(--ink-3);font-size:12px;flex-shrink:0;">✎</span>`}
+          </div>
+          ${p.isMain ? `<div style="font-size:11px;font-weight:700;color:#d9773a;margin-bottom:8px;">PLAN GŁÓWNY</div>` : ''}
+          <div style="font-size:12px;color:var(--ink-2);margin-bottom:4px;">${statsLine}</div>
+          <div style="font-size:12px;color:var(--ink-2);margin-bottom:10px;">${hours} / tydz.${st.collisions ? ` · <span style="color:oklch(55% 0.19 25);font-weight:700;">kolizje: ${st.collisions}</span>` : ''}</div>
+          ${!st.groups ? `<div class="usospp-empty-hint" style="padding:4px 0;margin-bottom:10px;">Pusty — dodaj przedmioty poniżej.</div>` : ''}
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+            ${active ? (!atLimit ? `<a data-action="plannerDuplicatePlan" data-id="${esc(p.id)}" style="font-size:12px;font-weight:600;">Duplikuj</a>` : '') : ''}
+            ${active && count > 1 ? (confirming
+              ? `<span style="font-size:12px;font-weight:700;">Usunąć?</span><a data-action="plannerDeletePlan" data-id="${esc(p.id)}" style="font-size:12px;font-weight:700;color:oklch(58% 0.19 25);">Tak</a><a data-action="plannerCancelDelete" style="font-size:12px;">Nie</a>`
+              : `<a data-action="plannerDeletePlan" data-id="${esc(p.id)}" style="font-size:12px;font-weight:600;color:oklch(58% 0.19 25);">Usuń</a>`) : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // Left-column subjects in Zapisy mode: free first, the rest dimmed
+    // below with a reason tag (never hidden — unknown state never
+    // filters). Planowanie mode renders the plain list.
+    renderPlannerSubjectList(subjects) {
+      if (!this.state.plannerZapisyMode) return subjects.map((s) => this.renderPlannerSubjectRow(s)).join('');
+      const rank = { free: 0, unknown: 1, full: 2 };
+      return subjects
+        .map((s) => ({ s, seat: this.plannerCandidateSeatClass(s) }))
+        .sort((a, b) => rank[a.seat.cls] - rank[b.seat.cls])
+        .map(({ s, seat }) => this.renderPlannerSubjectRow(s, seat.cls === 'free' ? null : seat))
+        .join('');
+    }
+
+    renderPlannerSubjectRow(s, seat = null) {
       const url = s.detailsUrl;
       const expanded = this.state.plannerExpandedUrl === url;
       const color = subjectColor(this.plannerColorSeed(s.name), this.settings.darkMode);
       const already = this.state.plannerPicks.some((p) => subjectId(p.subjectUrl) === subjectId(url));
+      const dimmed = !!(seat && seat.cls !== 'free');
       return `
-        <div class="usospp-planner-subject" data-planner-subject="${esc(url)}">
+        <div class="usospp-planner-subject" data-planner-subject="${esc(url)}"${dimmed ? ' style="opacity:.55;"' : ''}>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;cursor:pointer;" data-action="plannerToggleSubject" data-url="${esc(url)}">
             <div style="display:flex;align-items:center;gap:8px;min-width:0;">
               <span style="width:9px;height:9px;border-radius:999px;flex-shrink:0;background:${already ? color.time : 'var(--border)'};"></span>
               <div style="min-width:0;">
                 <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.name)}</div>
-                <div style="font-size:11.5px;color:var(--ink-3);">${esc(s.code || '')}</div>
+                <div style="font-size:11.5px;color:var(--ink-3);">${esc(s.code || '')}${dimmed && seat.tag ? ` · ${esc(seat.tag)}` : ''}</div>
               </div>
             </div>
             <span style="font-size:12px;font-weight:600;color:var(--ink-3);flex-shrink:0;">${expanded ? '▲' : (already ? 'edytuj ▾' : 'dodaj ▾')}</span>
@@ -7496,13 +8354,47 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       `;
     }
 
+    // Enroll target for one "Wybrane przedmioty" subject: the first pick's
+    // badge when the seat check covered it (full meta + highlight), else a
+    // tour-subject match from cache (list works, no highlight/register —
+    // openZapisGrupy tolerates the gaps), else null (button renders
+    // disabled with a "spoza tury" tag).
+    plannerSubjectEnrollTarget(entry) {
+      const badges = this.state.plannerRejBadges || {};
+      const pick = (entry.picks || []).find((p) => (badges[p.key] || {}).groupsUrl);
+      const hit = pick ? badges[pick.key] : null;
+      if (hit) {
+        return {
+          tourKey: hit.tourKey || null, subjKod: hit.kod || null,
+          title: hit.title || entry.subjectName, kod: hit.kod || '', cykl: hit.cykl || '',
+          groupsUrl: hit.groupsUrl, registerUrl: hit.registerUrl || null, highlightNr: pick.nr,
+        };
+      }
+      const subj = this.plannerMatchTourSubject(
+        { name: entry.subjectName, detailsUrl: entry.subjectUrl }, this.plannerCachedTourSubjects());
+      if (subj && subj.groupsUrl) {
+        return {
+          tourKey: null, subjKod: subj.kod || null,
+          title: subj.name || entry.subjectName, kod: subj.kod || '', cykl: (subj.cycles && subj.cycles[0]) || '',
+          groupsUrl: subj.groupsUrl, registerUrl: null, highlightNr: null,
+        };
+      }
+      return null;
+    }
+
     renderPlannerPickGroup(entry) {
       const color = subjectColor(this.plannerColorSeed(entry.subjectName), this.settings.darkMode);
+      const enroll = this.plannerSubjectEnrollTarget(entry);
+      const enrollBtn = enroll
+        ? `<button class="usospp-btn-ghost" style="font-size:12px;flex-shrink:0;" data-action="plannerSubjectEnroll" data-tour="${esc(enroll.tourKey || '')}" data-kod="${esc(enroll.kod || '')}" data-name="${esc(enroll.title || '')}" data-cykl="${esc(enroll.cykl || '')}" data-url="${esc(enroll.groupsUrl || '')}" data-register="${esc(enroll.registerUrl || '')}" data-nr="${esc(enroll.highlightNr ?? '')}">Zapisz się →</button>`
+        : `<span style="font-size:11.5px;color:var(--ink-3);flex-shrink:0;">spoza tury</span>`;
       return `
         <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border-soft);">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="width:9px;height:9px;border-radius:999px;flex-shrink:0;background:${color.time};"></span>
             <div style="font-size:13px;font-weight:600;">${esc(entry.subjectName)}</div>
+            <span style="flex:1;"></span>
+            ${enrollBtn}
           </div>
           ${entry.picks.map((p) => `
             <div class="usospp-list-row">
@@ -7528,6 +8420,9 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       // Sessions with no usable time can't be placed on the grid — count
       // them so the grid can say so instead of dropping them silently.
       let skippedNoTime = 0;
+      // Per previewed class type filtered to zero by freeOnly: {label,
+      // ownNr} — rendered as a "no free terms" note under the grid.
+      const filteredOut = [];
       const flat = [];
       this.state.plannerPicks.forEach((p) => {
         const pendingRemoval = !!(draftSelection[p.key] && draftSelection[p.key].removed);
@@ -7590,6 +8485,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           const groupsEntry = this.state.plannerGroupsCache[meta.groupsUrl];
           if (!groupsEntry || groupsEntry.loading || !groupsEntry.data || !groupsEntry.data.supported) return;
           const draft = this.state.plannerDraftSelection[key];
+          const counter = { label: meta.classTypeLabel, total: 0, shown: 0, ownNr: null };
           groupsEntry.data.groups.forEach((g) => {
             // The class type's draft/committed choice is already on the
             // grid (dashed ghost / solid box) — ghosting the same group a
@@ -7611,23 +8507,45 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             const isCurrent = !removalPending && !!committedPick
               && (!draft || draft.nr === committedPick.nr);
             if (committedPick && !isCurrent && !removalPending) return;
+            // Groups with no timed sessions aren't a "full" verdict (their
+            // sessions land in skippedNoTime) — keep them out of the
+            // filtered-out accounting below.
+            if (!(g.sessions || []).some((s) => s.start && s.end)) return;
+            counter.total++;
+            const own = (committedPick && committedPick.nr) || ((draft && !draft.removed && draft.nr) || null);
+            if (!counter.ownNr && own) counter.ownNr = own;
+            // Block-click preview ("wolne terminy") skips confirmed-full
+            // groups; unknown stays (never filter on unknown). The
+            // configurator's own preview shows all and dims full ones.
+            if (meta.freeOnly) {
+              const freeSeats = this.plannerCandSeats(subjectName, meta.classTypeLabel, g.nr, expandedUrl);
+              if (freeSeats && freeSeats.known && freeSeats.full) return;
+            }
+            let pushed = false;
             (g.sessions || []).forEach((s) => {
               if (!s.start || !s.end) { skippedNoTime++; return; }
+              pushed = true;
               flat.push({
                 day: s.day, start: s.start, end: s.end, place: s.place, weeks: s.weeks,
-                subjectName, classTypeShort: shortClassType(meta.classTypeLabel), teacher: g.teacher,
+                subjectName, subjectUrl: expandedUrl, classTypeShort: shortClassType(meta.classTypeLabel), teacher: g.teacher,
                 seed: this.plannerColorSeed(subjectName), pickKey: `cand::${key}::${g.nr}`, key,
                 draft: false, pendingRemoval: false, candidate: true, candGroup: `${key}::${g.nr}`,
                 current: isCurrent,
                 candRef: { key, groupsUrl: meta.groupsUrl, classTypeLabel: meta.classTypeLabel, nr: g.nr, teacher: g.teacher },
               });
             });
+            if (pushed && !isCurrent) counter.shown++;
           });
+          if (meta.freeOnly && counter.total > 0 && counter.shown === 0) filteredOut.push(counter);
         });
       }
 
+      // "No free terms" notes for previewed types filtered to zero —
+      // shared by the empty and non-empty returns below (an all-filtered
+      // preview leaves flat empty, so the early return must show them too).
+      const filteredNotesHtml = filteredOut.map((c) => `<div style="font-size:12px;color:var(--ink-3);margin-bottom:10px;">${c.ownNr ? `${esc(c.label)}: Twój termin (gr. ${esc(String(c.ownNr))}) to jedyny wolny — pozostałe grupy pełne.` : `${esc(c.label)}: brak wolnych terminów — wszystkie grupy pełne.`}</div>`).join('');
       if (!flat.length) {
-        return `<div class="usospp-empty-hint">Dodaj przedmioty po lewej, żeby zobaczyć tu podgląd planu.${skippedNoTime ? ` Pominięto ${skippedNoTime} ${skippedNoTime === 1 ? 'termin' : 'terminów'} bez podanych godzin.` : ''}</div>`;
+        return `${filteredNotesHtml}<div class="usospp-empty-hint">${filteredOut.length ? 'Podgląd nie ma nic do pokazania — wszystkie terminy pełne.' : `Dodaj przedmioty po lewej, żeby zobaczyć tu podgląd planu.${skippedNoTime ? ` Pominięto ${skippedNoTime} ${skippedNoTime === 1 ? 'termin' : 'terminów'} bez podanych godzin.` : ''}`}</div>`;
       }
 
       const allMins = flat.flatMap((e) => [toMin(e.start), toMin(e.end)]).filter((n) => n !== null);
@@ -7698,6 +8616,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       return `
         ${conflicts.size ? `<div style="font-size:12px;font-weight:600;color:oklch(55% 0.19 25);margin-bottom:10px;">⚠ Wybrane zajęcia nakładają się w czasie — zaznaczone poniżej.${conflictInvolvesDraft ? ' (w tym Twój niezapisany wybór)' : ''}</div>` : ''}
         ${skippedNoTime ? `<div style="font-size:12px;color:var(--ink-3);margin-bottom:10px;">Pominięto ${skippedNoTime} ${skippedNoTime === 1 ? 'termin' : skippedNoTime % 10 >= 2 && skippedNoTime % 10 <= 4 && (skippedNoTime % 100 < 12 || skippedNoTime % 100 > 14) ? 'terminy' : 'terminów'} bez podanych godzin — nie pokazano ${skippedNoTime === 1 ? 'go' : 'ich'} na siatce.</div>` : ''}
+        ${filteredNotesHtml}
         <div class="usospp-timetable" data-planner-grid>
           <div class="usospp-tt-hours" style="height:${totalHeight}px;">
             ${hours.map((h) => `<div class="usospp-tt-hour" style="top:${(h - hourStart) * ROW_H}px;">${h}:00</div>`).join('')}
@@ -7719,17 +8638,26 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
                     const weeksTag = weeksLabel(e.weeks);
                     // Direction A badge: seat state of this exact group in
                     // its tour (see plannerCheckRejSeats). Drafts have no
-                    // committed group yet, so they never carry one.
-                    const badge = (!e.draft && e.key) ? (this.state.plannerRejBadges || {})[e.key] : null;
+                    // committed group yet, so they never carry one. Badges
+                    // (and counters) render only in Zapisy mode — Planowanie
+                    // keeps clean blocks; the data stays cached underneath.
+                    const badge = (this.state.plannerZapisyMode && !e.draft && e.key) ? (this.state.plannerRejBadges || {})[e.key] : null;
                     const rejLinked = !!(badge && badge.groupsUrl);
                     const rejClass = badge && badge.known ? (badge.full ? ' usospp-tt-entry--rej-full' : ' usospp-tt-entry--rej-ok') : '';
+                    const rejClickHint = this.state.plannerZapisyMode ? ' — kliknij, aby pokazać wolne terminy' : '';
                     const rejTitle = rejLinked
-                      ? ` — zapisy (${badge.tourKey}): ${badge.enrollment === 'registered' ? 'jesteś zapisany na przedmiot; ' : ''}${badge.seatsText ? `grupa ${badge.nr}: ${badge.full ? 'brak miejsc' : `${badge.seatsText} wolne`} — kliknij, żeby zobaczyć grupy` : 'kliknij, żeby zobaczyć grupy'}`
+                      ? ` — zapisy (${badge.tourKey}): ${badge.enrollment === 'registered' ? 'jesteś zapisany na przedmiot; ' : ''}${badge.seatsText ? `grupa ${badge.nr}: ${badge.full ? 'brak miejsc' : `${badge.seatsText} wolne`}${rejClickHint}` : `grupy${rejClickHint}`}`
                       : '';
+                    // A saved block whose class type is currently previewed
+                    // gets the half-ghost mark (dashed outline, no layout
+                    // shift): it reads as current AND as part of the set.
+                    // (The hybrid ghost underneath is painted over by design,
+                    // so the outline has to live on this block to be seen.)
+                    const previewedType = !!(e.key && !e.draft && this.state.plannerPreviewKeys[e.key]);
                     const full = [e.subjectName, e.teacher, e.place].filter(Boolean).join(' — ')
                       + (weeksTag ? ` — co drugi tydzień (${e.weeks === 'even' ? 'parzyste' : 'nieparzyste'})` : '')
                       + (e.draft ? ' (jeszcze niedodane)' : e.pendingRemoval ? ' (zostanie usunięte po zapisaniu)' : e.willBeReplaced ? ` (zostanie zastąpione grupą ${e.replacedByNr} po zapisaniu)` : '')
-                      + rejTitle;
+                      + rejTitle + (previewedType ? ' — ten typ jest podglądany' : '');
                     const coveredBy = e.coveredBy || [];
                     const coveredTitle = coveredBy.length
                       ? `Podglądane grupy na ten termin: ${coveredBy.map((c) => `gr. ${c.nr}${c.sameKey ? ' (zastąpi obecną)' : ''}`).join(', ')}`
@@ -7740,18 +8668,16 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
                         ? `background:transparent;border:2px dashed ${removeColor};opacity:0.55;`
                         : e.willBeReplaced
                           ? `background:transparent;border:2px dashed ${color.time};opacity:0.6;`
-                          : `background:${color.bg};`;
+                          : `background:${color.bg};${previewedType ? `outline:2px dashed ${color.time};outline-offset:-2px;` : ''}`;
                     const struck = e.pendingRemoval || e.willBeReplaced;
                     const labelStyle = `color:${e.pendingRemoval ? removeColor : color.label};${struck ? 'text-decoration:line-through;' : ''}`;
-                    const rejAction = badge && badge.groupsUrl
-                      ? ` data-action="plannerOpenRejGroups" data-pick-key="${esc(e.key)}" style="top:${top}px;height:${height}px;${entryStyle}cursor:pointer;"`
-                      : e.subjectUrl
-                        ? ` data-action="plannerFocusSubject" data-url="${esc(e.subjectUrl)}" style="top:${top}px;height:${height}px;${entryStyle}cursor:pointer;"`
-                        : ` style="top:${top}px;height:${height}px;${entryStyle}"`;
-                    // Clicking a grid block expands its subject in the left
-                    // list (plannerFocusSubject) — except blocks linked to
-                    // Zapisy, which keep their tour action.
-                    const focusNote = (badge && badge.groupsUrl) || !e.subjectUrl ? '' : ' — kliknij, aby pokazać na liście';
+                    // Block clicks never navigate (see plannerGridBlockAction):
+                    // both modes focus the subject and toggle its ghosts
+                    // (free-only in Zapisy); Zapisy navigation lives only in
+                    // explicit buttons.
+                    const { attr: rejAction, note: focusNote } = this.plannerGridBlockAction({
+                      top, height, entryStyle, key: e.key, subjectUrl: e.subjectUrl,
+                    });
                     const rejBadgeHtml = rejLinked
                       ? ` <span class="usospp-tt-entry-rej${badge.full ? ' full' : ''}">${badge.enrollment === 'registered' ? '✓ ' : ''}${esc(badge.seatsText || 'zapisy')}</span>`
                       : '';
@@ -7813,19 +8739,26 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           .join('');
         const byGid = new Map();
         entries.forEach((e) => { if (!byGid.has(e.candGroup)) byGid.set(e.candGroup, e); });
-        const rows = [...byGid.values()].map((e) => `
-          <div class="usospp-cand-row${riskyGids.has(e.candGroup) ? ' usospp-cand-row--risk' : ''}" data-cand-row="1"
+        const rows = [...byGid.values()].map((e) => {
+          const rowSeats = this.plannerCandSeats(first.subjectName, e.candRef.classTypeLabel, e.candRef.nr, e.subjectUrl);
+          const rowFull = !!(this.state.plannerZapisyMode && rowSeats && rowSeats.known && rowSeats.full);
+          const rowAutoTag = this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr);
+          const rowSeatsTag = (!rowAutoTag && rowSeats && rowSeats.known && !rowSeats.full && rowSeats.seatsText)
+            ? ` <span class="usospp-tt-entry-rej">${esc(rowSeats.seatsText)}</span>` : '';
+          return `
+          <div class="usospp-cand-row${riskyGids.has(e.candGroup) ? ' usospp-cand-row--risk' : ''}" data-cand-row="1"${rowFull ? ' style="opacity:.5;"' : ''}
                data-cand-group="${esc(e.candGroup)}" data-action="plannerSelectGroup"
                data-key="${esc(e.candRef.key)}" data-groups-url="${esc(e.candRef.groupsUrl)}"
                data-nr="${esc(e.candRef.nr)}" data-class-type-label="${esc(e.candRef.classTypeLabel)}">
             <div class="usospp-cand-row-main">
               Grupa ${esc(e.candRef.nr)}
               <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:10px;padding:1px 7px;">${esc(e.classTypeShort)}</span>
-              ${riskyGids.has(e.candGroup) ? `<span class="usospp-cand-risk-dot" title="${esc(e.replaceNr ? 'Nachodzi na obecny termin — wybór go zastąpi' : 'Nachodzi na zajęcia już wybrane w planie')}"></span>` : ''}${this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr)}
+              ${riskyGids.has(e.candGroup) ? `<span class="usospp-cand-risk-dot" title="${esc(e.replaceNr ? 'Nachodzi na obecny termin — wybór go zastąpi' : 'Nachodzi na zajęcia już wybrane w planie')}"></span>` : ''}${rowAutoTag}${rowFull ? ' <span class="usospp-tt-entry-rej full">pełna</span>' : ''}${rowSeatsTag}
             </div>
             <div class="usospp-cand-row-sub">${esc(e.candRef.teacher || 'brak danych o prowadzącym')}${e.place ? ` · ${esc(shortPlace(e.place))}` : ''}</div>
           </div>
-        `).join('');
+          `;
+        }).join('');
         const labels = [...new Set(entries.map((e) => e.classTypeShort))];
         const color = subjectColor(this.plannerColorSeed(first.subjectName), dark);
         const weeksTag = weeksLabel(first.weeks);
@@ -7888,6 +8821,15 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     renderPlannerCandBox(e, { top, height, dark, stacked, risky }) {
       const color = subjectColor(e.seed, dark);
       const weeksTag = weeksLabel(e.weeks);
+      // Zapisy mode dims preview ghosts of confirmed-full groups (same
+      // cached tour data as the subject list) so the eye lands on free ones.
+      // The N/M counter shows whenever known, in both modes (auto-mode map
+      // wins when it has the group, to avoid double tags).
+      const zapSeats = this.plannerCandSeats(e.subjectName, e.candRef.classTypeLabel, e.candRef.nr, e.subjectUrl);
+      const dimFull = !!(this.state.plannerZapisyMode && zapSeats && zapSeats.known && zapSeats.full);
+      const autoTag = this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr);
+      const seatsTag = (!autoTag && zapSeats && zapSeats.known && !zapSeats.full && zapSeats.seatsText)
+        ? ` <span class="usospp-tt-entry-rej">${esc(zapSeats.seatsText)}</span>` : '';
       const riskyNote = risky
         ? (e.replaceNr ? ` — nachodzi na obecny termin (gr. ${e.replaceNr}) — wybór go zastąpi` : ' — nachodzi na zajęcia już wybrane w planie')
         : '';
@@ -7902,10 +8844,10 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
              data-cand-group="${esc(e.candGroup)}" data-action="plannerSelectGroup"
              data-key="${esc(e.candRef.key)}" data-groups-url="${esc(e.candRef.groupsUrl)}"
              data-nr="${esc(e.candRef.nr)}" data-class-type-label="${esc(e.candRef.classTypeLabel)}"
-             style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:0.55;"
-             title="${esc(full)}">
-          <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
-           <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)}${risky ? ' ⚠' : ''}${this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr)}</div>
+              style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:${dimFull ? '0.3' : '0.55'};"
+              title="${esc(full)}">
+           <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
+            <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)}${risky ? ' ⚠' : ''}${autoTag}${dimFull ? ' <span class="usospp-tt-entry-rej full">pełna</span>' : ''}${seatsTag}</div>
           ${e.teacher ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(e.teacher)}</div>` : ''}
           ${e.place ? `<div class="usospp-tt-entry-meta" style="color:${color.meta};">${esc(shortPlace(e.place))}</div>` : ''}
         </div>

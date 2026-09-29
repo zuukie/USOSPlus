@@ -210,3 +210,101 @@
   padding: 8px 12px;
 }
 .usospp-planner-tourbanner a { cursor: pointer; }
+
+/* @page celowo na top level (poza @media print): zagnieżdżone reguły
+   @page bywają ignorowane, a @page i tak dotyczy tylko paged media.
+   W dialogu drukowania Marginesy muszą być na Domyślnych — każda inna
+   wartość nadpisuje @page i wtedy przeglądarka dokleja własne
+   nagłówki/stopki, których CSS nie jest w stanie wyłączyć. */
+@page { margin: 0; size: A4 landscape; }
+
+/* Print-only brand wordmark in the plan card head (screen: hidden). Pure
+   CSS per design/USOS++ Brand System.dc.html (wordmark row): 16px 700,
+   ink + orange "++". Ink comes from the forced-light print palette. */
+.usospp-print-brand { display: none; }
+
+/* Plan export to PDF (see exportPlanPdf in app.js): printing is only ever
+   triggered with body.usospp-print-plan on, so these rules stay inert the
+   rest of the time. Everything except the plan card is hidden — classic
+   USOS page chrome (body siblings of #usospp-container), panel sidebar,
+   topbar, beta notice and any open modal — and the plan's own buttons,
+   toggles, week nav and loading hints go too. The title + week label stay.
+   Plain @page above (no named pages — the `page:` property proved
+   unreliable in the wild): margin 0 so the browser prints no date/title/URL
+   header or footer of its own, fixed A4 landscape (the grid needs the
+   width; the fluid list looks fine there too; Layout can still be
+   overridden in the print dialog). Breathing room comes from our own
+   padding on the container instead. Light palette is forced regardless of
+   the panel theme (ink saver); print-color-adjust keeps the subject block
+   colors on paper. Fit-to-one-page is an inline zoom measured in JS (see
+   planPrintZoom, landscape box); break-inside keeps the card on a single
+   sheet. */
+@media print {
+  body.usospp-print-plan #usospp-container { padding: 12mm; }
+  body.usospp-print-plan > :not(#usospp-container) { display: none !important; }
+  body.usospp-print-plan #usospp-container .usospp-sidebar,
+  body.usospp-print-plan #usospp-container .usospp-topbar,
+  body.usospp-print-plan #usospp-container .usospp-beta-notice,
+  body.usospp-print-plan #usospp-container [data-modal-root],
+  body.usospp-print-plan .usospp-plan-head-actions,
+  body.usospp-print-plan .usospp-plan-controls,
+  body.usospp-print-plan .usospp-plan-loading { display: none !important; }
+  body.usospp-print-plan #usospp-container .usospp-root {
+    --bg-page: #ffffff;
+    --bg-card: #ffffff;
+    --bg-subtle: #f4f4f5;
+    --border: #e4e4e7;
+    --border-soft: #ececf0;
+    --ink: #18181b;
+    --ink-2: #3f3f46;
+    --ink-3: #71717a;
+    color-scheme: light;
+    min-height: auto;
+    display: block;
+  }
+  body.usospp-print-plan #usospp-container .usospp-main,
+  body.usospp-print-plan #usospp-container .usospp-content {
+    padding: 0;
+    margin: 0;
+    max-width: none;
+    overflow: visible;
+  }
+  body.usospp-print-plan .usospp-plan-card {
+    border: none;
+    box-shadow: none;
+    margin: 0;
+    padding: 0;
+    break-inside: avoid;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  body.usospp-print-plan .usospp-plan-card .usospp-card-head { margin-bottom: 6px; }
+  body.usospp-print-plan .usospp-plan-card .usospp-card-title { font-size: 15px; }
+  body.usospp-print-plan .usospp-print-brand { display: flex; align-items: center; }
+  body.usospp-print-plan .usospp-print-brand-word {
+    font-family: 'General Sans', system-ui, sans-serif;
+    font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink);
+  }
+  body.usospp-print-plan .usospp-print-brand-word em { font-style: normal; color: #d9773a; }
+  body.usospp-print-plan .usospp-plan-week { margin-top: 0; }
+  body.usospp-print-plan .usospp-tt-entry,
+  body.usospp-print-plan .usospp-list-row {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  /* Hour lines are a repeating-linear-gradient background on the day
+     columns — without exact they never reach paper. Day separators don't
+     exist on screen (just gaps), so print adds them; both use a slightly
+     stronger line than --border-soft for readability on white. */
+  body.usospp-print-plan .usospp-tt-daybody {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+    background-color: #fafafa;
+    background-image: repeating-linear-gradient(to bottom, #d4d4d8 0, #d4d4d8 1px, transparent 1px, transparent 100%);
+  }
+  body.usospp-print-plan .usospp-tt-daycol + .usospp-tt-daycol {
+    border-left: 1px solid #d4d4d8;
+    padding-left: 6px;
+  }
+}

@@ -15,7 +15,10 @@
 // variants doesn't move the truth the rest of the plugin points at.
 (function () {
   const KEY = 'usospp_planner';
-  const MAX_PLANS = 5;
+  // Four version cards fill one row of the "Moje plany" grid — more would
+  // wrap and defeat the one-row layout. Plans saved under the old limit
+  // stay (grandfathered, never trimmed); only new/duplicate is blocked.
+  const MAX_PLANS = 4;
 
   function genId() {
     return `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;

@@ -1,8 +1,17 @@
 # Co nowego w USOS++
 
+## 0.9.9
+
+- **Generator: tryb Planowanie i Zapisy** — przełącznik nad podglądem planu; w Zapisach bloki i lista pokazują wolne miejsca, w Planowaniu plan jest czysty.
+- **Generator: klik pokazuje terminy** — klik bloku rozwija przedmiot i odpala duchy (wszystkie w Planowaniu, tylko wolne z licznikami w Zapisach), podglądany zapisany blok ma outline, a Wybrane przedmioty mają przycisk zapisów.
+- **Generator: sekcja Moje plany** — wersje planów w osobnej sekcji z kartami (przedmioty, grupy, godziny, kolizje, plan główny) zamiast zakładek; usuwanie z potwierdzeniem, bez przycisku czyszczenia.
+
+- **Sale i prowadzący w planie** — bloki zajęć pokazują salę z budynkiem i prowadzącego, dociągane ze stron grup.
+- **Eksport PDF i PNG** — wydruk planu nie zawiera już daty, tytułu ani adresu strony, zawsze mieści się na jednej stronie A4 w poziomie. Eksport planu także do formatu PNG.
+
 ## 0.9.8
 
-- **Plan zajęć z Twoich grup** — zamiast suchego terminarza USOSa widzisz plan ułożony z grup, na które jesteś zapisany: przełącznik Aktualny/Ogólny, widok Tygodnia i Listy, nawigacja między tygodniami, a po kliknięciu zajęć szczegóły z salą, budynkiem i prowadzącym.
+- **Plan zajęć z Twoich grup** — zamiast suchego terminarza USOSa widzisz plan ułożony z grup, na które jesteś zapisany: przełącznik Dynamiczny/Ogólny, widok Tygodnia i Listy, nawigacja między tygodniami, a po kliknięciu zajęć szczegóły z salą, budynkiem i prowadzącym.
 - **Panel mówi, co dalej** — box Zajęcia odlicza na żywo do najbliższych terminów (21 dni do przodu), a obok Podsumowanie tygodnia pokazuje liczbę zajęć i godzin, najbardziej zapracowany dzień i dni wolne.
 - **Studenci — kto z Tobą studiuje** — nowy widok zbiera osoby z list Twoich grup w jedną listę ze wspólnymi przedmiotami. Jest wyszukiwarka po nazwisku i przedmiocie, wykluczanie całych przedmiotów oraz tryb „Bez wykładów”; filtry zapamiętują się między wejściami.
 - **Generator ostrzega przed kolizjami** — zmiana terminu jasno pokazuje, która grupa zostanie zastąpiona (na siatce i przy przycisku zapisu), a nakładające się terminy widać także w podglądzie — łącznie z alternatywnymi grupami tego samego przedmiotu.
@@ -12,6 +21,7 @@
 - **Studenci bez wieszania** — odświeżenie strony na Studenciach, Egzaminach czy Zapisach dociąga dane samo, a gdyby coś się zawiesiło, jest przycisk „Spróbuj ponownie”.
 - **Nowe menu rozszerzenia** — więcej skrótów (Studenci, Mapa, Zapisy, Planer) z własnymi ikonami, skróty przełączają widok w otwartej karcie, widać najbliższe zajęcia, a wyłącznik całej wtyczki trafił na dół jako Strefa niebezpieczna.
 - **Tryb ciemny bez białych mignięć** — przewijanie za krawędź ekranu nie błyska już na biało, w panelu i w menu.
+- **Eksport planu do PDF i PNG** — przy planie są przyciski Eksport PDF (sam plan na jednej stronie, bez dopisków przeglądarki) i Eksport PNG (obrazek tego, co widać, z logo USOS++); pustej soboty i niedzieli już nie pokazuje.
 
 ## 0.9.7
 
