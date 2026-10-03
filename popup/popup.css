@@ -138,3 +138,17 @@ html[data-theme="light"] { background-color: oklch(97.5% 0.006 60); color-scheme
 .pp-quick-action.disabled {
   opacity: 0.5; cursor: not-allowed; filter: grayscale(1);
 }
+
+/* Kill-switch-off state: red banner + everything dead. The banner's
+   "tutaj" link routes to Zarządzaj funkcjami (goFeatures), where the
+   master switch lives in the danger zone. */
+.pp-disabled-banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: oklch(95% 0.05 30); border: 1px solid var(--ink-critical);
+  border-radius: 12px; padding: 10px 12px;
+  font-size: 12px; color: var(--ink); line-height: 1.4;
+}
+.pp-root[data-theme="dark"] .pp-disabled-banner { background: oklch(28% 0.05 30); }
+.pp-disabled-banner a { color: var(--ink-critical); text-decoration: underline; font-weight: 700; }
+.pp-main-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.pp-quick-home.disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }

@@ -155,10 +155,34 @@
       mountMaintenanceNotice();
       return;
     }
+    // Lazy results ride outside collectAll — the participants roster in
+    // particular. Without this carry-over, every autorefresh tick wipes a
+    // loaded roster from under open plan modals: session details fall back
+    // to "…", and an open group list sticks on "Pobieranie listy…" with no
+    // trigger left to fetch it.
+    if (app.data && app.data.participantsResultLoaded && !data.participantsResultLoaded) {
+      data.participantsResult = app.data.participantsResult;
+      data.participantsResultLoaded = true;
+    }
+    // Same ride for group details (room/teacher/meetings behind the
+    // Dynamiczny plan): collectAll doesn't fetch them, so without this
+    // every autorefresh tick empties the concrete plan until the next
+    // plan-view entry re-triggers the lazy fetch.
+    if (app.data && app.data.groupDetails && !data.groupDetails) {
+      data.groupDetails = app.data.groupDetails;
+    }
     app.data = data;
     app.render();
     app.checkNewsUpdate();
     maybeUpdateBadge(data);
+    // Race cover: the tick landed mid-fetch (the promise mutated the
+    // already-replaced object) or the roster never loaded at all — an open
+    // plan modal would sit on its loading state forever, so re-kick the
+    // shared lazy trigger (no-op when loaded or already in flight).
+    if ((app.state.planGroupList || app.state.planSessionModal) && !data.participantsResultLoaded
+      && typeof app.ensureParticipantsResult === 'function') {
+      app.ensureParticipantsResult(() => app.setModalState({}));
+    }
   }
 
   function clearBadge() {

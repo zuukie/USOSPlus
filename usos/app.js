@@ -86,6 +86,14 @@
     return toMin(a.start) < toMin(b.end) && toMin(b.start) < toMin(a.end);
   }
 
+  // Side-by-side lane geometry for one planner-preview-grid box. Pure time
+  // overlap (P/N included — same convention as renderPlanWeekGrid); single
+  // boxes keep the full-width CSS default (left:3px;right:3px).
+  function plannerLaneStyle(lane, laneCount) {
+    if (!laneCount || laneCount <= 1) return '';
+    return `left:calc(3px + (100% - 6px) * ${lane} / ${laneCount});right:auto;width:calc((100% - 6px) / ${laneCount});`;
+  }
+
   // Stats for one saved planner plan (the "Moje plany" cards): distinct
   // subjects, picks (= groups), weekly hours and same-day overlapping
   // session pairs (parity-aware via sessionsOverlap — P/N never collide).
@@ -173,25 +181,52 @@
     const hours = [];
     for (let h = hourStart; h <= hourEnd; h++) hours.push(h);
     const days = (Array.isArray(dayKeys) ? dayKeys : []).map((dk) => {
+      // Minute-based order — USOS hours aren't zero-padded ("9:15"), so a
+      // string sort puts 11:15 before 9:15. Unparsable times sink last.
       const sorted = list.filter((e) => e.day === dk)
-        .sort((a, b) => (a.start || '').localeCompare(b.start || ''));
-      const lanes = [];
-      const blocks = sorted.map((e) => {
-        let lane = lanes.findIndex((end) => (e.start || '') >= end);
-        if (lane === -1) { lane = lanes.length; lanes.push(e.end || ''); }
-        else lanes[lane] = e.end || '';
-        const startMin = toMin(e.start);
-        const endMin = toMin(e.end);
-        return {
-          e,
-          lane,
-          laneCount: 0, // filled in below, once all lanes are known
-          top: (startMin - hourStart * 60) * (PLAN_GRID_ROW_H / 60),
-          height: Math.max(36, (endMin - startMin) * (PLAN_GRID_ROW_H / 60)),
-        };
+        .sort((a, b) => (toMin(a.start) ?? Infinity) - (toMin(b.start) ?? Infinity)
+          || (toMin(a.end) ?? Infinity) - (toMin(b.end) ?? Infinity));
+      // Overlap groups (connected by time overlap): lanes are assigned
+      // inside each group and laneCount is per group, so a lone block
+      // keeps full width even on a day that has an N/P pair elsewhere.
+      // Lane reuse compares MINUTES — the old string comparison wrongly
+      // reused lane 0 ("9:15" >= "11:00" is true lexicographically), so
+      // the second of two same-slot blocks painted exactly over the
+      // first. Same greedy scheme as the planner grid below.
+      const groups = [];
+      let cur = [];
+      sorted.forEach((e) => {
+        const s = toMin(e.start);
+        if (cur.length && (s === null || !cur.some((a) => {
+          const ae = toMin(a.end);
+          return ae !== null && ae > s;
+        }))) { groups.push(cur); cur = []; }
+        cur.push(e);
       });
-      const laneCount = Math.max(1, lanes.length);
-      blocks.forEach((b) => { b.laneCount = laneCount; });
+      if (cur.length) groups.push(cur);
+      const blocks = [];
+      groups.forEach((g) => {
+        const laneEnds = [];
+        const assigned = g.map((e) => {
+          const s = toMin(e.start);
+          let lane = s === null ? -1 : laneEnds.findIndex((end) => end !== null && s >= end);
+          if (lane === -1) { lane = laneEnds.length; laneEnds.push(null); }
+          laneEnds[lane] = toMin(e.end);
+          return { e, lane };
+        });
+        const laneCount = Math.max(1, laneEnds.length);
+        assigned.forEach(({ e, lane }) => {
+          const startMin = toMin(e.start);
+          const endMin = toMin(e.end);
+          blocks.push({
+            e,
+            lane,
+            laneCount,
+            top: (startMin - hourStart * 60) * (PLAN_GRID_ROW_H / 60),
+            height: Math.max(36, (endMin - startMin) * (PLAN_GRID_ROW_H / 60)),
+          });
+        });
+      });
       return { day: dk, blocks };
     });
     return { hourStart, hourEnd, rowH: PLAN_GRID_ROW_H, totalHeight, hours, days };
@@ -455,6 +490,10 @@
     { id: 'podania', label: 'Podania', icon: 'send' },
     { id: 'ankiety', label: 'Ankiety', icon: 'star' },
     { id: 'studenci', label: 'Studenci', icon: 'users' },
+    // mLegitymacja is read-only status display (ordering/cancel/revoke
+    // stay in classic USOS by project policy) — same low-traffic shelf
+    // as the other "Moje studia" pages above, not a top-level slot.
+    { id: 'mlegitymacja', label: 'mLegitymacja', icon: 'idcard' },
     // USOSmail's own UI is 100% client-rendered against an internal,
     // CSRF-walled endpoint whose own error message says not to use it as an
     // API — and every USOSweb page sends X-Frame-Options: deny, so it can't
@@ -573,6 +612,7 @@
     pin: '<path d="M10 2.6c-3.3 0-6 2.6-6 5.9 0 4.4 6 9.1 6 9.1s6-4.7 6-9.1c0-3.3-2.7-5.9-6-5.9z"></path><circle cx="10" cy="8.3" r="2.1"></circle>',
     users: '<circle cx="7" cy="7" r="3"></circle><path d="M2.5 16.5a4.5 4.5 0 0 1 9 0"></path><circle cx="13.5" cy="8" r="2.4"></circle><path d="M14.5 12.6a3.6 3.6 0 0 1 3 3.9"></path>',
     lock: '<rect x="5" y="9" width="10" height="7.5" rx="1.5"></rect><path d="M7 9V6.3a3 3 0 0 1 6 0V9"></path>',
+    idcard: '<rect x="2" y="4.5" width="16" height="11" rx="2"></rect><circle cx="7" cy="9" r="1.8"></circle><path d="M4.6 13.2a2.6 2.6 0 0 1 4.8 0"></path><line x1="12" y1="8" x2="16" y2="8"></line><line x1="12" y1="11" x2="16" y2="11"></line>',
   };
 
   function icon(name, size = 19) {
@@ -644,6 +684,44 @@
     `;
   }
 
+  // Status badge for the mLegitymacja card header — design-system tones
+  // (.usospp-badge-positive/-warning/-negative from design-system.css),
+  // matched against the raw <usos-tag> text, first hit wins. Anything
+  // unrecognised (Anulowane/Unieważnione/…) stays neutral, same subtle
+  // look renderInfoTableRow uses for its status badges.
+  function mlegStatusBadge(status) {
+    const s = (status || '').trim();
+    if (!s) return '';
+    const tone = /^do odbioru|^odebran/i.test(s) ? 'usospp-badge-positive'
+      : /^oczekuje|^w trakcie/i.test(s) ? 'usospp-badge-warning'
+      : /^b[lł][aą]d/i.test(s) ? 'usospp-badge-negative' : '';
+    const style = tone ? '' : ' style="background:var(--bg-subtle);color:var(--ink-2);"';
+    return `<span class="usospp-badge ${tone}"${style}>${esc(s)}</span>`;
+  }
+
+  // Status legend for the mLegitymacja view — meanings paraphrased from
+  // the help-dialog on dla_stud/studia/mlegitymacja/index (verified live
+  // 2026-10-01). Matched against the raw <usos-tag> text, first hit wins.
+  const MLEG_STATUS_INFO = [
+    [/^oczekuje/i, 'Zamówienie zostało złożone. Uczelnia nie przekazała go jeszcze do systemu Ministerstwa Cyfryzacji.'],
+    [/^w trakcie/i, 'Zamówienie zostało przekazane i jest przetwarzane przez system Ministerstwa Cyfryzacji — wydanie kodów trwa zazwyczaj kilka minut.'],
+    [/^do odbioru/i, 'Zamówienie gotowe — możesz dodać mLegitymację do aplikacji mObywatel.'],
+    [/^odebran/i, 'mLegitymacja została dodana do aplikacji mObywatel.'],
+    [/^b[lł][aą]d/i, 'Przetwarzanie zamówienia zakończyło się błędem — szczegóły sprawdź w klasycznym USOS.'],
+    [/^anulowane/i, 'Zamówienie (lub mLegitymacja) zostało anulowane.'],
+    [/^uniewa[zż]nione/i, 'Uczelnia unieważniła zamówienie lub mLegitymację — zwykle z powodu utraty uprawnień.'],
+  ];
+
+  // "2026-10-01 11:11:49" / "2027-03-31" (local-time[datetime] on the
+  // mLegitymacja page) -> "1.10.2026, 11:11" / "31.03.2027". Pass-through
+  // on anything unparseable rather than showing nothing.
+  function formatMlegDate(raw) {
+    if (!raw) return '';
+    const m = String(raw).match(/(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (!m) return String(raw);
+    const date = `${+m[3]}.${+m[2]}.${m[1]}`;
+    return m[4] ? `${date}, ${m[4]}:${m[5]}` : date;
+  }
   // One row from adapter.genericInfoTable (stypendia/sprawdziany/podania/
   // ankiety) — same "unknown columns, pick a sensible title/status out of
   // whatever's there" approach as renderPaymentRow, just without a payments-
@@ -711,6 +789,7 @@
     podania: ['Podania', 'Złożone wnioski i ich rozpatrzenie'],
     ankiety: ['Ankiety', 'Ankiety do wypełnienia'],
     studenci: ['Studenci', 'Wspólne zajęcia z Twoich grup'],
+    mlegitymacja: ['mLegitymacja', 'Status zamówienia legitymacji mobilnej'],
     ustawienia: ['Ustawienia', 'Profil, wygląd i powiadomienia'],
     subjectPage: ['Przedmiot', 'Szczegóły z katalogu USOS'],
     catalogPage: ['Katalog', 'Szczegóły z katalogu USOS'],
@@ -796,6 +875,7 @@
               detailsUrl: saved.zapisGrupyDetailsUrl || '',
               groupsUrl: saved.zapisGrupyGroupsUrl || '',
               registerUrl: saved.zapisGrupyRegisterUrl || '',
+              returnView: saved.zapisGrupyReturnView === 'planer' ? 'planer' : null,
             };
           }
         } else {
@@ -880,6 +960,7 @@
         // block (direction A).
         zapisGrupyMainPlan: null,
         zapisGrupyHighlightNr: null,
+        zapisGrupyReturnView: initialZapisGrupy ? initialZapisGrupy.returnView : null,
         subjectBackView: initialSubjectBackView,
         subjectUrl: initialSubjectUrl,
         subjectLoading: initialView === 'subjectPage',
@@ -962,6 +1043,14 @@
         // id of the plan with an armed delete confirm ("Usuń?" → Potwierdź),
         // or null. Disarmed by switching plans or firing elsewhere.
         plannerConfirmDeleteId: null,
+        // Subjects added via "Dodaj przedmiot spoza listy" (see
+        // plannerSelectSearchSubject), keyed by plan: planId -> subjectId ->
+        // {subjectUrl, subjectName}. A custom subject stays on its plan's
+        // list even after its last pick is removed (plannerSubjectCandidates
+        // unions this with the pick-derived customs) — otherwise it would
+        // vanish and have to be searched again. Session-only: after a
+        // reload, picks (persisted in the store) imply the customs again.
+        plannerCustomSubjects: {},
         // Direction A of the Plan × Zapisy bridge: seat badges on the
         // visible grid's blocks. plannerZapisyMode (Planowanie/Zapisy
         // toggle above the grid) decides what block clicks do — Zapisy
@@ -1003,6 +1092,7 @@
         plannerAutoOnlyFreeSeats: true,
         // Fresh tour seat map for the "pełna" tags on group rows/popovers:
         // `${kod}||${normalized label}||${nr}` -> { full, seatsText }.
+        // seatsText counts TAKEN seats ("23/26", 'pełna' when full).
         // Filled by generate-with-constraint; absent until then.
         plannerAutoSeatMap: {},
         plannerAutoStatus: 'idle', // idle | fetching | generating | done | failed
@@ -1015,8 +1105,6 @@
       this._onInput = this.handleInput.bind(this);
       this._onKeydown = this.handleKeydown.bind(this);
       this._onPopState = this.handlePopState.bind(this);
-      this._onMouseover = this.handleMouseover.bind(this);
-      this._onMouseout = this.handleMouseout.bind(this);
       this.root.addEventListener('click', this._onClick);
       // Only `change` (fires on blur/select, not per keystroke) — a full
       // re-render on every keystroke would replace the focused <input> node
@@ -1027,13 +1115,6 @@
       this.root.addEventListener('change', this._onChange);
       this.root.addEventListener('input', this._onInput);
       this.root.addEventListener('keydown', this._onKeydown);
-      // Hover previewing for the planner's group candidates: mouseover/
-      // mouseout are captured with the same root delegation as clicks so
-      // they survive the [data-planner-root] innerHTML patches. The
-      // handlers themselves only ever toggle CSS classes — a state round-
-      // trip per mouse move would rebuild the whole planner.
-      this.root.addEventListener('mouseover', this._onMouseover);
-      this.root.addEventListener('mouseout', this._onMouseout);
       window.addEventListener('popstate', this._onPopState);
       // Anchors the bottom of the back/forward stack to whatever we're
       // about to show (dashboard, or a subjectPage/catalogPage restored
@@ -1079,6 +1160,7 @@
       }
       if (initialView === 'planer') {
         this.ensurePlannerTourBanner();
+        this.plannerPrefetchPickedSubjects();
       }
       // Deferred per-view fetches (exams, registrations, stage subjects,
       // participants) — navigate() fires this on every view entry, so the
@@ -1095,8 +1177,6 @@
       this.root.removeEventListener('change', this._onChange);
       this.root.removeEventListener('input', this._onInput);
       this.root.removeEventListener('keydown', this._onKeydown);
-      this.root.removeEventListener('mouseover', this._onMouseover);
-      this.root.removeEventListener('mouseout', this._onMouseout);
       window.removeEventListener('popstate', this._onPopState);
       if (this._titleObserver) this._titleObserver.disconnect();
     }
@@ -1158,6 +1238,7 @@
         zapisGrupyDetailsUrl: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyDetailsUrl : null,
         zapisGrupyGroupsUrl: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyGroupsUrl : null,
         zapisGrupyRegisterUrl: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyRegisterUrl : null,
+        zapisGrupyReturnView: this.state.view === 'zapisGrupy' ? this.state.zapisGrupyReturnView : null,
         catalogKind: this.state.view === 'catalogPage' ? this.state.catalogKind : null,
         catalogKod: this.state.view === 'catalogPage' ? this.state.catalogKod : null,
         catalogEtpKod: this.state.view === 'catalogPage' && this.state.catalogKind === 'stage' ? this.state.catalogEtpKod : null,
@@ -1289,6 +1370,7 @@
           zapisGrupyError: false,
           zapisGrupyMainPlan: null,
             zapisGrupyHighlightNr: p.zapisGrupyHighlightNr || null,
+            zapisGrupyReturnView: p.zapisGrupyReturnView === 'planer' ? 'planer' : null,
         });
         this.fetchZapisGrupy({
           key: p.zapisGrupyKey,
@@ -1511,12 +1593,17 @@
       this.persistViewState();
       if (view === 'mapa') this.ensureMapaData();
       if (view === 'planer') this.ensurePlannerTourBanner();
+      if (view === 'planer') this.plannerPrefetchPickedSubjects();
       if (view === 'plan' || view === 'dashboard') this.ensurePlanDetails();
       if (view === 'katalogJednostki') this.ensureKatalogRoot();
       if (view === 'katalogPrzedmioty') this.ensureKatalogRoot();
       if (view === 'katalogKierunki') this.ensureKatalogRoot();
       if (view === 'katalogBudynki') this.ensureMapaData();
       if (view === 'studenci') this.loadStudenciFilters();
+      // Pickup codes are sensitive — never revealed by navigation alone:
+      // every entry to the view starts gated, only an explicit click
+      // (mlegToggleQr) shows them, and they hide again on refresh.
+      if (view === 'mlegitymacja') patch.mlegQrRevealed = false;
       this.ensureDeferredData(view);
     }
 
@@ -1539,13 +1626,18 @@
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
-      if ((view === 'przedmiotyLista' || view === 'zapisy' || view === 'dashboard') && !this.data.stageSubjectsResultLoaded && scrape.fetchStageSubjectsResult) {
+      if ((view === 'przedmiotyLista' || view === 'zapisy' || view === 'dashboard' || view === 'planer') && !this.data.stageSubjectsResultLoaded && scrape.fetchStageSubjectsResult) {
         scrape.fetchStageSubjectsResult(adapter, this.data).then(() => {
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
-      if (view === 'studenci' && !this.data.participantsResultLoaded && scrape.fetchParticipantsResult) {
-        scrape.fetchParticipantsResult(adapter, this.data).then(() => {
+      if (view === 'studenci' && scrape.fetchParticipantsResult) {
+        this.ensureParticipantsResult(() => {
+          if (this.state.view === view) this.render();
+        });
+      }
+      if (view === 'mlegitymacja' && scrape.fetchMlegitymacjaResult) {
+        scrape.fetchMlegitymacjaResult(adapter, this.data).then(() => {
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
@@ -1654,6 +1746,8 @@
             detailsUrl: el.dataset.details || '',
             groupsUrl: el.dataset.url || '',
             registerUrl: el.dataset.register || '',
+            // Entered from a tour list — back goes to the tour (default).
+            returnView: null,
           });
           break;
         }
@@ -1695,6 +1789,15 @@
         case 'newsRetry':
           this.newsRetry();
           break;
+        case 'mlegitymacjaRefresh':
+          this.mlegitymacjaRefresh();
+          break;
+        case 'mlegCopy':
+          this.mlegCopy(el);
+          break;
+        case 'mlegToggleQr':
+          this.setState({ mlegQrRevealed: !this.state.mlegQrRevealed });
+          break;
         case 'planWeekPrev':
           this.setState((s) => ({ planWeekOffset: Number(s.planWeekOffset || 0) - 1 }));
           break;
@@ -1725,7 +1828,16 @@
         case 'planSessionDetails': {
           const idx = parseInt(el.dataset.idx || '-1', 10);
           const sess = this.planVisibleSessions()[idx];
-          if (sess) this.setModalState({ planSessionModal: sess });
+          if (sess) {
+            this.setModalState({ planSessionModal: sess });
+            // Eager roster: the "Studenci" row fills in on its own instead
+            // of waiting for "Zobacz listę" — patched in place (just the
+            // cell, no modal rebuild), with a full modal repaint only as
+            // a fallback when the details are gone by landing time.
+            this.ensureParticipantsResult(() => {
+              if (!this.patchPlanRosterCell()) this.setModalState({});
+            });
+          }
           break;
         }
         case 'closePlanSessionModal':
@@ -1737,18 +1849,7 @@
           // plan modal they may not be loaded yet, so pull them lazily
           // (same fetch + guard as retryStudenciLoad, re-rendering only
           // the modal root when they land).
-          if (!this.data.participantsResultLoaded && !this._participantsLoading) {
-            const scrape = window.USOSPP_SCRAPE;
-            const adapters = window.USOSPP_ADAPTERS;
-            const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
-            if (scrape && scrape.fetchParticipantsResult && adapter) {
-              this._participantsLoading = true;
-              scrape.fetchParticipantsResult(adapter, this.data).then(() => {
-                this._participantsLoading = false;
-                this.setModalState({});
-              }).catch(() => { this._participantsLoading = false; });
-            }
-          }
+          this.ensureParticipantsResult(() => this.setModalState({}));
           break;
         }
         case 'closePlanGroupList':
@@ -1806,6 +1907,9 @@
         case 'studenciRetryLoad':
           this.retryStudenciLoad();
           break;
+        case 'planRetryDetails':
+          this.ensurePlanDetails();
+          break;
         case 'mapaRefresh':
           this.mapaRefresh();
           break;
@@ -1845,21 +1949,25 @@
           this.plannerFocusSubject(el.dataset.url || '');
           break;
         case 'plannerFocusPreview': {
-          const url = el.dataset.url || '';
+          // Canonicalize before comparing: the block may carry a stale
+          // `callback=` token while the list holds a fresh one — without
+          // this, an already-expanded subject collapses instead of just
+          // scrolling (and a collapsed one never matches its row).
+          const url = this.plannerCanonicalSubjectUrl(el.dataset.url || '');
           const key = el.dataset.key || '';
           if (url && this.state.plannerExpandedUrl !== url) this.plannerToggleSubject(url);
           else this.plannerFocusSubject(url);
           this.plannerTogglePreviewForKey(key, !!this.state.plannerZapisyMode);
           break;
         }
+        case 'plannerRevertDraft':
+          this.plannerRevertDraft(el.dataset.key || '');
+          break;
         case 'plannerLoadGroups':
           this.plannerLoadGroups(el.dataset.url);
           break;
         case 'plannerTogglePreview':
           this.plannerTogglePreview(el.dataset.key, el.dataset.groupsUrl, el.dataset.classTypeLabel);
-          break;
-        case 'plannerTogglePreviewAll':
-          this.plannerTogglePreviewAll(el.dataset.url);
           break;
         case 'plannerSelectGroup':
           this.plannerSelectGroup(el.dataset.key, el.dataset.groupsUrl, el.dataset.nr, el.dataset.classTypeLabel);
@@ -1931,6 +2039,9 @@
             groupsUrl: el.dataset.url || '',
             registerUrl: el.dataset.register || '',
             highlightNr: nr === '' ? null : nr,
+            // Entered from the planner's "Wybrane przedmioty" — the back
+            // link must return to the edited plan, not to an empty tour.
+            returnView: 'planer',
           });
           break;
         }
@@ -1980,71 +2091,8 @@
       }
     }
 
-    // ---- planner: hover-preview for group candidates ("podgląd w planie")
-    // These two listeners (wired in the constructor on this.root, so they
-    // survive the planner's [data-planner-root] innerHTML patches) drive the
-    // purely visual part of the candidates: hovering a candidate group makes
-    // the grid read as if that group were already part of the plan — every
-    // other candidate disappears for as long as the mouse stays on it.
-    // No state is ever touched: hover is transient by definition and going
-    // through setPlannerState would rebuild the whole planner on every
-    // mouse move.
-
-    handleMouseover(e) {
-      if (this.state.view !== 'planer' || this.state.plannerMode !== 'manual') return;
-      const cand = e.target.closest('[data-cand-group]');
-      if (cand) {
-        // Hovering a popover ROW previews that group AND keeps the popover
-        // itself open (passing a bare gid would close it instantly, making
-        // comparison-flicking between rows impossible). A standalone box
-        // (singleton candidate) has no cluster ancestor — null is right.
-        const cluster = cand.closest('[data-cand-cluster]');
-        this.plannerHover(cand.dataset.candGroup, cluster ? cluster.dataset.candCluster : null);
-        return;
-      }
-      // Not a group itself — but maybe a "N grup" neutral box or an open
-      // candidate popover, which keeps its cluster active.
-      const cluster = e.target.closest('[data-cand-cluster]');
-      if (cluster) { this.plannerHover(null, cluster.dataset.candCluster); return; }
-      this.plannerHover(null, null);
-    }
-
-    handleMouseout(e) {
-      if (!this._plannerHoverActive) return;
-      if (this.state.view !== 'planer' || this.state.plannerMode !== 'manual') { this.plannerHover(null, null); return; }
-      // Only a REAL exit clears the preview: hops between candidate boxes,
-      // popover rows and the popover itself fire mouseout first, but the
-      // mouseover that follows re-asserts the right state anyway.
-      const grid = this.root.querySelector('[data-planner-grid]');
-      if (grid && e.relatedTarget && grid.contains(e.relatedTarget)) return;
-      this.plannerHover(null, null);
-    }
-
-    // Applies the hover-preview state to the grid's candidate elements via
-    // classes only. `gid` — the hovered candidate group (all of its sessions
-    // across the week stay visible, everything else candidate-shaped hides,
-    // so the schedule reads as final). `clusterId` — the "N grup" cluster
-    // whose popover should be open (its neutral box hides too); without a
-    // `gid` hovering it, the other clusters keep their neutral boxes.
-    plannerHover(gid, clusterId) {
-      if (this._plannerHoverGid === gid && this._plannerHoverCluster === clusterId) return;
-      this._plannerHoverGid = gid;
-      this._plannerHoverCluster = clusterId;
-      this._plannerHoverActive = !!(gid || clusterId);
-      const grid = this.root.querySelector('[data-planner-grid]');
-      if (!grid) return;
-      grid.querySelectorAll('[data-cand-group]:not([data-cand-row])').forEach((el) => {
-        const mine = el.dataset.candGroup === gid;
-        el.classList.toggle('usospp-cand-on', !!gid && mine);
-        el.classList.toggle('usospp-cand-off', !!gid && !mine);
-      });
-      grid.querySelectorAll('[data-cand-neutral]').forEach((el) => {
-        el.classList.toggle('usospp-cand-off', !!gid || (!!clusterId && el.dataset.candCluster === clusterId));
-      });
-      grid.querySelectorAll('[data-cand-pop]').forEach((el) => {
-        el.classList.toggle('usospp-cand-pop-open', !!clusterId && el.dataset.candPop === clusterId);
-      });
-    }
+    // (Candidate hover-preview retired with the side-by-side lanes —
+    // every group has its own directly-clickable box now.)
 
     // The "szczegóły" link on a payment/due row points at a page classic
     // USOS renders itself — opening it in a new tab used to just mount
@@ -2243,7 +2291,13 @@
     renderPlanSessionModal() {
       const s = this.state.planSessionModal;
       if (!s) return '';
-      const weeksText = s.weeks === 'even' ? 'tydzień parzysty (P)' : s.weeks === 'odd' ? 'tydzień nieparzysty (N)' : 'każdy tydzień';
+      // Concrete-scope sessions carry a real ISO date (Dynamiczny) — show
+      // it instead of a parity tag, which would wrongly read "każdy
+      // tydzień" for e.g. a biweekly group's meeting. Template sessions
+      // (Ogólny) have no date, so the parity text stays.
+      const when = s.date && /^\d{4}-\d{2}-\d{2}$/.test(s.date)
+        ? s.date.split('-').reverse().join('.')
+        : (s.weeks === 'even' ? 'tydzień parzysty (P)' : s.weeks === 'odd' ? 'tydzień nieparzysty (N)' : s.weeks === 'unknown' ? 'co drugi tydzień' : 'każdy tydzień');
       const roomLine = this.planRoomLine(s);
       const groupUrl = s.detailsUrl
         ? (s.detailsUrl.includes('?') ? `${s.detailsUrl}&usospp_off=1` : `${s.detailsUrl}?usospp_off=1`)
@@ -2256,7 +2310,7 @@
               <button class="usospp-icon-btn" data-action="closePlanSessionModal" title="Zamknij">${icon('close', 15)}</button>
             </div>
             <table class="usospp-table"><tbody>
-              <tr><td>Termin</td><td><strong>${esc(this.planDayName(s.day))} ${esc(s.start)}–${esc(s.end)}</strong> · ${esc(weeksText)}</td></tr>
+              <tr><td>Termin</td><td><strong>${esc(this.planDayName(s.day))} ${esc(s.start)}–${esc(s.end)}</strong> · ${esc(when)}</td></tr>
               <tr><td>Zajęcia</td><td>${esc(s.type || '—')}${s.nr ? `, grupa ${esc(String(s.nr))}` : ''}${s.code ? ` <span class="usospp-muted-text">[${esc(s.code)}]</span>` : ''}</td></tr>
               <tr><td>Sala</td><td>${roomLine ? esc(roomLine) : '—'}</td></tr>
               ${s.building ? `<tr><td>Budynek</td><td>${esc(s.building)}</td></tr>` : ''}
@@ -2273,6 +2327,27 @@
     // same subject+type+nr fallback. {state, students}: 'loading' (not
     // fetched yet), 'ready', 'hidden' (USOS doesn't share the list),
     // 'missing' (no matching group).
+    // Single lazy trigger for the participants roster (Studenci entry,
+    // plan session modal, group list modal, autorefresh recovery):
+    // fetchParticipantsResult mutates this.data in place and has no
+    // in-flight guard of its own, so this serializes triggers behind
+    // _participantsLoading. Returns true when the roster is already
+    // available; otherwise kicks off at most one fetch and runs onReady
+    // when it lands (callers repaint only their own surface there).
+    ensureParticipantsResult(onReady) {
+      if (this.data && this.data.participantsResultLoaded) return true;
+      if (this._participantsLoading) return false;
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+      if (!scrape || !scrape.fetchParticipantsResult || !adapter || !this.data) return false;
+      this._participantsLoading = true;
+      scrape.fetchParticipantsResult(adapter, this.data).then(() => {
+        this._participantsLoading = false;
+        if (onReady) onReady();
+      }).catch(() => { this._participantsLoading = false; });
+      return false;
+    }
     planSessionRoster(s) {
       if (!this.data || !this.data.participantsResultLoaded) return { state: 'loading', students: [] };
       const res = this.data.participantsResult || {};
@@ -2300,15 +2375,30 @@
     }
 
     planSessionRosterRow(s) {
+      return `<tr><td>Studenci</td><td data-plan-roster-cell>${this.planSessionRosterCellHtml(s)}</td></tr>`;
+    }
+    planSessionRosterCellHtml(s) {
       const r = this.planSessionRoster(s);
       if (r.state === 'ready') {
         const n = r.students.length;
-        return `<tr><td>Studenci</td><td><strong>${n} ${pluralOsoba(n)}</strong> <a data-action="openPlanGroupList" style="font-weight:600;cursor:pointer;">Zobacz listę →</a></td></tr>`;
+        return `<strong>${n} ${pluralOsoba(n)}</strong> <a data-action="openPlanGroupList" style="font-weight:600;cursor:pointer;">Zobacz listę →</a>`;
       }
       if (r.state === 'loading') {
-        return `<tr><td>Studenci</td><td><span class="usospp-muted-text">…</span> <a data-action="openPlanGroupList" style="font-weight:600;cursor:pointer;">Zobacz listę →</a></td></tr>`;
+        return `<span class="usospp-muted-text">…</span> <a data-action="openPlanGroupList" style="font-weight:600;cursor:pointer;">Zobacz listę →</a>`;
       }
-      return `<tr><td>Studenci</td><td><span class="usospp-muted-text">lista niedostępna</span></td></tr>`;
+      return `<span class="usospp-muted-text">lista niedostępna</span>`;
+    }
+    // Targeted repaint of just the roster cell when the lazy roster lands
+    // while session details are open — no full modal rebuild, so the popup
+    // doesn't flicker. Returns false when there's nothing to patch
+    // (modal closed/rebuilt meanwhile), letting the caller fall back.
+    patchPlanRosterCell() {
+      const s = this.state.planSessionModal;
+      const root = this.root && this.root.querySelector('[data-modal-root]');
+      const cell = root && root.querySelector('[data-plan-roster-cell]');
+      if (!s || !cell) return false;
+      cell.innerHTML = this.planSessionRosterCellHtml(s);
+      return true;
     }
 
     renderPlanGroupListModal() {
@@ -2518,6 +2608,10 @@
         zapisGrupyError: false,
         zapisGrupyMainPlan: null,
         zapisGrupyHighlightNr: meta.highlightNr || null,
+        // Where the back link returns: 'planer' when entered from the
+        // planner's "Wybrane przedmioty" (plannerSubjectEnroll), otherwise
+        // null meaning the tour. Sanitized — only 'planer' is accepted.
+        zapisGrupyReturnView: meta.returnView === 'planer' ? 'planer' : null,
       });
       this.fetchZapisGrupy(meta);
     }
@@ -3767,6 +3861,10 @@
         plannerPicks: this.state.plannerPicks,
         plannerConfirmDeleteId: null,
       });
+      // Dots need subject pages for picked subjects (see
+      // plannerPrefetchPickedSubjects) — covers boot, reloads and
+      // cross-tab updates landing here.
+      this.plannerPrefetchPickedSubjects();
       if (changed) {
         const planner = window.USOSPP_PLANNER;
         if (planner) planner.setData({ ...data, plans: migratedPlans });
@@ -3821,7 +3919,11 @@
       planner.setData((data) => {
         if (data.plans.length >= planner.MAX_PLANS) return data;
         const plan = { id: planner.genId(), name: `Plan ${data.plans.length + 1}`, picks: [] };
-        return { plans: [...data.plans, plan], activePlanId: plan.id };
+        // Nowy plan nie rusza gwiazdki: main zostaje tam, gdzie był (fallback
+        // na nowy tylko gdyby stary main nie istniał). Bez tego zapisany
+        // snapshot tracił mainPlanId, a getData promował nowy plan na główny.
+        const mainAlive = data.plans.some((p) => p.id === data.mainPlanId);
+        return { plans: [...data.plans, plan], activePlanId: plan.id, mainPlanId: mainAlive ? data.mainPlanId : plan.id };
       }).then((next) => this.applyPlannerSwitchResult(next));
     }
 
@@ -3834,8 +3936,20 @@
         const source = data.plans.find((p) => p.id === srcId) || data.plans[0];
         if (!source) return data;
         const plan = { id: planner.genId(), name: `${source.name} (kopia)`, picks: JSON.parse(JSON.stringify(source.picks || [])) };
-        return { plans: [...data.plans, plan], activePlanId: plan.id };
-      }).then((next) => this.applyPlannerSwitchResult(next));
+        // Jak wyżej: duplikat nie rusza gwiazdki głównego planu.
+        const mainAlive = data.plans.some((p) => p.id === data.mainPlanId);
+        return { plans: [...data.plans, plan], activePlanId: plan.id, mainPlanId: mainAlive ? data.mainPlanId : plan.id };
+      }).then((next) => {
+        this.applyPlannerSwitchResult(next);
+        // Kopia dziedziczy zapamiętane customy źródła (inaczej usunięcie
+        // terminu w kopii wyrzucałoby przedmiot z listy).
+        const srcMem = (this.state.plannerCustomSubjects || {})[srcId];
+        if (srcMem) {
+          this.setPlannerState((s) => ({
+            plannerCustomSubjects: { ...(s.plannerCustomSubjects || {}), [next.activePlanId]: { ...srcMem } },
+          }));
+        }
+      });
     }
 
     // Never removes the last remaining plan — there must always be
@@ -3856,7 +3970,17 @@
           activePlanId: activeId,
           mainPlanId: mainAlive ? data.mainPlanId : activeId,
         };
-      }).then((next) => this.applyPlannerSwitchResult(next));
+      }).then((next) => {
+        this.applyPlannerSwitchResult(next);
+        // Usunięty plan zabiera swój wpis pamięci customów.
+        if ((this.state.plannerCustomSubjects || {})[delId]) {
+          this.setPlannerState((s) => {
+            const mem = { ...(s.plannerCustomSubjects || {}) };
+            delete mem[delId];
+            return { plannerCustomSubjects: mem };
+          });
+        }
+      });
     }
 
     // Shared tail for the four plan-list mutations above: adopt whatever
@@ -3875,6 +3999,9 @@
         plannerRenamingPlanId: null,
         plannerConfirmDeleteId: null,
       });
+      // Newly-active plan may carry picks whose subject pages aren't cached
+      // (fresh switch) — warm them for the fractional dots.
+      this.plannerPrefetchPickedSubjects();
     }
 
     // Star toggle: marks which saved plan the Zapisy integrations treat as
@@ -4061,7 +4188,12 @@
                 nr: hit.group.nr,
                 sessionMatch: !!hit.sessionMatch,
                 rejSession: hit.group.session || null,
-                seatsText: seats.known ? (seats.full ? 'pełna' : `${seats.free}/${seats.cap}`) : null,
+                // Counters show TAKEN seats ("23/26", never "3 wolne"):
+                // a fuller group reads as more urgent, and "0/20" can no
+                // longer be mistaken for "nothing there".
+                seatsText: seats.known ? (seats.full ? 'pełna' : `${seats.taken}/${seats.cap}`) : null,
+                taken: seats.known ? seats.taken : null,
+                cap: seats.known ? seats.cap : null,
                 full: !!seats.full,
                 known: !!seats.known,
               };
@@ -4189,9 +4321,13 @@
     // match is kod-first (detailsUrl), name-exact, then name containment —
     // shared with the candidate list via plannerMatchTourSubjects — and the
     // first tour WITH usable group data wins (a name hit without data never
-    // blocks a later tour that has it). Ghosts are hints; exact numbers
-    // live one click away in Zapisy.
-    plannerCandSeats(subjectName, classTypeLabel, nr, subjectDetailsUrl) {
+    // blocks a later tour that has it). sessions are the candidate's real
+    // meetings: the bridge's soft type-match (catalog "Ćwiczenia, 30 godzin"
+    // vs tour "Ćwiczenia") only counts with a confirmed sessionMatch, so
+    // ghosts must bring their sessions — an empty list would veto every
+    // soft match. Ghosts are hints; exact numbers live one click away in
+    // Zapisy.
+    plannerCandSeats(subjectName, classTypeLabel, nr, subjectDetailsUrl, sessions) {
       const bridge = window.USOSPP_ZAPISY_PLAN;
       const cache = this._plannerRejCache;
       if (!bridge || !cache || !subjectName) return null;
@@ -4203,14 +4339,14 @@
         const rejGroups = cache[`grp:${subj.groupsUrl}`];
         if (!rejGroups || !rejGroups.supported) continue;
         const hits = bridge.matchPickGroups(
-          { classTypeLabel, nr: String(nr), sessions: [] }, rejGroups);
+          { classTypeLabel, nr: String(nr), sessions: Array.isArray(sessions) ? sessions : [] }, rejGroups);
         const hit = hits.find((h) => String(h.group.nr) === String(nr));
         if (!hit) continue;
         const st = hit.seats || {};
         return {
           full: !!st.full,
           known: !!st.known,
-          seatsText: st.known && !st.full && Number.isInteger(st.free) ? `${st.free}/${st.cap}` : null,
+          seatsText: st.known && !st.full && Number.isInteger(st.taken) ? `${st.taken}/${st.cap}` : null,
         };
       }
       return null;
@@ -4367,6 +4503,15 @@
         this.plannerAutoToggleSubject(url, name);
         return;
       }
+      // Remember the custom subject on this plan (see plannerCustomSubjects)
+      // so it stays listed even after its last pick is removed.
+      const planId = this.state.plannerActivePlanId;
+      const cid = subjectId(url);
+      this.setPlannerState((s) => {
+        const planMem = { ...((s.plannerCustomSubjects || {})[planId] || {}) };
+        if (!planMem[cid]) planMem[cid] = { subjectUrl: url, subjectName: name };
+        return { plannerCustomSubjects: { ...(s.plannerCustomSubjects || {}), [planId]: planMem } };
+      });
       this.plannerToggleSubject(url);
     }
 
@@ -4652,13 +4797,66 @@
       });
     }
 
+    // Warms plannerSubjectCache for subjects that already have picks but
+    // no cached page (e.g. right after a reload) — so the fractional
+    // status dots (see plannerSubjectTypeProgress) are correct without
+    // expanding every subject first. Bounded to picked subjects only, one
+    // repaint total, in-flight deduped. Never writes failure markers (an
+    // expand would then trust them and skip its own fetch).
+    plannerPrefetchPickedSubjects() {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !adapters) return;
+      const adapter = adapters.selectAdapter ? adapters.selectAdapter() : null;
+      if (!adapter) return;
+      this._plannerSubjectPrefetch = this._plannerSubjectPrefetch || new Set();
+      const urls = [...new Set(this.state.plannerPicks.map((p) => p.subjectUrl).filter(Boolean))];
+      const missing = urls.filter((u) => !this.state.plannerSubjectCache[u] && !this._plannerSubjectPrefetch.has(u));
+      if (!missing.length) return;
+      missing.forEach((u) => this._plannerSubjectPrefetch.add(u));
+      Promise.all(missing.map((url) => scrape.fetchDoc(url)
+        .then((doc) => ({ url, details: doc && adapter ? adapter.getSubjectPage(doc) : null }))
+        .catch(() => null)))
+        .then((results) => {
+          const patch = {};
+          (results || []).forEach((r) => {
+            this._plannerSubjectPrefetch.delete(r && r.url);
+            if (r && r.details && r.details.supported) patch[r.url] = r.details;
+          });
+          if (!Object.keys(patch).length) return;
+          this.setPlannerState((s) => ({ plannerSubjectCache: { ...s.plannerSubjectCache, ...patch } }));
+        });
+    }
+
+    // Canonical list URL for a subject: the row's detailsUrl from
+    // plannerSubjectCandidates with the same subjectId(). A block on the
+    // grid (or a pick restored from storage) may carry a stale `callback=`
+    // token while the freshly-fetched stage list holds a new one — raw
+    // strings differ, the subject is the same. Everything expansion
+    // compares (expandedUrl, row attribute, subject cache) must go through
+    // here, otherwise a stage-listed subject stops expanding while customs
+    // (token-less, stable URLs) keep working. Falls back to the given URL
+    // when the subject isn't on the list (e.g. a later-cycle pick).
+    plannerCanonicalSubjectUrl(url) {
+      if (!url) return url;
+      const id = subjectId(url);
+      if (!id) return url;
+      const hit = (this.plannerSubjectCandidates.subjects || []).find((s) => s.detailsUrl && subjectId(s.detailsUrl) === id);
+      return (hit && hit.detailsUrl) || url;
+    }
+
     // Expands/collapses a subject's class-type configurator in the planner's
     // subject list. Pre-fills the draft selection from whatever's already
     // saved for this subject, so reopening it to tweak one class type
     // doesn't blank out the others; fetches the subject's cycle/class-type
     // data on first expand only (cached per session after that).
+    // Resolves the list's canonical URL for the subject first (see
+    // plannerCanonicalSubjectUrl) — a saved block may carry a stale
+    // `callback=` token while the list holds a fresh one, and raw-string
+    // identity is what the row, the cache and the scroll lookup compare.
     plannerToggleSubject(url) {
       if (!url) return;
+      url = this.plannerCanonicalSubjectUrl(url);
       if (this.state.plannerExpandedUrl === url) {
         this.setPlannerState({ plannerExpandedUrl: null, plannerPreviewKeys: {} });
         return;
@@ -4722,6 +4920,7 @@
     // case there's nothing to scroll to and we stop after expanding.
     plannerFocusSubject(url) {
       if (!url) return;
+      url = this.plannerCanonicalSubjectUrl(url);
       if (this.state.plannerExpandedUrl !== url) this.plannerToggleSubject(url);
       if (!this.root || typeof this.root.querySelector !== 'function') return;
       let row = null;
@@ -4771,11 +4970,15 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const current = this.state.plannerDraftSelection[key];
       const isReselectingActive = current && !current.removed && current.nr === nr;
       if (isReselectingActive) {
-        const wasCommitted = this.state.plannerPicks.some((p) => p.key === key);
+        const committedPick = this.state.plannerPicks.find((p) => p.key === key) || null;
         this.setPlannerState((s) => {
           const next = { ...s.plannerDraftSelection };
-          if (wasCommitted) next[key] = { removed: true, nr, classTypeLabel };
-          else delete next[key];
+          if (!committedPick) delete next[key];
+          // Odkliknięcie grupy, która nigdy nie była zapisana (draft B przy
+          // commicie A), cofa draft do zapisanej grupy zamiast oznaczać B
+          // do usunięcia — inaczej komunikat mówił o grupie spoza planu.
+          else if (committedPick.nr !== nr) next[key] = { ...committedPick };
+          else next[key] = { removed: true, nr, classTypeLabel };
           return { plannerDraftSelection: next };
         });
         return;
@@ -4788,6 +4991,26 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         const preview = { ...s.plannerPreviewKeys };
         delete preview[key];
         return { plannerDraftSelection: { ...s.plannerDraftSelection, [key]: { ...group, classTypeLabel } }, plannerPreviewKeys: preview };
+      });
+    }
+
+    // Clicking a struck-through grid block (a committed pick shadowed by a
+    // diverging draft — willBeReplaced — or marked for removal —
+    // pendingRemoval) undoes the decision: the draft falls back to the
+    // committed pick and this class type's preview ghosts go out, so the
+    // block reads solid again. Grid counterpart of re-clicking the radio
+    // row in the list; without it the struck block could only focus and
+    // toggle ghosts, never take the change back.
+    plannerRevertDraft(key) {
+      if (!key) return;
+      const committedPick = this.state.plannerPicks.find((p) => p.key === key) || null;
+      this.setPlannerState((s) => {
+        const draft = { ...s.plannerDraftSelection };
+        if (committedPick) draft[key] = { ...committedPick };
+        else delete draft[key];
+        const preview = { ...s.plannerPreviewKeys };
+        delete preview[key];
+        return { plannerDraftSelection: draft, plannerPreviewKeys: preview };
       });
     }
 
@@ -4863,36 +5086,6 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       this.plannerLoadGroups(found.groupsUrl);
       // Ghost counters need tour seat data — pull it silently (no mode
       // change) so free-filtering and N/M tags have coverage.
-      this.plannerCheckRejSeats().then(() => this.plannerPrefetchCandidateSeats());
-    }
-
-    // "Podgląd wszystkich grup" for the whole active cycle at once — the
-    // same operation as plannerTogglePreview, applied to every class type
-    // that has a groups list. Turning everything off only clears THIS
-    // subject's flags.
-    plannerTogglePreviewAll(url) {
-      if (!url) return;
-      const details = this.state.plannerSubjectCache[url];
-      if (!details || !details.supported) return;
-      const relevantCycles = details.cycles.filter((c) => !/zakończon/i.test(c.cycleState || ''));
-      const cycle = (relevantCycles.length ? relevantCycles : details.cycles)[0];
-      if (!cycle) return;
-      const pairs = (cycle.classTypes || [])
-        .filter((ct) => ct.groupsUrl)
-        .map((ct) => [classTypeKey(url, cycle.cycleName, ct.label), { groupsUrl: ct.groupsUrl, classTypeLabel: ct.label }]);
-      if (!pairs.length) return;
-      const allOn = pairs.every(([key]) => this.state.plannerPreviewKeys[key]);
-      const freeOnly = !!this.state.plannerZapisyMode;
-      this.setPlannerState((s) => {
-        const next = { ...s.plannerPreviewKeys };
-        pairs.forEach(([key, meta]) => {
-          if (allOn) delete next[key];
-          else next[key] = { ...meta, freeOnly };
-        });
-        return { plannerPreviewKeys: next };
-      });
-      if (allOn) return;
-      pairs.forEach(([, meta]) => this.plannerLoadGroups(meta.groupsUrl));
       this.plannerCheckRejSeats().then(() => this.plannerPrefetchCandidateSeats());
     }
 
@@ -4973,8 +5166,47 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         seenCustom.add(id);
         customSubjects.push({ name: p.subjectName, code: '', detailsUrl: p.subjectUrl });
       });
+      // Customs remembered from "Dodaj przedmiot spoza listy" (see
+      // plannerCustomSubjects): they stay listed with an empty dot even
+      // after their last pick is removed. Stage-listed subjects dedup out.
+      const mem = ((this.state.plannerCustomSubjects || {})[this.state.plannerActivePlanId] || {});
+      Object.values(mem).forEach((m) => {
+        if (!m || !m.subjectUrl) return;
+        const id = subjectId(m.subjectUrl);
+        if (knownIds.has(id) || seenCustom.has(id)) return;
+        seenCustom.add(id);
+        customSubjects.push({ name: m.subjectName || '', code: '', detailsUrl: m.subjectUrl });
+      });
 
       return { subjects: [...allSubjects, ...customSubjects], autoCount: allSubjects.length, skippedStages };
+    }
+
+    // Per-class-type completion of one subject for the status dot in the
+    // left list (see renderPlannerSubjectRow): {done, total, perType} with
+    // perType = [{label, short, nr|null}]. Null when there are no picks
+    // (empty dot — needs no denominator) or the subject page isn't cached
+    // yet (binary full dot until plannerPrefetchPickedSubjects fills it).
+    // Denominator = class types WITH a group list (only those are
+    // choosable); picks matching no actionable type (stale cycle) also
+    // fall back to null rather than a misleading empty pie.
+    plannerSubjectTypeProgress(url) {
+      const id = subjectId(url);
+      const picks = this.state.plannerPicks.filter((p) => subjectId(p.subjectUrl) === id);
+      if (!picks.length) return null;
+      const details = this.state.plannerSubjectCache[url];
+      if (!details || !details.supported) return null;
+      const relevantCycles = (details.cycles || []).filter((c) => !/zakończon/i.test(c.cycleState || ''));
+      const cycle = (relevantCycles.length ? relevantCycles : details.cycles)[0];
+      if (!cycle || !Array.isArray(cycle.classTypes) || !cycle.classTypes.length) return null;
+      const actionable = cycle.classTypes.filter((ct) => ct.groupsUrl);
+      if (!actionable.length) return null;
+      const perType = actionable.map((ct) => {
+        const key = classTypeKey(url, cycle.cycleName, ct.label);
+        const pick = picks.find((p) => p.key === key);
+        return { label: ct.label, short: shortClassType(ct.label), nr: pick ? pick.nr : null };
+      });
+      if (!perType.some((t) => t.nr)) return null;
+      return { done: perType.filter((t) => t.nr).length, total: perType.length, perType };
     }
 
     // Colour is assigned by subject NAME, not by subject id — USOS often
@@ -5140,6 +5372,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       this.updateDocumentTitle();
       this.mountMapaIfNeeded();
       this.mountUnitMapPreview();
+      this.drawMlegQrIfNeeded();
     }
 
     // Unlike the Aktualności dot, this has no "seen" state to persist — it's
@@ -5441,6 +5674,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         case 'podania': return this.renderPodania();
         case 'ankiety': return this.renderAnkiety();
         case 'studenci': return this.renderStudenci();
+        case 'mlegitymacja': return this.renderMlegitymacja();
         case 'ustawienia': return this.renderUstawienia();
         case 'subjectPage': return this.renderSubjectPage();
         case 'mapa': return this.renderMapa();
@@ -5515,6 +5749,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               start: sess.start,
               end: sess.end,
               weeks: sess.weeks || 'every',
+              semester: s.semester || null,
               subject: s.name,
               code: s.code,
               type: g.type,
@@ -5529,7 +5764,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         });
       });
       const order = { PN: 0, WT: 1, 'ŚR': 2, CZ: 3, PT: 4, SO: 5, ND: 6 };
-      out.sort((a, b) => (order[a.day] ?? 9) - (order[b.day] ?? 9) || (a.start || '').localeCompare(b.start || ''));
+      out.sort((a, b) => (order[a.day] ?? 9) - (order[b.day] ?? 9) || (toMin(a.start) ?? Infinity) - (toMin(b.start) ?? Infinity));
       out.forEach((e, i) => { e.idx = i; });
       return out;
     }
@@ -5592,6 +5827,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               start: m.start,
               end: m.end,
               weeks: 'every', // concrete date needs no parity tag
+              semester: s.semester || null,
               subject: s.name,
               code: s.code,
               type: g.type,
@@ -5605,7 +5841,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           });
         });
       });
-      out.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
+      out.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (toMin(a.start) ?? Infinity) - (toMin(b.start) ?? Infinity));
       out.forEach((e, i) => { e.idx = i; });
       return out;
     }
@@ -5615,10 +5851,17 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     }
 
     // Epoch ms for a concrete session's start/end ("2026-10-05" + "15:15").
-    // Null when the session has no usable date/time.
+    // Null when the session has no usable date/time. Single-digit hours
+    // ("9:15", exactly how USOS renders them) must pass — the old
+    // \d{2}:\d{2} gate silently dropped every pre-10:00 class from the
+    // dashboard box while the grid showed it fine.
+    // NOTE: `new Date("YYYY-MM-DDTHH:MM:00")` parses in the browser's
+    // local zone with no DST-safe arithmetic — a session inside the autumn
+    // changeover hour can shift by 60 min vs the grid (which never parses
+    // dates). Countdown-only impact; revisit if USOS ever schedules one.
     sessionDateTime(e, which = 'start') {
       const t = which === 'end' ? e.end : e.start;
-      if (!e.date || !t || !/^\d{2}:\d{2}$/.test(t)) return null;
+      if (!e.date || !t || !/^\d{1,2}:\d{2}$/.test(t)) return null;
       const dt = new Date(`${e.date}T${t}:00`);
       return Number.isNaN(dt.getTime()) ? null : dt.getTime();
     }
@@ -5635,7 +5878,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           if (start == null || end == null) return;
           if (end < nowMs) return;
           if (start > nowMs + PANEL_LOOKAHEAD_DAYS * 86400000) return;
-          const key = `${e.date}|${e.start}|${e.end}|${e.subject}|${e.type}|${e.nr}`;
+          const key = `${e.date}|${e.start}|${e.end}|${e.subject}|${e.type}|${e.nr}|${e.detailsUrl || ''}`;
           if (!seen.has(key)) seen.set(key, { ...e, _start: start, _end: end });
         });
       }
@@ -5718,7 +5961,12 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         if (byDay[d] && (!busiest || byDay[d] > byDay[busiest])) busiest = d;
       });
       const busyDays = new Set(events.map((e) => e.day));
-      const freeDays = order.filter((d) => !busyDays.has(d));
+      // Weekend days count as "free" only when the account actually has
+      // weekend teaching in its template — otherwise "Wolne: SO, ND" is
+      // noise on top of every ordinary week.
+      const weekendTaught = new Set((this.weeklyPlan || []).map((e) => e && e.day));
+      const freeDays = order.filter((d) => !busyDays.has(d)
+        && (d !== 'SO' && d !== 'ND' || weekendTaught.has(d)));
       return { count: events.length, minutes, byDay, busiest, freeDays, byType };
     }
 
@@ -5871,18 +6119,11 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // studenci branch, plus completion handling to clear the guard.
     retryStudenciLoad() {
       if (this.state.view !== 'studenci') return;
-      if (this._participantsLoading) return;
       if (this.data && this.data.participantsResultLoaded) { this.render(); return; }
-      const scrape = window.USOSPP_SCRAPE;
-      const adapters = window.USOSPP_ADAPTERS;
-      const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
-      if (!scrape || !scrape.fetchParticipantsResult || !adapter) return;
-      this._participantsLoading = true;
       this.loadStudenciFilters();
-      scrape.fetchParticipantsResult(adapter, this.data).then(() => {
-        this._participantsLoading = false;
+      this.ensureParticipantsResult(() => {
         if (this.state.view === 'studenci') this.render();
-      }).catch(() => { this._participantsLoading = false; });
+      });
     }
 
     // studentIndex pruned by the Studenci filters: excluded subjects and,
@@ -5991,10 +6232,13 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // Lazy room/lecturer enrichment for the weekly plan: one read-only
     // fetch per enrolled group (cached in scraping.js), fired on plan and
     // dashboard entry — never on mount, to keep it fast. Re-renders the
-    // view when the details land.
+    // view when the details land. Serialized behind _planDetailsLoading
+    // (rapid plan↔dashboard navigation must not fire N parallel bursts).
+    // Misses are NOT stored — otherwise a retry could never refetch them.
     async ensurePlanDetails() {
       const mg = this.data.myGroupsResult || {};
       if (!Array.isArray(mg.subjects) || !mg.subjects.length) return;
+      if (this._planDetailsLoading) return;
       if (!this.data.groupDetails) this.data.groupDetails = {};
       const urls = [];
       mg.subjects.forEach((s) => (s.groups || []).forEach((g) => {
@@ -6005,11 +6249,13 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         ? window.USOSPP_ADAPTERS.selectAdapter() : null;
       const fetchDetails = window.USOSPP_SCRAPE && window.USOSPP_SCRAPE.fetchGroupDetails;
       if (!adapter || typeof fetchDetails !== 'function') return;
+      this._planDetailsLoading = true;
       this.setState({ planDetailsLoading: true });
       try {
         const results = await Promise.all(urls.map((u) => fetchDetails(adapter, u)));
-        urls.forEach((u, i) => { this.data.groupDetails[u] = results[i]; });
+        urls.forEach((u, i) => { if (results[i] && results[i].supported) this.data.groupDetails[u] = results[i]; });
       } finally {
+        this._planDetailsLoading = false;
         if (this.state.view === 'plan' || this.state.view === 'dashboard') {
           this.setState({ planDetailsLoading: false });
         } else {
@@ -6210,6 +6456,18 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const offset = Number(this.state.planWeekOffset || 0);
       const mode = this.state.planViewMode === 'list' ? 'list' : 'week';
       const hasTemplate = this.weeklyPlan.length > 0;
+      // Groups whose details (meetings behind the Dynamiczny scope) never
+      // landed: an empty concrete week with missing details is a fetch
+      // failure, not a free week — offer a retry instead of "wolne".
+      let detailsMissing = 0;
+      {
+        const det = (this.data.groupDetails && typeof this.data.groupDetails === 'object') ? this.data.groupDetails : {};
+        (Array.isArray(mg.subjects) ? mg.subjects : []).forEach((s) => {
+          ((s && s.groups) || []).forEach((g) => {
+            if (g && g.detailsUrl && !det[g.detailsUrl]) detailsMissing++;
+          });
+        });
+      }
       return `
         <div class="usospp-view">
           <div class="usospp-card usospp-plan-card">
@@ -6238,11 +6496,23 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               ` : ''}
             </div>
             ${this.state.planDetailsLoading ? `<div class="usospp-empty-hint usospp-plan-loading" style="padding:0 0 8px 0;">Dociąganie sal i prowadzących…</div>` : ''}
+            ${scope === 'generic' && hasTemplate ? (() => {
+              // home/grupy lists every semester of the year with no
+              // current-semester signal, so the generic template can mix
+              // e.g. zimowy + letni. Concrete scope can't (real dates in
+              // the displayed week). No silent filtering — say so out loud.
+              const sems = [...new Set(sessions.map((e) => e && e.semester).filter(Boolean))];
+              return sems.length > 1 ? `<div class="usospp-notice"><span>Ogólny miesza terminy z ${sems.length} semestrów (${esc(sems.join(' · '))}). Zakres Dynamiczny pokazuje konkretny tydzień z datami.</span></div>` : '';
+            })() : ''}
             ${!hasTemplate ? `
               ${!mg.supported ? `<div class="usospp-empty-hint">Nie udało się odczytać planu zajęć (ani terminarza, ani Twoich grup) ze strony USOS.</div>`
                 : `<div class="usospp-empty-hint">Brak zajęć w Twoich grupach — nie jesteś zapisany na żadne zajęcia ze stałym terminem.</div>`}
             ` : !sessions.length ? `
-              <div class="usospp-empty-hint">W tym tygodniu nie masz żadnych zajęć — wolne.</div>
+              ${scope === 'concrete' && detailsMissing > 0 && !this.state.planDetailsLoading ? `
+                <div class="usospp-empty-hint">Nie udało się dociągnąć terminów ${detailsMissing} ${detailsMissing === 1 ? 'grupy' : 'grup'} — to może być chwilowy błąd USOSa, a nie wolny tydzień.<br><a data-action="planRetryDetails" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div>
+              ` : `
+                <div class="usospp-empty-hint">W tym tygodniu nie masz żadnych zajęć — wolne.</div>
+              `}
             ` : mode === 'week' ? this.renderPlanWeekGrid(sessions, scope) : this.renderPlanList(sessions, scope)}
             ${!hasTemplate && rawEvents.length ? `
               <p class="usospp-muted-text">Surowe dane terminarza USOS:</p>
@@ -6512,7 +6782,8 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           }
           ctx.fillStyle = `hsl(${hue}, 45%, 30%)`;
           ctx.font = `700 12px ${FONT}`;
-          ctx.fillText(fitText(ctx, `${e.start}–${e.end}`, bw - 12), bx + 6, by + 17);
+          const tag = e.weeks === 'even' ? ' (P)' : e.weeks === 'odd' ? ' (N)' : '';
+          ctx.fillText(fitText(ctx, `${e.start}–${e.end}${tag}`, bw - 12), bx + 6, by + 17);
           ctx.fillStyle = INK;
           ctx.font = `12px ${FONT}`;
           ctx.fillText(fitText(ctx, `${shortClassType(e.type)} · ${e.subject}`, bw - 12), bx + 6, by + 33);
@@ -7721,7 +7992,9 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       };
       return `
         <div class="usospp-view">
-          ${backLink('zapisTura', '← Wróć do tury')}
+          ${s.zapisGrupyReturnView === 'planer'
+            ? backLink('planer', '← Wróć do planu')
+            : backLink('zapisTura', '← Wróć do tury')}
           <div class="usospp-card">
             <div class="usospp-card-head">
               <div>
@@ -7811,26 +8084,26 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             <div class="usospp-card-title" style="margin-bottom:12px;">Dodaj przedmiot</div>
             ${skippedStages > 0 ? `<div class="usospp-tag-muted" style="display:block;margin-bottom:10px;">Pominięto ${skippedStages} etap(y) programu z późniejszego cyklu (np. kolejny semestr) — pokazujemy tylko przedmioty z bieżącego cyklu.</div>` : ''}
             ${subjects.length === 0 ? `
-              <div class="usospp-empty-hint">Nie znaleźliśmy listy przedmiotów Twojego kierunku — sprawdź zakładkę „Przedmioty” albo dodaj przedmiot spoza listy poniżej.</div>
+              <div class="usospp-empty-hint">${this.data && this.data.stageSubjectsResultLoaded ? 'Nie znaleźliśmy listy przedmiotów Twojego kierunku — sprawdź zakładkę „Przedmioty” albo dodaj przedmiot spoza listy poniżej.' : 'Wczytywanie przedmiotów Twojego kierunku…'}</div>
             ` : this.renderPlannerSubjectList(subjects)}
             ${this.renderPlannerCustomSearch()}
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:20px;">
-            <div class="usospp-card">
-              <div class="usospp-card-title" style="margin-bottom:12px;">Twój plan (podgląd)</div>
-              ${this.renderPlannerRejCheck()}
-              ${this.renderPlannerGrid()}
-            </div>
-
-            ${bySubject.length ? `
-              <div class="usospp-card">
-                <div class="usospp-card-title" style="margin-bottom:6px;">Wybrane przedmioty</div>
-                ${bySubject.map((entry) => this.renderPlannerPickGroup(entry)).join('')}
-              </div>
-            ` : ''}
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:12px;">Twój plan (podgląd)</div>
+            ${this.renderPlannerRejCheck()}
+            ${this.renderPlannerGrid()}
           </div>
         </div>
+
+        ${bySubject.length ? `
+          <div class="usospp-card">
+            <div class="usospp-card-title" style="margin-bottom:12px;">Wybrane przedmioty</div>
+            <div class="usospp-planner-picks-grid">
+              ${bySubject.map((entry) => this.renderPlannerPickGroup(entry)).join('')}
+            </div>
+          </div>
+        ` : ''}
       `;
     }
 
@@ -7911,7 +8184,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             <div class="usospp-card-title" style="margin-bottom:12px;">Przedmioty do uwzględnienia (${selectedCount})</div>
             ${this.renderPlannerCustomSearch()}
             ${allRows.length === 0 ? `
-              <div class="usospp-empty-hint">Nie znaleźliśmy listy przedmiotów Twojego kierunku — dodaj przedmiot spoza listy powyżej.</div>
+              <div class="usospp-empty-hint">${this.data && this.data.stageSubjectsResultLoaded ? 'Nie znaleźliśmy listy przedmiotów Twojego kierunku — dodaj przedmiot spoza listy powyżej.' : 'Wczytywanie przedmiotów Twojego kierunku…'}</div>
             ` : allRows.map((s) => this.renderPlannerAutoSubjectRow(s)).join('')}
           </div>
 
@@ -8227,13 +8500,30 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const url = s.detailsUrl;
       const expanded = this.state.plannerExpandedUrl === url;
       const color = subjectColor(this.plannerColorSeed(s.name), this.settings.darkMode);
-      const already = this.state.plannerPicks.some((p) => subjectId(p.subjectUrl) === subjectId(url));
+      const subjectPicks = this.state.plannerPicks.filter((p) => subjectId(p.subjectUrl) === subjectId(url));
+      const already = subjectPicks.length > 0;
+      // Fractional status dot: split across the subject's class types
+      // (Wykład half-filled when Ćwiczenia are still missing, etc.).
+      let dotBg = 'var(--border)';
+      let dotTitle = '';
+      if (already) {
+        const progress = this.plannerSubjectTypeProgress(url);
+        if (progress && progress.done < progress.total) {
+          const pct = Math.round((progress.done / progress.total) * 100);
+          dotBg = `conic-gradient(${color.time} ${pct}%, var(--border) 0)`;
+        } else {
+          dotBg = color.time;
+        }
+        if (progress) {
+          dotTitle = progress.perType.map((t) => `${t.short}: ${t.nr ? `gr. ${t.nr}` : '—'}`).join(' • ');
+        }
+      }
       const dimmed = !!(seat && seat.cls !== 'free');
       return `
         <div class="usospp-planner-subject" data-planner-subject="${esc(url)}"${dimmed ? ' style="opacity:.55;"' : ''}>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;cursor:pointer;" data-action="plannerToggleSubject" data-url="${esc(url)}">
             <div style="display:flex;align-items:center;gap:8px;min-width:0;">
-              <span style="width:9px;height:9px;border-radius:999px;flex-shrink:0;background:${already ? color.time : 'var(--border)'};"></span>
+              <span title="${esc(dotTitle)}" style="width:12px;height:12px;border-radius:999px;flex-shrink:0;background:${dotBg};"></span>
               <div style="min-width:0;">
                 <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.name)}</div>
                 <div style="font-size:11.5px;color:var(--ink-3);">${esc(s.code || '')}${dimmed && seat.tag ? ` · ${esc(seat.tag)}` : ''}</div>
@@ -8262,9 +8552,6 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       if (!cycle.classTypes.length) {
         return `<div class="usospp-empty-hint" style="padding:10px 0;">Brak zdefiniowanych typów zajęć dla tego cyklu.</div>`;
       }
-      const previewable = cycle.classTypes.filter((ct) => ct.groupsUrl);
-      const allPreviewed = previewable.length > 0
-        && previewable.every((ct) => this.state.plannerPreviewKeys[classTypeKey(url, cycle.cycleName, ct.label)]);
       // Class types whose draft points at a different group than the saved
       // pick: committing replaces them. Say so explicitly — on the grid the
       // old block is marked, but the button row is where the decision lands.
@@ -8285,11 +8572,6 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             <button class="usospp-btn-primary" data-action="plannerAddSubject" data-url="${esc(url)}" data-subject-name="${esc(details.subjectName)}" data-cycle-name="${esc(cycle.cycleName)}">
               Dodaj do planu
             </button>
-            ${previewable.length ? `
-              <button class="usospp-btn-ghost" data-action="plannerTogglePreviewAll" data-url="${esc(url)}">
-                ${allPreviewed ? 'Ukryj podgląd w planie' : 'Podgląd wszystkich grup'}
-              </button>
-            ` : ''}
           </div>
         </div>
       `;
@@ -8318,7 +8600,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               <a class="usospp-cand-toggle${previewed ? ' active' : ''}" data-action="plannerTogglePreview" data-key="${esc(key)}" data-groups-url="${esc(ct.groupsUrl)}" data-class-type-label="${esc(ct.label)}">${previewed ? 'ukryj podgląd' : 'podgląd w planie'}</a>
             </div>
           </div>
-          ${previewed ? `<div style="font-size:11px;color:var(--ink-3);margin-bottom:6px;">Wszystkie grupy tego typu są widoczne w planie jako propozycje — najedź na termin, żeby zobaczyć plan z konkretną grupą; kliknij go, żeby ją wybrać.</div>` : ''}
+          ${previewed ? `<div style="font-size:11px;color:var(--ink-3);margin-bottom:6px;">Wszystkie grupy tego typu są widoczne w planie jako propozycje — każda na własnym pasie obok siebie; kliknij grupę, żeby ją wybrać.</div>` : ''}
           ${pendingRemoval ? `<div style="font-size:11.5px;color:oklch(55% 0.19 25);margin-bottom:6px;">Grupa ${esc(selection.nr)} zostanie usunięta z planu po zapisaniu — kliknij ją ponownie, aby to odwołać.</div>` : ''}
           ${!cached ? `
             <button class="usospp-btn-ghost" data-action="plannerLoadGroups" data-url="${esc(ct.groupsUrl)}">Pokaż grupy</button>
@@ -8389,7 +8671,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         ? `<button class="usospp-btn-ghost" style="font-size:12px;flex-shrink:0;" data-action="plannerSubjectEnroll" data-tour="${esc(enroll.tourKey || '')}" data-kod="${esc(enroll.kod || '')}" data-name="${esc(enroll.title || '')}" data-cykl="${esc(enroll.cykl || '')}" data-url="${esc(enroll.groupsUrl || '')}" data-register="${esc(enroll.registerUrl || '')}" data-nr="${esc(enroll.highlightNr ?? '')}">Zapisz się →</button>`
         : `<span style="font-size:11.5px;color:var(--ink-3);flex-shrink:0;">spoza tury</span>`;
       return `
-        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border-soft);">
+        <div class="usospp-planner-pick-card">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <span style="width:9px;height:9px;border-radius:999px;flex-shrink:0;background:${color.time};"></span>
             <div style="font-size:13px;font-weight:600;">${esc(entry.subjectName)}</div>
@@ -8515,10 +8797,11 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             const own = (committedPick && committedPick.nr) || ((draft && !draft.removed && draft.nr) || null);
             if (!counter.ownNr && own) counter.ownNr = own;
             // Block-click preview ("wolne terminy") skips confirmed-full
-            // groups; unknown stays (never filter on unknown). The
+            // groups, but only in Zapisy mode — Planowanie always shows
+            // all. Unknown stays in both (never filter on unknown). The
             // configurator's own preview shows all and dims full ones.
-            if (meta.freeOnly) {
-              const freeSeats = this.plannerCandSeats(subjectName, meta.classTypeLabel, g.nr, expandedUrl);
+            if (meta.freeOnly && this.state.plannerZapisyMode) {
+              const freeSeats = this.plannerCandSeats(subjectName, meta.classTypeLabel, g.nr, expandedUrl, g.sessions);
               if (freeSeats && freeSeats.known && freeSeats.full) return;
             }
             let pushed = false;
@@ -8536,7 +8819,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             });
             if (pushed && !isCurrent) counter.shown++;
           });
-          if (meta.freeOnly && counter.total > 0 && counter.shown === 0) filteredOut.push(counter);
+          if (meta.freeOnly && this.state.plannerZapisyMode && counter.total > 0 && counter.shown === 0) filteredOut.push(counter);
         });
       }
 
@@ -8591,9 +8874,8 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       // compared — the candidate just gets a "replaces" note instead of the
       // generic warning. Purely candidate-vs-candidate overlap never
       // counts: parallel groups sharing one slot are the normal case.
-      // Covered saved entries are collected too: the grid paints saved
-      // blocks OVER candidate ghosts, so an overlap buried underneath
-      // would otherwise be completely invisible.
+      // Covered saved entries are collected too: a saved block overlapped
+      // by previewed groups carries the list on its risk dot.
       const riskyGids = new Set();
       Object.values(byDay).forEach((list) => {
         list.forEach((c) => {
@@ -8611,6 +8893,37 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       });
 
       const dayGroups = DAY_KEYS.map((dk) => ({ day: dk, entries: byDay[dk] || [] })).filter((d) => d.entries.length);
+      // Side-by-side lanes shared by EVERYTHING on one day — saved, draft,
+      // struck-through AND candidate ghosts in a single lane set, so two
+      // terms in one slot render left/right instead of painting over each
+      // other. Greedy interval partitioning per overlap group (connected
+      // by any time overlap — same idea as planWeekGridLayout, but with a
+      // per-group laneCount so a lone entry keeps full width). Insertion
+      // order decides ties: committed picks first, then drafts, then
+      // candidates — so the old term lands left, the replacement right.
+      // Visual only; conflicts/risks above are untouched.
+      Object.values(byDay).forEach((list) => {
+        const sorted = [...list].sort((a, b) => (toMin(a.start) ?? Infinity) - (toMin(b.start) ?? Infinity) || (toMin(a.end) ?? Infinity) - (toMin(b.end) ?? Infinity));
+        const groups = [];
+        let cur = [];
+        sorted.forEach((e) => {
+          const s = toMin(e.start);
+          if (cur.length && !cur.some((a) => toMin(a.end) > s)) { groups.push(cur); cur = []; }
+          cur.push(e);
+        });
+        if (cur.length) groups.push(cur);
+        groups.forEach((g) => {
+          const laneEnds = [];
+          g.forEach((e) => {
+            const s = toMin(e.start);
+            let lane = laneEnds.findIndex((end) => end !== null && s !== null && s >= end);
+            if (lane === -1) { lane = laneEnds.length; laneEnds.push(null); }
+            laneEnds[lane] = toMin(e.end);
+            e.lane = lane;
+          });
+          g.forEach((e) => { e.laneCount = laneEnds.length; });
+        });
+      });
       const conflictInvolvesDraft = flat.some((e) => e.draft && conflicts.has(e.pickKey));
 
       return `
@@ -8622,11 +8935,11 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             ${hours.map((h) => `<div class="usospp-tt-hour" style="top:${(h - hourStart) * ROW_H}px;">${h}:00</div>`).join('')}
           </div>
           <div class="usospp-tt-days">
-            ${dayGroups.map((d, di) => `
+            ${dayGroups.map((d) => `
               <div class="usospp-tt-daycol">
                 <div class="usospp-tt-daylabel">${esc(d.day)}</div>
                 <div class="usospp-tt-daybody" style="height:${totalHeight}px;background-size:100% ${ROW_H}px;">
-                  ${this.renderPlannerCandDay(d.day, d.entries.filter((e) => e.candidate), hourStart, dark, riskyGids, di, dayGroups.length)}
+                  ${this.renderPlannerCandDay(d.entries.filter((e) => e.candidate), hourStart, dark, riskyGids)}
                   ${d.entries.filter((e) => !e.candidate).map((e) => {
                     const startMin = toMin(e.start);
                     const endMin = toMin(e.end);
@@ -8646,7 +8959,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
                     const rejClass = badge && badge.known ? (badge.full ? ' usospp-tt-entry--rej-full' : ' usospp-tt-entry--rej-ok') : '';
                     const rejClickHint = this.state.plannerZapisyMode ? ' — kliknij, aby pokazać wolne terminy' : '';
                     const rejTitle = rejLinked
-                      ? ` — zapisy (${badge.tourKey}): ${badge.enrollment === 'registered' ? 'jesteś zapisany na przedmiot; ' : ''}${badge.seatsText ? `grupa ${badge.nr}: ${badge.full ? 'brak miejsc' : `${badge.seatsText} wolne`}${rejClickHint}` : `grupy${rejClickHint}`}`
+                      ? ` — zapisy (${badge.tourKey}): ${badge.enrollment === 'registered' ? 'jesteś zapisany na przedmiot; ' : ''}${badge.seatsText ? `grupa ${badge.nr}: ${badge.full ? 'brak miejsc' : `zajęte ${badge.taken} z ${badge.cap}`}${rejClickHint}` : `grupy${rejClickHint}`}`
                       : '';
                     // A saved block whose class type is currently previewed
                     // gets the half-ghost mark (dashed outline, no layout
@@ -8662,22 +8975,36 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
                     const coveredTitle = coveredBy.length
                       ? `Podglądane grupy na ten termin: ${coveredBy.map((c) => `gr. ${c.nr}${c.sameKey ? ' (zastąpi obecną)' : ''}`).join(', ')}`
                       : '';
-                    const entryStyle = e.draft
+                    // NOTE: the lane suffix must apply to EVERY branch —
+                    // parenthesize the whole ternary (`+` binds tighter
+                    // than `?:`, otherwise only the solid branch gets it
+                    // and draft/struck blocks stay full-width over lanes).
+                    const entryStyle = (e.draft
                       ? `background:transparent;border:2px dashed ${color.time};opacity:0.85;`
                       : e.pendingRemoval
                         ? `background:transparent;border:2px dashed ${removeColor};opacity:0.55;`
                         : e.willBeReplaced
                           ? `background:transparent;border:2px dashed ${color.time};opacity:0.6;`
-                          : `background:${color.bg};${previewedType ? `outline:2px dashed ${color.time};outline-offset:-2px;` : ''}`;
+                          : `background:${color.bg};${previewedType ? `outline:2px dashed ${color.time};outline-offset:-2px;` : ''}`)
+                      // Lane geometry (see the per-day assignment above):
+                      // shared by both click-action branches below, since
+                      // both compose their style from entryStyle.
+                      + plannerLaneStyle(e.lane || 0, e.laneCount || 1);
                     const struck = e.pendingRemoval || e.willBeReplaced;
                     const labelStyle = `color:${e.pendingRemoval ? removeColor : color.label};${struck ? 'text-decoration:line-through;' : ''}`;
-                    // Block clicks never navigate (see plannerGridBlockAction):
-                    // both modes focus the subject and toggle its ghosts
-                    // (free-only in Zapisy); Zapisy navigation lives only in
-                    // explicit buttons.
-                    const { attr: rejAction, note: focusNote } = this.plannerGridBlockAction({
-                      top, height, entryStyle, key: e.key, subjectUrl: e.subjectUrl,
-                    });
+                    // Struck-through blocks (a committed pick shadowed by a
+                    // diverging draft or pending removal) revert the decision
+                    // on click instead of focusing/toggling ghosts — see
+                    // plannerRevertDraft. Everything else keeps the
+                    // focus+toggle behaviour below.
+                    const { attr: rejAction, note: focusNote } = (struck && e.key)
+                      ? {
+                          attr: ` data-action="plannerRevertDraft" data-key="${esc(e.key)}" style="top:${top}px;height:${height}px;${entryStyle}cursor:pointer;"`,
+                          note: ' — kliknij, aby cofnąć zmianę',
+                        }
+                      : this.plannerGridBlockAction({
+                        top, height, entryStyle, key: e.key, subjectUrl: e.subjectUrl,
+                      });
                     const rejBadgeHtml = rejLinked
                       ? ` <span class="usospp-tt-entry-rej${badge.full ? ' full' : ''}">${badge.enrollment === 'registered' ? '✓ ' : ''}${esc(badge.seatsText || 'zapisy')}</span>`
                       : '';
@@ -8699,91 +9026,21 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     }
 
     // Candidate ghosts for one day column of the preview grid — entries
-    // from previewed class types ("podgląd w planie"), clustered by
-    // (start, end, weeks). Parallel groups almost always share one
-    // identical slot, and a stack of exact-duplicate boxes would only ever
-    // let the top one be hovered, so a multi-group cluster renders as a
-    // single neutral "N grup" box: hovering it opens a popover with one
-    // row per group (row hover = live preview in the grid, row click =
-    // choose), backed by one hidden per-group box so the hovered group can
-    // materialize exactly where the neutral box sits. A cluster of one is
-    // the simple case from the feature description — its box is directly
-    // hoverable/clickable.
-    renderPlannerCandDay(dayKey, candEntries, hourStart, dark, riskyGids, dayIndex, dayCount) {
+    // from previewed class types ("podgląd w planie"). Every group renders
+    // as its own directly-clickable box on its side-by-side lane (lanes
+    // assigned over the whole day in renderPlannerGrid, shared with saved,
+    // draft and struck blocks) — no "N grup" clusters, no hover popovers.
+    renderPlannerCandDay(candEntries, hourStart, dark, riskyGids) {
       if (!candEntries.length) return '';
       const ROW_H = 60;
-      // "Current" hybrids (the already-committed group of a previewed
-      // type) never join the "N grup" clusters — they're rendered as
-      // standalone hybrid boxes so the chosen term stays identifiable.
-      const current = candEntries.filter((e) => e.current);
-      const bySlot = new Map();
-      candEntries.forEach((e) => {
-        if (e.current) return;
-        const cid = `${dayKey}::${e.start}::${e.end}::${e.weeks || ''}`;
-        if (!bySlot.has(cid)) bySlot.set(cid, []);
-        bySlot.get(cid).push(e);
-      });
-      // The rightmost day columns anchor the popover to the right edge, so
-      // it grows inward instead of widening the timetable's horizontal
-      // scroll to nothing.
-      const anchorRight = dayIndex >= dayCount - 2;
-      return [...bySlot.entries()].map(([cid, entries]) => {
-        const first = entries[0];
-        const top = (toMin(first.start) - hourStart * 60) * (ROW_H / 60);
-        const height = Math.max(36, (toMin(first.end) - toMin(first.start)) * (ROW_H / 60));
-        if (entries.length === 1) {
-          return this.renderPlannerCandBox(first, { top, height, dark, stacked: false, risky: riskyGids.has(first.candGroup) });
-        }
-        const boxes = entries
-          .map((e) => this.renderPlannerCandBox(e, { top, height, dark, stacked: true, risky: riskyGids.has(e.candGroup) }))
-          .join('');
-        const byGid = new Map();
-        entries.forEach((e) => { if (!byGid.has(e.candGroup)) byGid.set(e.candGroup, e); });
-        const rows = [...byGid.values()].map((e) => {
-          const rowSeats = this.plannerCandSeats(first.subjectName, e.candRef.classTypeLabel, e.candRef.nr, e.subjectUrl);
-          const rowFull = !!(this.state.plannerZapisyMode && rowSeats && rowSeats.known && rowSeats.full);
-          const rowAutoTag = this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr);
-          const rowSeatsTag = (!rowAutoTag && rowSeats && rowSeats.known && !rowSeats.full && rowSeats.seatsText)
-            ? ` <span class="usospp-tt-entry-rej">${esc(rowSeats.seatsText)}</span>` : '';
-          return `
-          <div class="usospp-cand-row${riskyGids.has(e.candGroup) ? ' usospp-cand-row--risk' : ''}" data-cand-row="1"${rowFull ? ' style="opacity:.5;"' : ''}
-               data-cand-group="${esc(e.candGroup)}" data-action="plannerSelectGroup"
-               data-key="${esc(e.candRef.key)}" data-groups-url="${esc(e.candRef.groupsUrl)}"
-               data-nr="${esc(e.candRef.nr)}" data-class-type-label="${esc(e.candRef.classTypeLabel)}">
-            <div class="usospp-cand-row-main">
-              Grupa ${esc(e.candRef.nr)}
-              <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:10px;padding:1px 7px;">${esc(e.classTypeShort)}</span>
-              ${riskyGids.has(e.candGroup) ? `<span class="usospp-cand-risk-dot" title="${esc(e.replaceNr ? 'Nachodzi na obecny termin — wybór go zastąpi' : 'Nachodzi na zajęcia już wybrane w planie')}"></span>` : ''}${rowAutoTag}${rowFull ? ' <span class="usospp-tt-entry-rej full">pełna</span>' : ''}${rowSeatsTag}
-            </div>
-            <div class="usospp-cand-row-sub">${esc(e.candRef.teacher || 'brak danych o prowadzącym')}${e.place ? ` · ${esc(shortPlace(e.place))}` : ''}</div>
-          </div>
-          `;
-        }).join('');
-        const labels = [...new Set(entries.map((e) => e.classTypeShort))];
-        const color = subjectColor(this.plannerColorSeed(first.subjectName), dark);
-        const weeksTag = weeksLabel(first.weeks);
-        // The neutral cluster box hides every group inside it — if any of
-        // them collides, the box itself has to carry the warning, otherwise
-        // the overlap stays invisible until hover.
-        const clusterRisky = entries.some((e) => riskyGids.has(e.candGroup));
-        return `
-          <div class="usospp-tt-entry usospp-tt-entry--cand usospp-cand-neutral" data-cand-neutral="1" data-cand-cluster="${esc(cid)}"
-               style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:0.45;"
-               title="${esc(`${byGid.size} równoległych grup na ten termin — najedź, aby je porównać${clusterRisky ? ' — uwaga: część grup nachodzi na zajęcia już wybrane' : ''}`)}">
-            <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(first.start)}–${esc(first.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
-            <div class="usospp-tt-entry-label" style="color:${color.label};">${labels.length === 1 ? `${esc(labels[0])} · ` : ''}${byGid.size} grup — wybierz${clusterRisky ? ' ⚠' : ''}</div>
-            <div class="usospp-tt-entry-meta" style="color:${color.meta};">najedź, aby porównać terminy</div>
-          </div>
-          ${boxes}
-          <div class="usospp-cand-pop" data-cand-pop="${esc(cid)}" data-cand-cluster="${esc(cid)}" style="top:${top + height + 2}px;${anchorRight ? 'right:2px;' : 'left:2px;'}">
-            <div class="usospp-cand-pop-title">Najedź na grupę, aby zobaczyć ją w planie — kliknij, aby wybrać:</div>
-            ${rows}
-          </div>
-        `;
-      }).join('') + current.map((e) => {
+      return candEntries.map((e) => {
         const top = (toMin(e.start) - hourStart * 60) * (ROW_H / 60);
         const height = Math.max(36, (toMin(e.end) - toMin(e.start)) * (ROW_H / 60));
-        return this.renderPlannerCurrentBox(e, { top, height, dark });
+        // "Current" hybrids (the already-committed group of a previewed
+        // type) render as standalone boxes so the chosen term stays
+        // identifiable among the proposal ghosts.
+        if (e.current) return this.renderPlannerCurrentBox(e, { top, height, dark });
+        return this.renderPlannerCandBox(e, { top, height, dark, risky: riskyGids.has(e.candGroup) });
       }).join('');
     }
 
@@ -8804,7 +9061,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         + ' — obecnie wybrana grupa, ten termin jest w planie';
       return `
         <div class="usospp-tt-entry usospp-cand-current"
-             style="top:${top}px;height:${height}px;background:${color.bg};border:2px dashed ${color.time};opacity:0.9;"
+             style="top:${top}px;height:${height}px;background:${color.bg};border:2px dashed ${color.time};opacity:0.9;${plannerLaneStyle(e.lane || 0, e.laneCount || 1)}"
              title="${esc(full)}">
           <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
           <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)} · teraz</div>
@@ -8817,16 +9074,21 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // (dashed, subject colour) but visibly lighter — a "maybe", not a
     // choice. Clicking runs the very same plannerSelectGroup the radio rows
     // in the subject list use, so a group picked from the grid is
-    // indistinguishable from one picked from the list afterwards.
-    renderPlannerCandBox(e, { top, height, dark, stacked, risky }) {
+    // indistinguishable from one picked from the list afterwards. Every
+    // group has its own box on its side-by-side lane — no hover popovers.
+    renderPlannerCandBox(e, { top, height, dark, risky }) {
       const color = subjectColor(e.seed, dark);
       const weeksTag = weeksLabel(e.weeks);
       // Zapisy mode dims preview ghosts of confirmed-full groups (same
       // cached tour data as the subject list) so the eye lands on free ones.
-      // The N/M counter shows whenever known, in both modes (auto-mode map
-      // wins when it has the group, to avoid double tags).
-      const zapSeats = this.plannerCandSeats(e.subjectName, e.candRef.classTypeLabel, e.candRef.nr, e.subjectUrl);
-      const dimFull = !!(this.state.plannerZapisyMode && zapSeats && zapSeats.known && zapSeats.full);
+      // The N/M counter shows whenever known — but, like dimming and
+      // filtering, only in Zapisy mode: Planowanie ghosts stay clean
+      // (no seat info at all). Auto-mode map wins when it has the group,
+      // to avoid double tags.
+      const zapSeats = this.state.plannerZapisyMode
+        ? this.plannerCandSeats(e.subjectName, e.candRef.classTypeLabel, e.candRef.nr, e.subjectUrl, [e])
+        : null;
+      const dimFull = !!(zapSeats && zapSeats.known && zapSeats.full);
       const autoTag = this.seatTagHtml(e.candRef.key, e.candRef.classTypeLabel, e.candRef.nr);
       const seatsTag = (!autoTag && zapSeats && zapSeats.known && !zapSeats.full && zapSeats.seatsText)
         ? ` <span class="usospp-tt-entry-rej">${esc(zapSeats.seatsText)}</span>` : '';
@@ -8840,11 +9102,10 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         + riskyNote
         + ' — propozycja, kliknij, aby wybrać';
       return `
-        <div class="usospp-tt-entry usospp-tt-entry--cand${stacked ? ' usospp-cand-in-stack' : ''}${risky ? ' usospp-cand-risk' : ''}"
-             data-cand-group="${esc(e.candGroup)}" data-action="plannerSelectGroup"
+        <div class="usospp-tt-entry usospp-tt-entry--cand${risky ? ' usospp-cand-risk' : ''}" data-action="plannerSelectGroup"
              data-key="${esc(e.candRef.key)}" data-groups-url="${esc(e.candRef.groupsUrl)}"
              data-nr="${esc(e.candRef.nr)}" data-class-type-label="${esc(e.candRef.classTypeLabel)}"
-              style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:${dimFull ? '0.3' : '0.55'};"
+              style="top:${top}px;height:${height}px;border:2px dashed ${color.time};background:${color.bg};opacity:${dimFull ? '0.3' : '0.55'};${plannerLaneStyle(e.lane || 0, e.laneCount || 1)}"
               title="${esc(full)}">
            <div class="usospp-tt-entry-time" style="color:${color.time};">${esc(e.start)}–${esc(e.end)}${weeksTag ? ` <span class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);font-size:9.5px;padding:1px 5px;">${weeksTag}</span>` : ''}</div>
             <div class="usospp-tt-entry-label" style="color:${color.label};">${esc(e.classTypeShort)} · grupa ${esc(e.candRef.nr)}${risky ? ' ⚠' : ''}${autoTag}${dimFull ? ' <span class="usospp-tt-entry-rej full">pełna</span>' : ''}${seatsTag}</div>
@@ -9025,6 +9286,240 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
 
     renderAnkiety() {
       return this.renderInfoTableView(this.data.surveysResult, 'Brak ankiet do wypełnienia.');
+    }
+
+    // Manual "Sprawdź status" on the mLegitymacja view — same lazy pattern
+    // as newsRetry: flip a loading flag (the card shows "Ładowanie…"),
+    // re-fetch just this page (the same GET the classic "Sprawdź status
+    // zamówienia" form sends), store it back and re-render. On failure
+    // the previous result stays, so the card simply comes back.
+    async mlegitymacjaRefresh() {
+      if (this.state.mlegitymacjaRefreshing) return;
+      this.setState({ mlegitymacjaRefreshing: true, mlegQrRevealed: false });
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      try {
+        const adapter = adapters ? adapters.selectAdapter() : null;
+        if (!scrape || !adapter || !scrape.fetchMlegitymacjaResult) throw new Error('no scraper');
+        this.data.mlegitymacjaResult = await scrape.fetchMlegitymacjaResult(adapter, this.data, true);
+      } catch (e) {
+        // keep the previous result — the card stays
+      }
+      this.setState({ mlegitymacjaRefreshing: false });
+    }
+
+    // Copy-to-clipboard for the mLegitymacja pickup codes — direct DOM
+    // feedback on the button, deliberately no re-render so the drawn QR
+    // canvas underneath is left untouched.
+    mlegCopy(el) {
+      const text = (el && el.dataset && el.dataset.copy) || '';
+      if (!text) return;
+      const done = () => {
+        const orig = el.innerHTML;
+        el.textContent = 'Skopiowano ✓';
+        setTimeout(() => { if (el.isConnected) el.innerHTML = orig; }, 1500);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => this.mlegCopyFallback(text, done));
+      } else {
+        this.mlegCopyFallback(text, done);
+      }
+    }
+    mlegCopyFallback(text, done) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0;';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        done();
+      } catch (e) { /* clipboard unavailable — the code stays selectable by hand */ }
+    }
+
+    // Post-render hook for the mLegitymacja "Do odbioru" QR (called from
+    // render(), same slot as mountMapaIfNeeded): draws the scraped
+    // qrText into [data-mleg-qr], lazy-loading vendor/qrcode on first
+    // use. Every render() rebuilds the DOM from scratch, so a stale
+    // canvas can never survive — same teardown discipline as the map.
+    drawMlegQrIfNeeded() {
+      if (this.state.view !== 'mlegitymacja') return;
+      const canvas = this.root.querySelector('[data-mleg-qr]');
+      if (!canvas) return; // pickup codes missing / lib-load error state shown instead
+      const r = this.data.mlegitymacjaResult;
+      const code = r && r.qrText;
+      if (!code) return;
+      if (canvas.dataset.drawnFor === code) return;
+      if (!window.qrcode) {
+        const loader = window.USOSPP_QRCODE;
+        if (loader && !this._mlegQrLoading) {
+          this._mlegQrLoading = true;
+          loader.ensureQrCode().then(() => {
+            this._mlegQrLoading = false;
+            if (this.state.view === 'mlegitymacja') this.drawMlegQrIfNeeded();
+          }).catch(() => {
+            this._mlegQrLoading = false;
+            this.state.mlegQrError = true;
+            if (this.state.view === 'mlegitymacja') this.render();
+          });
+        }
+        return;
+      }
+      try {
+        const qr = window.qrcode(0, 'M');
+        qr.addData(code);
+        qr.make();
+        const n = qr.getModuleCount();
+        const quiet = 4, scale = 6;
+        const size = (n + quiet * 2) * scale;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff'; // quiet zone stays white in dark mode too — scanners need the contrast
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#000000';
+        for (let row = 0; row < n; row++) {
+          for (let col = 0; col < n; col++) {
+            if (qr.isDark(row, col)) ctx.fillRect((col + quiet) * scale, (row + quiet) * scale, scale, scale);
+          }
+        }
+        canvas.dataset.drawnFor = code;
+      } catch (e) {
+        this.state.mlegQrError = true;
+        if (this.state.view === 'mlegitymacja') this.render();
+      }
+    }
+
+    // mLegitymacja (Moje studia) — read-only order status. Writes stay in
+    // classic USOS by project policy: ordering, cancelling and revoking
+    // are link-outs, the panel only reads status + dates + pickup codes
+    // (the "Do odbioru" QR is re-rendered in-panel from the scraped text
+    // via vendor/qrcode — see drawMlegQrIfNeeded).
+    renderMlegitymacja() {
+      // Canonical view header, same as Plan/Oceny/Egzaminy: title +
+      // status badge on the left, ghost "Otwórz w USOS →" top-right.
+      // The URL hardcodes &usospp_off=1 like every other call-site.
+      const head = (title, status) => `
+        <div class="usospp-card-head">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div class="usospp-card-title">${esc(title)}</div>
+            ${mlegStatusBadge(status)}
+          </div>
+          <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dla_stud/studia/mlegitymacja/index&usospp_off=1">Otwórz w USOS →</button>
+        </div>
+      `;
+      const dates = (r) => {
+        const parts = [];
+        if (r.orderDate) parts.push(`Data zamówienia: ${esc(formatMlegDate(r.orderDate))}`);
+        if (r.validUntil) parts.push(`Ważność do: ${esc(formatMlegDate(r.validUntil))}`);
+        return parts.length ? `<div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${parts.join(' · ')}</div>` : '';
+      };
+      const actions = (buttons) => `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">${buttons}</div>`;
+      const refreshBtn = `<button class="usospp-btn-ghost" data-action="mlegitymacjaRefresh">Sprawdź status</button>`;
+      if (this.state.mlegitymacjaRefreshing || !this.data.mlegitymacjaResultLoaded) {
+        return `<div class="usospp-view"><div class="usospp-card"><div class="usospp-empty-hint">Ładowanie statusu mLegitymacji…</div></div></div>`;
+      }
+      const r = this.data.mlegitymacjaResult;
+      if (!r || !r.supported) {
+        return `<div class="usospp-view"><div class="usospp-card">${head('mLegitymacja')}<div class="usospp-empty-hint">Nie udało się odczytać statusu mLegitymacji.</div>${actions(`<button class="usospp-btn-ghost" data-action="mlegitymacjaRefresh">Spróbuj ponownie</button>`)}</div></div>`;
+      }
+      if (r.pickupReady) {
+        const code = r.qrText, pass = r.qrPass;
+        if (!code) {
+          // Status says "Do odbioru" but the codes aren't in the markup
+          // (yet) — honest fallback instead of a QR of nothing.
+          return `
+            <div class="usospp-view">
+              <div class="usospp-card">
+                ${head('mLegitymacja', r.status)}
+                <div class="usospp-empty-hint">Twoja mLegitymacja jest gotowa, ale nie udało się odczytać kodów odbioru — zeskanuj kod QR w klasycznym USOS.</div>
+                ${actions(refreshBtn)}
+              </div>
+            </div>
+          `;
+        }
+        // Privacy gate: the QR + activation code are sensitive pickup
+        // credentials, so the view opens gated — status and dates stay
+        // visible, but the codes (and their canvas) only render after an
+        // explicit "Pokaż kod odbioru" click. Nothing secret ever sits in
+        // the DOM before that, and leaving/refreshing hides it again.
+        if (!this.state.mlegQrRevealed) {
+          return `
+            <div class="usospp-view">
+              <div class="usospp-card">
+                ${head('mLegitymacja', r.status)}
+                ${dates(r)}
+                <div style="font-size:13px;color:var(--ink-2);margin-top:6px;line-height:1.5;">Twoja mLegitymacja jest gotowa do dodania w aplikacji mObywatel.</div>
+                <div class="usospp-notice" style="margin-top:12px;"><span>🔒 Kod QR i kod aktywacyjny to Twoje prywatne dane odbioru — pokaż je tylko wtedy, gdy nikt postronny nie patrzy w ekran.</span></div>
+                ${actions(`<button class="usospp-btn-ghost" data-action="mlegToggleQr">Pokaż kod odbioru</button>${refreshBtn}`)}
+              </div>
+            </div>
+          `;
+        }
+        return `
+          <div class="usospp-view">
+            <div class="usospp-card">
+              ${head('mLegitymacja', r.status)}
+              <div style="font-size:13px;color:var(--ink-2);margin-top:6px;line-height:1.5;">Uruchom aplikację mObywatel i dodaj nową legitymację, potem zeskanuj kod albo przepisz go razem z kodem aktywacyjnym.</div>
+              <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;align-items:flex-start;">
+                <div style="background:#fff;border-radius:12px;padding:10px;line-height:0;flex-shrink:0;">
+                  ${this.state.mlegQrError
+                    ? `<div style="font-size:12px;color:var(--ink-2);line-height:1.5;">Nie udało się narysować kodu.<br>Otwórz go w USOS.</div>`
+                    : `<canvas data-mleg-qr width="222" height="222" style="width:200px;height:200px;border-radius:4px;">${esc(code)}</canvas>`}
+                </div>
+                <div style="flex:1;min-width:200px;">
+                  <div class="usospp-eyebrow" style="margin-bottom:4px;">Kod QR (tekstowo)</div>
+                  <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+                    <code style="font-size:12.5px;word-break:break-all;flex:1;font-family:ui-monospace,monospace;">${esc(code)}</code>
+                    <button class="usospp-btn-ghost" data-action="mlegCopy" data-copy="${esc(code)}">Kopiuj</button>
+                  </div>
+                  ${pass ? `
+                    <div class="usospp-eyebrow" style="margin:10px 0 4px;">Kod aktywacyjny</div>
+                    <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+                      <code style="font-size:14px;font-weight:700;flex:1;font-family:ui-monospace,monospace;letter-spacing:0.04em;">${esc(pass)}</code>
+                      <button class="usospp-btn-ghost" data-action="mlegCopy" data-copy="${esc(pass)}">Kopiuj</button>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+              ${actions(`<button class="usospp-btn-ghost" data-action="mlegToggleQr">Ukryj kody</button>${refreshBtn}`)}
+            </div>
+          </div>
+        `;
+      }
+      if (!r.hasOrder) {
+        return `
+          <div class="usospp-view">
+            <div class="usospp-card">
+              ${head('mLegitymacja')}
+              <div style="font-size:13.5px;font-weight:600;">Nie masz jeszcze zamówienia mLegitymacji</div>
+              <div style="font-size:13px;color:var(--ink-2);margin-top:6px;line-height:1.5;">mLegitymacja potwierdza Twoje uprawnienia studenta (studia I, II stopnia i jednolite magisterskie) — do korzystania z niej potrzebna jest aplikacja <strong>mObywatel</strong>.</div>
+              <div class="usospp-eyebrow" style="margin:12px 0 6px;">Kto może otrzymać?</div>
+              <ul style="font-size:13px;color:var(--ink-2);margin:0;padding-left:18px;line-height:1.6;">
+                <li>status studenta studiów I, II st. lub jednolitych magisterskich,</li>
+                <li>numer PESEL,</li>
+                <li>zdjęcie do legitymacji w systemie USOS,</li>
+                <li>numer albumu.</li>
+              </ul>
+              <div class="usospp-eyebrow" style="margin:12px 0 6px;">Jak zamówić?</div>
+              <div style="font-size:13px;color:var(--ink-2);margin-top:4px;line-height:1.5;">Zamówienie składasz w aplikacji Mobilny USOS albo w USOSweb. Jeśli spełniasz kryteria, otrzymasz kod QR (również w wersji tekstowej) i kod aktywacyjny do wpisania w mObywatelu — wydanie kodów trwa zazwyczaj kilka minut.</div>
+              ${actions(`<button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dla_stud/studia/mlegitymacja/index&usospp_off=1">Zamów w USOS →</button>`)}
+            </div>
+          </div>
+        `;
+      }
+      const info = MLEG_STATUS_INFO.find(([re]) => re.test((r.status || '').trim()));
+      return `
+        <div class="usospp-view">
+          <div class="usospp-card">
+            ${head('Zamówienie mLegitymacji', r.status)}
+            ${dates(r)}
+            ${info ? `<div style="font-size:13px;color:var(--ink-2);margin-top:6px;line-height:1.5;">${esc(info[1])}</div>` : ''}
+            ${actions(refreshBtn)}
+          </div>
+        </div>
+      `;
     }
 
     renderUstawienia() {

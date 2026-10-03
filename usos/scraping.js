@@ -168,6 +168,11 @@
     sprawdziany: 'kontroler.php?_action=dla_stud/studia/sprawdziany/index',
     podania: 'kontroler.php?_action=dla_stud/studia/podania/listaZlozonych',
     ankiety: 'kontroler.php?_action=dla_stud/studia/ankiety/index',
+    // mLegitymacja order-status page — read-only display (see
+    // adapter.getMlegitymacja). Verified live 2026-10-01 in the
+    // "Oczekuje" state; states unobservable then (no order yet,
+    // Do-odbioru/QR) are parsed defensively — see the adapter comment.
+    mlegitymacja: 'kontroler.php?_action=dla_stud/studia/mlegitymacja/index',
   };
 
   // Maintenance mode (przerwa techniczna / synchronizacja danych): USOSweb
@@ -573,10 +578,15 @@
         res = adapter.getGroupDetails(doc);
       } catch (e) { /* keep miss */ }
     }
-    groupDetailsCache.set(url, res);
-    if (groupDetailsCache.size > 100) {
-      const oldest = groupDetailsCache.keys().next().value;
-      groupDetailsCache.delete(oldest);
+    // Only successes are cached: a transient failure (expired callback
+    // token, hiccup) cached as miss would poison the group forever —
+    // rooms, teachers and meetings would stay missing with no retry.
+    if (res && res.supported) {
+      groupDetailsCache.set(url, res);
+      if (groupDetailsCache.size > 100) {
+        const oldest = groupDetailsCache.keys().next().value;
+        groupDetailsCache.delete(oldest);
+      }
     }
     return res;
   }
@@ -706,5 +716,22 @@
     data.participantsResultLoaded = true;
     return result;
   }
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchStageSubjectsResult };
+  // mLegitymacja order status (see adapter.getMlegitymacja). Fetched
+  // lazily on view entry — a rarely visited, one-light-page view — never
+  // on mount. force:true re-reads for the manual "Sprawdź status" button
+  // (the same GET the classic "Sprawdź status zamówienia" form sends).
+  async function fetchMlegitymacjaResult(adapter, data, force) {
+    const miss = { supported: false, verified: false, hasOrder: false, pickupReady: false, status: null, orderDate: null, validUntil: null, qrText: null, qrPass: null };
+    if (!data) return miss;
+    if (data.mlegitymacjaResultLoaded && !force) return data.mlegitymacjaResult;
+    let result = miss;
+    try {
+      const doc = await fetchDoc(PATHS.mlegitymacja);
+      if (doc && adapter && typeof adapter.getMlegitymacja === 'function') result = adapter.getMlegitymacja(doc);
+    } catch (e) { /* keep default */ }
+    data.mlegitymacjaResult = result;
+    data.mlegitymacjaResultLoaded = true;
+    return result;
+  }
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchStageSubjectsResult, fetchMlegitymacjaResult };
 })();

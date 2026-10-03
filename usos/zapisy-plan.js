@@ -32,7 +32,20 @@
   }
 
   function normDay(day) {
-    return normType(day);
+    // Canonical day key: planner picks and catalog sessions use either the
+    // PN..ND keys or full Polish names ("poniedziałek"), so map both to
+    // the same key instead of comparing raw strings ("pn" !==
+    // "poniedzialek" would veto every cross-source match).
+    const n = normType(day);
+    return {
+      pn: 'PN', pon: 'PN', poniedzialek: 'PN',
+      wt: 'WT', wto: 'WT', wtorek: 'WT',
+      sr: 'ŚR', sro: 'ŚR', sroda: 'ŚR',
+      czw: 'CZ', cz: 'CZ', czwartek: 'CZ',
+      pt: 'PT', pia: 'PT', piatek: 'PT',
+      so: 'SO', sob: 'SO', sobota: 'SO',
+      nie: 'ND', niedz: 'ND', nd: 'ND', niedziela: 'ND',
+    }[n] || n;
   }
 
   function normTime(t) {
@@ -48,8 +61,9 @@
     if (normTime(pickSession.end) !== normTime(rejSession.end)) return false;
     const pw = pickSession.weeks || 'every';
     const rw = rejSession.weeks || 'every';
-    // A one-sided 'every'/unknown never vetoes; two known parities must agree.
-    if (pw !== 'every' && rw !== 'every' && pw !== rw) return false;
+    // A one-sided 'every'/'unknown' never vetoes; two known parities must agree.
+    const known = (w) => w && w !== 'every' && w !== 'unknown';
+    if (known(pw) && known(rw) && pw !== rw) return false;
     return true;
   }
 

@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- Reconstructed fixture of dla_stud/studia/mlegitymacja/index in the
+  "Do odbioru" state (captured live 2026-10-02, codes replaced with dummy
+  values). Used to test adapter.getMlegitymacja without touching a real
+  order. Custom elements (usos-*) parse as unknown elements — same as in
+  a fetchDoc-parsed document, where they never upgrade either. -->
+<html lang="pl"><head><meta charset="utf-8"><title>mLegitymacja - Moje studia - USOSweb</title></head>
+<body>
+<main>
+  <div class="usos-ui">
+    <help-dialog dialog-title="Pomoc" class="pomoc-mlegitymacje"><div class="pomoc-mlegitymacje-content">
+      <h3>Co oznaczają poszczególne statusy?</h3>
+      <ul><li>Do odbioru – użytkownik może dodać mLegitymację do aplikacji mObywatel.</li></ul>
+    </div></help-dialog>
+    <h1>Zamówienie mLegitymacji</h1>
+    <usos-frame>
+      <span slot="title">Dane zamówienia</span>
+      <div class="inline-keyvalue-list">
+        <div>
+          <div>Status:</div>
+          <div><usos-tag color="2"> Do odbioru </usos-tag></div>
+        </div>
+        <div>
+          <div>Data zamówienia:</div>
+          <div><local-time datetime="2026-10-02 09:14:22"></local-time></div>
+        </div>
+        <div>
+          <div> Planowana data ważności mLegitymacji: </div>
+          <div><local-time format="date" datetime="2027-03-31"></local-time></div>
+        </div>
+      </div>
+      <div class="flex gap-s inline-form-buttons" slot="foot">
+        <form accept-charset="UTF-8" action="https://web.usos.pwr.edu.pl/kontroler.php?_action=dla_stud/studia/mlegitymacja/anuluj" method="POST"><button type="submit" class="neutral outlined cancel-order">Anuluj zamówienie</button></form>
+        <button type="button" class="neutral to-right" onclick="switchQrcodeFrame()">Dodaj mLegitymację do mObywatela</button>
+      </div>
+    </usos-frame>
+    <div id="qrcode-frame" style="display:none;">
+      <span slot="title">Instrukcja dodania mLegitymacji do mObywatela</span>
+      <ol id="steps">
+        <li>Uruchomić aplikację mObywatel i dodać nową legitymację.</li>
+        <li>Zeskanować lub skopiować do mObywatela poniższy kod QR.
+          <div class="qr-code-text">
+            <span id="qr-code-text">testcode1234567890abcdef1234567890</span>
+          </div>
+          <div class="qr-code-img" id="testcode1234567890abcdef1234567890"></div>
+        </li>
+        <li>Potwierdzić kod QR kodem aktywacyjnym.
+          <p class="qr-code-pass">Kod aktywacyjny:
+            <span class="pass" id="qr-code-pass">Ab3xK9qZ</span>
+          </p>
+        </li>
+      </ol>
+    </div>
+  </div>
+</main>
+</body></html>

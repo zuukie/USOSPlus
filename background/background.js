@@ -34,6 +34,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'usospp:ensureQrCode') {
+    // Lazy QR generator injection (see usos/qrcode-loader.js): loads
+    // vendor/qrcode into the tab's ISOLATED world — the same realm the
+    // extension's content scripts run in, so the mLegitymacja pickup
+    // view's `window.qrcode` checks see it. Same rationale as Leaflet
+    // above: the pickup view is rarely opened, so parsing ~20 kB on
+    // every USOS page would be pure waste.
+    if (sender && sender.id && sender.id !== chrome.runtime.id) return undefined;
+    ensureQrCodeInTab(sender && sender.tab && sender.tab.id).then(sendResponse);
+    return true;
+  }
+
   return undefined;
 });
 
@@ -71,6 +83,29 @@ async function ensureLeafletInTab(tabId) {
   }
 }
 
+async function ensureQrCodeInTab(tabId) {
+  try {
+    if (!tabId) return { ok: false, error: 'no sender tab' };
+    const hasIt = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!window.qrcode,
+    });
+    if (hasIt && hasIt[0] && hasIt[0].result) return { ok: true, cached: true };
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['vendor/qrcode/qrcode.js'],
+    });
+    const verify = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => typeof window.qrcode === 'function',
+    });
+    if (verify && verify[0] && verify[0].result) return { ok: true };
+    return { ok: false, error: 'qrcode unavailable after injection' };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
 // File lists for each dynamically-registrable module — MUST be kept in sync
 // with the matching static entry in manifest.json. popup.js's "Dodaj obsługę
 // tej uczelni" flow can request either 'usos' or 'irk' (its own IRK
@@ -84,6 +119,7 @@ const MODULE_FILES = {
       'core/detect.js',
       'core/sanitize-html.js',
       'usos/leaflet-loader.js',
+      'usos/qrcode-loader.js',
       'usos/planner-store.js',
       'usos/adapters.js',
       'usos/scraping.js',

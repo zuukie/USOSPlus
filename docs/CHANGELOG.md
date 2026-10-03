@@ -1,13 +1,23 @@
 # Co nowego w USOS++
 
+## 0.9.10
+
+- **Generator: nakładki obok siebie, nie na sobie** — terminy w jednym slocie dzielą się na równe pasy lewo/prawo (stary termin i nowy draft też), każdy od razu klikalny; koniec z rozwijanym „N grup” i hoverowaniem.
+- **Generator: kropki dzielone na typy zajęć** — kropka statusu zapełnia się ułamkowo (np. pół przy samym wykładzie), a dymek rozpisuje stan per typ.
+- **Generator: liczniki zajętości jako zajęte miejsca** — w Zapisach widać „23/26” i „pełna” zamiast wolnych miejsc.
+- **Generator: poprawki klikania** — klik bloku rozwija przedmiot, klik przekreślonego terminu cofa decyzję, a odkliknięcie niezapisanej grupy wraca do zapisanej zamiast fałszywego komunikatu o usuwaniu.
+- **mLegitymacja w Więcej** — status zamówienia (Oczekuje, Do odbioru, Odebrana…), daty i przycisk „Otwórz w USOS”; do odbioru jest kod QR z klasyka, jego wersja tekstowa i kod aktywacyjny do mObywatela, z kopiowaniem. Kody siedzą za bramką „Pokaż kod odbioru” i chowają się przy wyjściu.
+- **Plan pokazuje wszystko** — zajęcia co 2 tygodnie (P/N obok siebie) już nie znikają z Ogólnego, poranne terminy (np. 9:15) wchodzą do boxu Zajęcia, a Ogólny ostrzega, gdy miesza semestry.
+- **Dynamiczny bez fałszywego „wolne”** — gdy USOS nie odda terminów, jest „Spróbuj ponownie” zamiast pustego tygodnia, a autorefresh już nie czyści dociągniętych sal i prowadzących. Eksport PNG ma znaczniki (P)/(N) jak ekran.
+- **Wyłącznik awaryjny w menu** — w Strefie niebezpiecznej widać stan wtyczki, a po wyłączeniu menu mówi wprost, co jest nieaktywne, z szybką ścieżką powrotu.
+
 ## 0.9.9
 
 - **Generator: tryb Planowanie i Zapisy** — przełącznik nad podglądem planu; w Zapisach bloki i lista pokazują wolne miejsca, w Planowaniu plan jest czysty.
 - **Generator: klik pokazuje terminy** — klik bloku rozwija przedmiot i odpala duchy (wszystkie w Planowaniu, tylko wolne z licznikami w Zapisach), podglądany zapisany blok ma outline, a Wybrane przedmioty mają przycisk zapisów.
 - **Generator: sekcja Moje plany** — wersje planów w osobnej sekcji z kartami (przedmioty, grupy, godziny, kolizje, plan główny) zamiast zakładek; usuwanie z potwierdzeniem, bez przycisku czyszczenia.
-
 - **Sale i prowadzący w planie** — bloki zajęć pokazują salę z budynkiem i prowadzącego, dociągane ze stron grup.
-- **Eksport PDF i PNG** — wydruk planu nie zawiera już daty, tytułu ani adresu strony, zawsze mieści się na jednej stronie A4 w poziomie. Eksport planu także do formatu PNG.
+- **Eksport planu do PDF i PNG** — przy planie są przyciski Eksport PDF (sam plan na jednej stronie, bez dopisków przeglądarki) i Eksport PNG (obrazek tego, co widać, z logo USOS++); pustej soboty i niedzieli już nie pokazuje.
 
 ## 0.9.8
 
@@ -21,7 +31,6 @@
 - **Studenci bez wieszania** — odświeżenie strony na Studenciach, Egzaminach czy Zapisach dociąga dane samo, a gdyby coś się zawiesiło, jest przycisk „Spróbuj ponownie”.
 - **Nowe menu rozszerzenia** — więcej skrótów (Studenci, Mapa, Zapisy, Planer) z własnymi ikonami, skróty przełączają widok w otwartej karcie, widać najbliższe zajęcia, a wyłącznik całej wtyczki trafił na dół jako Strefa niebezpieczna.
 - **Tryb ciemny bez białych mignięć** — przewijanie za krawędź ekranu nie błyska już na biało, w panelu i w menu.
-- **Eksport planu do PDF i PNG** — przy planie są przyciski Eksport PDF (sam plan na jednej stronie, bez dopisków przeglądarki) i Eksport PNG (obrazek tego, co widać, z logo USOS++); pustej soboty i niedzieli już nie pokazuje.
 
 ## 0.9.7
 
@@ -29,9 +38,7 @@
 
 ## 0.9.6 „Zapisy pod plan"
 
-- **W Zapisach widać wolne miejsca i Twoje zapisy** — przy każdej grupie od razu widać, ile miejsc jest zajętych (pełne grupy są oznaczone), a przy przedmiotach z trwającej tury także to, czy jesteś już zapisany.
-- **Odświeżona strona zapisów na przedmioty** — czytelniejszy układ i więcej informacji w jednym miejscu: status Twojej rejestracji w turze, zajętość miejsc i szybkie przejście do grup przedmiotu.
-- **Jeden główny plan, Zapisy same podpowiadają** — oznaczasz gwiazdką swój główny plan, a w Zapisach każda grupa pokazuje, czy do niego pasuje. W planerze zobaczysz też, które miejsca są jeszcze wolne, i możesz układać plan tylko z grup, w których są miejsca.
+- **Zapisy pod plan** — przy grupach widać zajętość miejsc (pełne oznaczone), przy turach Twój stan zapisu; gwiazdką oznaczasz główny plan, a grupy mówią, czy do niego pasują. Strona zapisów w jednym miejscu: status rejestracji, zajętość i skok do grup przedmiotu.
 - **Plany z własnymi nazwami** — zamiast „Plan 1…5" nazwiesz każdy tak, żeby od razu wiedzieć, co w nim jest.
 - **Zdjęcia w Aktualnościach** — ogłoszenia z plakatami i ilustracjami wyglądają teraz tak, jak przygotowała je uczelnia.
 - **Generator bierze od razu wszystko** — lista przedmiotów do układania planu startuje w pełni zaznaczona; odhaczasz tylko te, których nie chcesz.
@@ -39,13 +46,11 @@
 
 ## 0.9.5
 
-- **Panel IRK: ulubione i porównywarka kierunków** — bo kandydat wybiera spośród dziesiątek ofert i gubi się w kartach. Efekt: gwiazdka przy kierunku zapisuje go na liście, a maksymalnie 3 kierunki da się zestawić obok siebie w jednej tabeli.
-- **Panel IRK: filtry zgłoszeń i licznik nieprzeczytanych** — bo przy kilku zgłoszeniach trudno wypatrzyć to nieopłacone albo nieprzeczytaną wiadomość. Efekt: filtr po statusie opłaty/kwalifikacji i wyszukiwarce kierunku plus badge z liczbą nieprzeczytanych na Dashboardzie.
-- **Panel IRK: szybszy start** — bo dashboard pobierał 8 stron naraz przy każdym wejściu. Efekt: sekcje konta (zgłoszenia, formularze, płatności, wiadomości, konto) dociągają się dopiero przy pierwszym wejściu w widok, a wydziały kierunków są cachowane na czas sesji karty.
-- **Publiczny Katalog uczelni** — bo sporo treści USOSa jest jawnych i nie powinno wymagać logowania. Bez konta przejrzysz strukturę jednostek (wydziały, katedry, instytuty), ofertę przedmiotów, kierunki i programy studiów oraz listę budynków z adresami i podglądem na mapie.
-- **Lista budynków ładuje się od razu** — wcześniej trzeba było najpierw zajrzeć na Mapę, żeby lista się pojawiła. Efekt: wchodzisz w Budynki i od razu widzisz wyniki.
-- **Kłódki dla niezalogowanych** — gość widział pełne menu, a większość pozycji kończyła się ekranem logowania. Efekt: na pierwszy rzut oka widać, co działa bez konta (jasne pozycje), a co wymaga zalogowania (wyszarzone, z kłódką). Kliknięcie dalej prowadzi do ekranu logowania.
-- **Ukryte Stypendia, Podania i Ankiety** — te widoki nie działały dobrze, więc zniknęły z menu zamiast straszyć. Efekt: czystsze menu bez niedopracowanych ekranów; widoki wrócą, gdy będą gotowe.
+- **Panel IRK dla kandydata** — ulubione kierunki z gwiazdką, porównywarka do 3 ofert obok siebie, filtry zgłoszeń (opłata, kwalifikacja) z licznikiem nieprzeczytanych; sekcje konta dociągają się leniwie, więc start jest szybszy.
+- **Publiczny Katalog uczelni** — sporo treści USOSa jest jawnych: bez konta przejrzysz jednostki, przedmioty, kierunki, programy studiów i budynki z mapą.
+- **Lista budynków ładuje się od razu** — bez wcześniejszego zaglądania na Mapę.
+- **Kłódki dla niezalogowanych** — na pierwszy rzut oka widać, co działa bez konta, a co wymaga zalogowania (wyszarzone, z kłódką).
+- **Ukryte Stypendia, Podania i Ankiety** — niedopracowane widoki zniknęły z menu; wrócą, gdy będą gotowe.
 
 ## 0.9.4
 

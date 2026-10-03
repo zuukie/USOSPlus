@@ -241,6 +241,10 @@ function render() {
 
 function renderMainHeader() {
   const enabled = state.enabled;
+  // The kill switch beats the panel flag: with the plugin off nothing
+  // runs anywhere, so the pill must say so even when state.enabled is
+  // still true (used to read "Aktywne" while the extension did nothing).
+  const killed = !state.pluginEnabled;
   return `
     <div class="pp-header">
       <div class="pp-brand">
@@ -248,8 +252,8 @@ function renderMainHeader() {
         <div class="pp-brand-text">USOS<span>++</span></div>
       </div>
       <div class="pp-status-pill">
-        <span class="pp-status-dot" style="background:${enabled ? 'oklch(58% 0.13 150)' : 'var(--ink-3)'};"></span>
-        ${enabled ? 'Aktywne' : 'Nieaktywne'}
+        <span class="pp-status-dot" style="background:${killed ? 'var(--ink-critical)' : enabled ? 'oklch(58% 0.13 150)' : 'var(--ink-3)'};"></span>
+        ${killed ? 'Wyłączona' : enabled ? 'Aktywne' : 'Nieaktywne'}
       </div>
     </div>
   `;
@@ -323,9 +327,24 @@ function renderAboutBody() {
 
 function renderMainBody() {
   const enabled = state.enabled;
+  // Kill switch off: everything panel-related is dead (the toggle, the
+  // quick tiles, the home shortcut) — only "Zarządzaj funkcjami" stays
+  // alive as the path back to the master switch. Red banner explains it
+  // with a "tutaj" link straight into the features view.
+  const killed = !state.pluginEnabled;
 
   let banner = '';
-  if (actionError) {
+  if (killed) {
+    banner = `
+      <div class="pp-disabled-banner">
+        <span>⛔</span>
+        <div>
+          Wtyczka jest <strong>wyłączona</strong> — panel i wszystkie funkcje nie działają na żadnej stronie i nic nie jest wysyłane do USOS.
+          <div style="margin-top:6px;">Możesz ją włączyć <a data-action="goFeatures">tutaj</a> (Strefa niebezpieczna).</div>
+        </div>
+      </div>
+    `;
+  } else if (actionError) {
     banner = `
       <div class="pp-unsupported-banner">
         <span>⚠️</span>
@@ -380,11 +399,11 @@ function renderMainBody() {
   return `
     <div class="pp-body">
       ${banner}
-      <button class="pp-main-btn ${enabled ? 'on' : 'off'}" data-action="toggleEnabled" ${tab ? '' : 'disabled'}>
+      <button class="pp-main-btn ${enabled ? 'on' : 'off'}" data-action="toggleEnabled" ${!tab || killed ? 'disabled' : ''}>
         <span style="display:flex;">
           <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 3v6"></path><path d="M5.5 5.8a6.5 6.5 0 1 0 9 0"></path></svg>
         </span>
-        ${enabled ? 'Wyłącz panel USOS++' : 'Włącz panel USOS++'}
+        ${killed ? 'Panel USOS++ jest wyłączony' : enabled ? 'Wyłącz panel USOS++' : 'Włącz panel USOS++'}
       </button>
 
       ${nextSession}
@@ -397,14 +416,14 @@ function renderMainBody() {
             Wejdź na stronę swojej uczelni i kliknij <a data-action="setMyUniversity">tutaj</a>, aby ustawić ją jako Moja Uczelnia
           </div>
         ` : `
-          <div class="pp-quick-home" data-action="quickHome">
+          <div class="pp-quick-home${killed ? ' disabled' : ''}" data-action="quickHome">
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12"></polyline></svg>
             <span>Strona główna mojej uczelni</span>
           </div>
         `}
         <div class="pp-quick-grid">
           ${QUICK_ACTIONS.map((qa) => `
-            <div class="pp-quick-action ${!state.myUniversity ? 'disabled' : ''}" data-action="quick" data-view="${qa.view}">
+            <div class="pp-quick-action ${(!state.myUniversity || killed) ? 'disabled' : ''}" data-action="quick" data-view="${qa.view}">
               <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">${qa.icon}</svg>
               <span>${qa.label}</span>
             </div>
@@ -451,10 +470,22 @@ function renderIrkBody() {
     `;
   }
   const enabled = state.irkEnabled;
+  // Same dead state as the USOS main view when the kill switch is off —
+  // the IRK toggle would otherwise flip a flag nothing honors.
+  const killed = !state.pluginEnabled;
   return `
     <div class="pp-body">
       ${errorBanner}
-      <button class="pp-main-btn ${enabled ? 'on' : 'off'}" data-action="toggleIrkEnabled">
+      ${killed ? `
+        <div class="pp-disabled-banner">
+          <span>⛔</span>
+          <div>
+            Wtyczka jest <strong>wyłączona</strong> — panel IRK nie działa i nic nie jest wysyłane.
+            <div style="margin-top:6px;">Możesz ją włączyć <a data-action="goFeatures">tutaj</a> (Strefa niebezpieczna).</div>
+          </div>
+        </div>
+      ` : ''}
+      <button class="pp-main-btn ${enabled ? 'on' : 'off'}" data-action="toggleIrkEnabled" ${killed ? 'disabled' : ''}>
         <span style="display:flex;">
           <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 3v6"></path><path d="M5.5 5.8a6.5 6.5 0 1 0 9 0"></path></svg>
         </span>
@@ -580,6 +611,7 @@ async function onAction(el) {
   }
   if (action === 'quickHome') {
     if (!state.myUniversity) return;
+    if (!state.pluginEnabled) return;
     chrome.tabs.create({ url: `${state.myUniversity}/` });
     window.close();
     return;
@@ -593,6 +625,10 @@ async function onAction(el) {
 
   if (action === 'toggleEnabled') {
     if (!tab) return;
+    // Dead while the kill switch is off (the button is disabled too —
+    // this is just the belt-and-braces half): flipping state.enabled
+    // alone changes nothing on any tab while pluginEnabled is false.
+    if (!state.pluginEnabled) return;
     const next = !state.enabled;
     if (!next) {
       state = await setState({ enabled: false });
@@ -671,6 +707,7 @@ async function onAction(el) {
 
   if (action === 'toggleIrkEnabled') {
     if (!tab) return;
+    if (!state.pluginEnabled) return;
     const next = !state.irkEnabled;
     state = await setState({ irkEnabled: next });
     if (!next) {
@@ -712,6 +749,7 @@ async function onAction(el) {
 
   if (action === 'quick') {
     if (!tab) return;
+    if (!state.pluginEnabled) return;
     const qa = QUICK_ACTIONS.find(q => q.view === el.dataset.view);
     if (!qa) return;
 

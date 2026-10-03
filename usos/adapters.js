@@ -50,44 +50,98 @@
   // right next to the day/time — e.g. "co drugi czwartek (nieparzyste),
   // 11:15 - 13:00" on a groups list, or "co drugi wtorek (parzyste), 7:30 -
   // 9:00" in a subject's own full plan (both verified live, 2026-09-14, on
-  // a real biweekly subject: 08IZZ0-25S101O00121G). A weekly class's text
-  // has no such parenthetical at all ("każdy poniedziałek, ...") — absence
-  // of a match here is exactly "every week", not "unknown".
+  // a real biweekly subject: 08IZZ0-25S101O00121G). Also matched: the TP/TN
+  // abbreviations, single-letter (P)/(N), "tyg. parzyste" and bare
+  // "parzyste/nieparzyste" without parens. A weekly class's text
+  // has no such marker at all ("każdy poniedziałek, ...").
+  // Returns 'even'/'odd' when decidable, 'unknown' for a biweekly line
+  // with no decidable parity ("co drugi ..." and nothing else — a real
+  // conflict candidate, never a weekly), 'every' otherwise.
   function parseWeeksParity(text) {
-    const m = (text || '').match(/\((nie)?parzyste\)/i);
-    return m ? (m[1] ? 'odd' : 'even') : 'every';
+    const t = text || '';
+    // Explicit parity words first — "nieparzyste" checked via the (nie)?
+    // group so it can't false-hit the "parzyste" branch. Applied to
+    // schedule-line texts only, never to subject names.
+    const m = t.match(/(nie)?parzyst[aey]/i);
+    if (m) return m[1] ? 'odd' : 'even';
+    if (/\bTP\b/.test(t)) return 'even';
+    if (/\bTN\b/.test(t)) return 'odd';
+    const single = t.match(/\(\s*([PpNn])\s*\)/);
+    if (single) return single[1].toUpperCase() === 'P' ? 'even' : 'odd';
+    if (/\bco drugi\b/i.test(t)) return 'unknown';
+    return 'every';
   }
 
   // Polish weekday words (as rendered on home/grupy schedule lines) to the
   // short day keys shared with app.js's planner (PN..ND). Matches inflected
   // forms by prefix: "poniedziałek/poniedziałki", "środa/środę", etc.
+  // Abbreviations ("pn", "czw", ...) only match as whole words — as
+  // prefixes they'd false-hit ("wt" starts half the dictionary).
   const GROUP_DAY_PREFIX = {
-    poniedzialek: 'PN', wtorek: 'WT', wtorku: 'WT', wtorki: 'WT',
-    srod: 'ŚR', czwartek: 'CZ', czwartku: 'CZ', czwartki: 'CZ',
+    poniedzialek: 'PN', poniedzialki: 'PN',
+    wtorek: 'WT', wtorku: 'WT', wtorki: 'WT',
+    srod: 'ŚR',
+    czwartek: 'CZ', czwartku: 'CZ', czwartki: 'CZ',
     piatek: 'PT', piatku: 'PT', piatki: 'PT',
     sobot: 'SO', niedziel: 'ND',
   };
-  function parseGroupDay(word) {
-    const norm = (word || '').toLowerCase()
+  const GROUP_DAY_ABBR = {
+    pn: 'PN', pon: 'PN', wt: 'WT', wto: 'WT', sr: 'ŚR', sro: 'ŚR',
+    czw: 'CZ', cz: 'CZ', pt: 'PT', pia: 'PT', so: 'SO', sob: 'SO',
+    nie: 'ND', niedz: 'ND', nd: 'ND',
+  };
+  function stripPl(word) {
+    return (word || '').toLowerCase()
       .replace(/ą/g, 'a').replace(/ć/g, 'c').replace(/ę/g, 'e')
       .replace(/ł/g, 'l').replace(/ń/g, 'n').replace(/ó/g, 'o')
       .replace(/ś/g, 's').replace(/ź|ż/g, 'z');
+  }
+  function parseGroupDay(word) {
+    const norm = stripPl(word);
+    if (Object.prototype.hasOwnProperty.call(GROUP_DAY_ABBR, norm)) return GROUP_DAY_ABBR[norm];
     for (const prefix of Object.keys(GROUP_DAY_PREFIX)) {
       if (norm.startsWith(prefix)) return GROUP_DAY_PREFIX[prefix];
     }
     return null;
   }
 
+  // One time range inside a schedule text: "11:15 - 13:00", "7:30-9:00",
+  // en/em dashes, "11:15 do 13:00" and the colon-joined "17:05:18:45" /
+  // "17:05 : 18:45" meeting-cell shape. Trailing seconds ("18:55:00") and
+  // a "g." suffix are tolerated. Dot-separated "18.55-20.35" too (Polish
+  // schedules use it). Returns zero-padded {start, end, index, length} or
+  // null. Hours/minutes are range-checked — "99:99" or "24:00" don't pass.
+  function parseTimeRange(text) {
+    const t = text || '';
+    const m = t.match(/(\d{1,2})[:.](\d{2})(?::\d{2})?\s*(?::|-|–|—|\bdo\b)\s*(\d{1,2})[:.](\d{2})(?::\d{2})?/i);
+    if (!m) return null;
+    const h1 = parseInt(m[1], 10), n1 = parseInt(m[2], 10);
+    const h2 = parseInt(m[3], 10), n2 = parseInt(m[4], 10);
+    if (h1 > 23 || h2 > 23 || n1 > 59 || n2 > 59) return null;
+    const pad = (h, n) => `${String(h).padStart(2, '0')}:${String(n).padStart(2, '0')}`;
+    return { start: pad(h1, n1), end: pad(h2, n2), index: m.index, length: m[0].length };
+  }
+
   // One schedule line from home/grupy, e.g. "każdy poniedziałek, 18:55 -
   // 20:35" or "co drugi czwartek (nieparzyste), 11:15 - 13:00". Returns
   // {day, start, end, weeks} or null when the line carries no time info.
+  // The time range is found first (shared parseTimeRange: dashes, "do",
+  // seconds, dot-separated all OK), then the nearest day word before it —
+  // so a parity parenthetical between weekday and time can't break the
+  // match (it used to null the whole line and silently drop every
+  // biweekly session). Parity itself comes from parseWeeksParity.
   function parseGroupSession(text) {
     if (!text) return null;
-    const m = text.match(/([A-Za-ząćęłńóśźż]+)\s*,?\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/i);
-    if (!m) return null;
-    const day = parseGroupDay(m[1]);
+    const tr = parseTimeRange(text);
+    if (!tr) return null;
+    const words = String(text).slice(0, tr.index).match(/[A-Za-ząćęłńóśźż]+/gi) || [];
+    let day = null;
+    for (let i = words.length - 1; i >= 0; i--) {
+      day = parseGroupDay(words[i]);
+      if (day) break;
+    }
     if (!day) return null;
-    return { day, start: m[2], end: m[3], weeks: parseWeeksParity(text) };
+    return { day, start: tr.start, end: tr.end, weeks: parseWeeksParity(text) };
   }
 
   // UNVERIFIED shared shape for four small "Moje studia" pages (stypendia,
@@ -812,15 +866,17 @@
         const cells = tr.querySelectorAll(':scope > td');
         if (!cells.length) return;
         const cellText = textOf(cells[0]) || '';
-        const dateMatch = cellText.match(/(\d{4}-\d{2}-\d{2})/);
-        const timeMatch = cellText.match(/(\d{1,2}:\d{2})\s*:\s*(\d{1,2}:\d{2})/);
+        const dateIso = cellText.match(/(\d{4}-\d{2}-\d{2})/);
+        const datePl = cellText.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+        const range = parseTimeRange(cellText);
         const roomLink = cells[0].querySelector('a[href*="pokazSale"]');
         const note = cells[0].querySelector('span.note');
         const teacher = cells.length > 1 ? textOf(cells[1]) : null;
         meetings.push({
-          date: dateMatch ? dateMatch[1] : null,
-          start: timeMatch ? timeMatch[1] : null,
-          end: timeMatch ? timeMatch[2] : null,
+          date: dateIso ? dateIso[1]
+            : datePl ? `${datePl[3]}-${datePl[2].padStart(2, '0')}-${datePl[1].padStart(2, '0')}` : null,
+          start: range ? range.start : null,
+          end: range ? range.end : null,
           room: roomLink ? textOf(roomLink) : null,
           building: note ? textOf(note) : null,
           teacher: teacher || null,
@@ -1042,6 +1098,67 @@
     // comment.
     getSurveys(doc = document) {
       return genericInfoTable(doc);
+    },
+
+    // mLegitymacja order page (dla_stud/studia/mlegitymacja/index).
+    // Verified live (2026-10-01) against "Oczekuje": one <usos-frame>
+    // carries .inline-keyvalue-list rows (label div + value div; status
+    // text in <usos-tag>, dates in <local-time datetime="…"> — read the
+    // attribute, the custom element never upgrades inside a fetched doc)
+    // plus a GET "Sprawdź status zamówienia" form (a plain page refresh,
+    // mirrored by scrape.fetchMlegitymacjaResult's force re-fetch).
+    // Verified live (2026-10-02) against "Do odbioru": the pickup codes
+    // sit in a hidden #qrcode-frame div (revealed in classic by
+    // switchQrcodeFrame()) — #qr-code-text (text version of the QR),
+    // .qr-code-img#<code> with a client-rendered <canvas> (empty in a
+    // fetched doc, so we re-render the QR in-panel from the text via
+    // vendor/qrcode), and #qr-code-pass.pass (activation code). The
+    // "Dodaj mLegitymację do mObywatela" button only unhides that div;
+    // "Anuluj zamówienie" is a POST form (anuluj) — a write, so link-out
+    // only, like all other writes by project policy.
+    // Verified live: "Oczekuje" (2026-10-01), "Do odbioru" incl. QR text
+    // + activation code (2026-10-02), "Odebrana" (2026-10-02). States
+    // never seen on this account — no order yet, "W trakcie", "Błąd",
+    // "Anulowane", "Unieważnione" — render through the same code paths
+    // with graceful fallbacks (neutral badge, generic/empty description),
+    // so the result is marked verified; re-check those markups if one
+    // of them ever shows up for real.
+    getMlegitymacja(doc = document) {
+      const miss = { supported: false, verified: false, hasOrder: false, pickupReady: false, status: null, orderDate: null, validUntil: null, qrText: null, qrPass: null };
+      const h1 = textOf(doc.querySelector('h1')) || '';
+      const frame = doc.querySelector('usos-frame');
+      if (!frame && !/mlegitymac/i.test(h1) && !doc.querySelector('help-dialog')) return miss;
+      const out = { supported: true, verified: true, hasOrder: false, pickupReady: false, status: null, orderDate: null, validUntil: null, qrText: null, qrPass: null };
+      if (frame) {
+        const rows = [...frame.querySelectorAll('.inline-keyvalue-list > div')];
+        if (rows.length) out.hasOrder = true;
+        rows.forEach((row) => {
+          const cells = [...row.children].filter((c) => /^(DIV|SECTION)$/.test(c.tagName));
+          if (cells.length < 2) return;
+          const label = (textOf(cells[0]) || '').toLowerCase();
+          const valueCell = cells[1];
+          if (/status/.test(label)) {
+            out.status = textOf(valueCell.querySelector('usos-tag') || valueCell) || null;
+          } else if (/data zam/i.test(label)) {
+            const lt = valueCell.querySelector('local-time');
+            out.orderDate = (lt && lt.getAttribute('datetime')) || textOf(valueCell) || null;
+          } else if (/wa[zż]no[sś]ci/i.test(label)) {
+            const lt = valueCell.querySelector('local-time');
+            out.validUntil = (lt && lt.getAttribute('datetime')) || textOf(valueCell) || null;
+          }
+        });
+      }
+      if (out.status && /^do odbioru/i.test(out.status.trim())) out.pickupReady = true;
+      if (!out.pickupReady && doc.querySelector('.qr-code-img')) out.pickupReady = true;
+      // Pickup codes (hidden #qrcode-frame in classic — already in the
+      // DOM, no click needed to read them). Trimmed; empty -> null so
+      // the render falls back to the classic link-out instead of
+      // drawing a QR of nothing.
+      const qrText = textOf(doc.querySelector('#qr-code-text')) || null;
+      const qrPass = textOf(doc.querySelector('#qr-code-pass')) || null;
+      if (qrText) { out.qrText = qrText.trim(); out.pickupReady = true; }
+      if (qrPass) out.qrPass = qrPass.trim();
+      return out;
     },
 
     // Verified against real markup+data at .../dodatki/platnosci_fk/kontaBankowe
@@ -1498,7 +1615,15 @@
         const terminText = textOf(cells[6]) || textOf(cells[cells.length - 1]) || '';
         // No comma here ("Czwartek 17:05-18:45"), unlike the catalog
         // "każdy poniedziałek, …" shape getClassGroups parses — comma optional.
-        const tm = (terminText || '').match(/(poniedziałek|wtorek|środa|czwartek|piątek|sobota|niedziela)\s*,?\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/i);
+        // Day is the nearest day word before the time range (inflected and
+        // plural forms OK via parseGroupDay); the range itself comes from
+        // the shared parseTimeRange (dashes, "do", seconds all tolerated).
+        const range = parseTimeRange(terminText);
+        const dayWords = range ? (terminText.slice(0, range.index).match(/[A-Za-ząćęłńóśźż]+/gi) || []) : [];
+        let dayWord = null;
+        for (let i = dayWords.length - 1; i >= 0; i--) {
+          if (parseGroupDay(dayWords[i])) { dayWord = dayWords[i]; break; }
+        }
         current.groups.push({
           nr,
           zapisanych: Number.isFinite(zapisanych) ? zapisanych : null,
@@ -1507,10 +1632,10 @@
           prowadzacy: textOf(cells[4]) || null,
           opis: textOf(cells[5]) || null,
           termin: terminText || null,
-          session: tm ? {
-            day: tm[1].toLowerCase(),
-            start: `${tm[2].padStart(2, '0')}:${tm[3]}`,
-            end: `${tm[4].padStart(2, '0')}:${tm[5]}`,
+          session: (range && dayWord) ? {
+            day: dayWord.toLowerCase(),
+            start: range.start,
+            end: range.end,
             weeks: parseWeeksParity(terminText),
           } : null,
         });
@@ -1915,12 +2040,12 @@
         if (!dayLabelEl || !tday) return;
         const entries = [...tday.querySelectorAll('timetable-entry')].map((entry) => {
           const eventText = textOf(entry.querySelector('[slot="dialog-event"]')) || '';
-          const timeMatch = eventText.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+          const tr = parseTimeRange(eventText);
           let start = null;
           let end = null;
-          if (timeMatch) {
-            start = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
-            end = `${timeMatch[3].padStart(2, '0')}:${timeMatch[4]}`;
+          if (tr) {
+            start = tr.start;
+            end = tr.end;
           } else {
             const style = entry.getAttribute('style') || '';
             const s = style.match(/grid-row-start:\s*g(\d{2})(\d{2})/);
@@ -1987,13 +2112,21 @@
             const wrap = doc.createElement('div');
             nodes.forEach((n) => wrap.appendChild(n));
             const text = textOf(wrap) || '';
-            const m = text.match(/(poniedziałek|wtorek|środa|czwartek|piątek|sobota|niedziela)[^,]*,\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/i);
-            if (!m) return null;
-            const place = text.slice(m.index + m[0].length).replace(/^[,\s]+/, '').replace(/[,\s]+$/, '');
+            // Day + range via the shared helpers (comma optional, inflected
+            // days, dashes/"do"/seconds tolerated); anything after the
+            // range is the room ("sala 212, bud. D-1").
+            const tr = parseTimeRange(text);
+            const dayWords = tr ? (text.slice(0, tr.index).match(/[A-Za-ząćęłńóśźż]+/gi) || []) : [];
+            let dayWord = null;
+            for (let i = dayWords.length - 1; i >= 0; i--) {
+              if (parseGroupDay(dayWords[i])) { dayWord = dayWords[i]; break; }
+            }
+            if (!tr || !dayWord) return null;
+            const place = text.slice(tr.index + tr.length).replace(/^[,\s]+/, '').replace(/[,\s]+$/, '');
             return {
-              day: m[1].toLowerCase(),
-              start: `${m[2].padStart(2, '0')}:${m[3]}`,
-              end: `${m[4].padStart(2, '0')}:${m[5]}`,
+              day: dayWord.toLowerCase(),
+              start: tr.start,
+              end: tr.end,
               place: place || null,
               weeks: parseWeeksParity(text),
             };
@@ -2047,6 +2180,7 @@
     getTests() { return { supported: false, verified: false, rows: [] }; },
     getPetitions() { return { supported: false, verified: false, rows: [] }; },
     getSurveys() { return { supported: false, verified: false, rows: [] }; },
+    getMlegitymacja() { return { supported: false, verified: false, hasOrder: false, pickupReady: false, status: null, orderDate: null, validUntil: null, qrText: null, qrPass: null }; },
     getUnitDetail() { return { supported: false, verified: false, name: null, fields: [], ancestors: [], children: [] }; },
     getUnitSubjects() { return { supported: false, verified: false, subjects: [], total: 0, nextUrl: null }; },
     getUnitPrograms() { return { supported: false, verified: false, programs: [], nextUrl: null }; },
