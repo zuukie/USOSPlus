@@ -1631,6 +1631,11 @@
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
+      if (view === 'ects' && !this.data.etapDetailsResultLoaded && scrape.fetchEtapDetailsResult) {
+        scrape.fetchEtapDetailsResult(adapter, this.data).then(() => {
+          if (this.state.view === view) this.render();
+        }).catch(() => {});
+      }
       if (view === 'studenci' && scrape.fetchParticipantsResult) {
         this.ensureParticipantsResult(() => {
           if (this.state.view === view) this.render();
@@ -6269,6 +6274,14 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       return Array.isArray(e.etapy) ? e.etapy : [];
     }
 
+    // Per-stage settlement details, keyed by the list's detailsId. Loaded
+    // lazily on ECTS view entry (see fetchEtapDetailsResult) — empty until
+    // then, so renderers must degrade to the plain stage row meanwhile.
+    get etapDetails() {
+      const r = this.data.etapDetailsResult || {};
+      return r.byId && typeof r.byId === 'object' ? r.byId : {};
+    }
+
     get exams() {
       const ex = this.data.examsResult || {};
       return Array.isArray(ex.exams) ? ex.exams : [];
@@ -6400,7 +6413,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             <div class="usospp-card usospp-stat">
               <div class="usospp-stat-label">Etap studiów</div>
               <div class="usospp-stat-value" style="font-size:19px;">${currentEtap ? esc(currentEtap.label) : '—'}</div>
-              <div class="usospp-stat-hint">${currentEtap ? esc(currentEtap.status || '') : 'brak danych'}</div>
+              <div class="usospp-stat-hint">${currentEtap ? esc(currentEtap.status || '') : 'brak danych'}${currentEtap ? ` · <span data-action="nav" data-view="ects" style="cursor:pointer;font-weight:600;color:oklch(58% 0.15 45);">więcej →</span>` : ''}</div>
             </div>
             <div class="usospp-card usospp-stat">
               <div class="usospp-stat-label">Egzaminy</div>
@@ -9135,6 +9148,94 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       `;
     }
 
+    // Tone badge for a classic "spełnione / niespełnione" requirement
+    // status; unknown statuses fall back to the plain gray badge.
+    etapStatusBadge(status) {
+      if (status === 'spełnione') return `<div class="usospp-badge usospp-badge-positive">${esc(status)}</div>`;
+      if (status === 'niespełnione') return `<div class="usospp-badge usospp-badge-negative">${esc(status)}</div>`;
+      return `<div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${esc(status || '—')}</div>`;
+    }
+
+    // One stage card: the list-page header row plus, once the lazy
+    // per-stage details arrive (see fetchEtapDetailsResult), the point
+    // totals, conditional/full requirements, what's missing and a
+    // collapsible subject-requirements list. Without details it degrades
+    // to the plain header row it always was.
+    renderEtapCard(e) {
+      const details = (e.detailsId && this.etapDetails[e.detailsId]) || null;
+      const detailsLoading = e.detailsId && !details && !this.data.etapDetailsResultLoaded;
+      let body = '';
+      if (details) {
+        const p = details.punkty || {};
+        const sumParts = [
+          p.zEtapu !== null && p.zEtapu !== undefined ? `z etapu ${esc(p.zEtapu)}` : null,
+          p.zPoprzednich !== null && p.zPoprzednich !== undefined ? `z poprzednich ${esc(p.zPoprzednich)}` : null,
+        ].filter(Boolean);
+        const reqLine = (label, req) => req ? `
+          <div style="font-size:12.5px;margin-top:4px;">${esc(label)}: wymagane <strong>${esc(req.wymagane || '—')}</strong> ${req.status ? `— ${esc(req.status)}` : ''}</div>` : '';
+        const missingLine = (label, items) => items.length ? `
+          <div style="font-size:12.5px;margin-top:4px;">${esc(label)}: ${items.map((i) => esc(i)).join('; ')}</div>` : '';
+        const reqs = Array.isArray(details.wymagania) ? details.wymagania : [];
+        const pod = details.podsumowanie || {};
+        body = `
+          <div style="font-size:12.5px;margin-top:8px;">Punkty: <strong>${esc(p.razem ?? '—')}</strong>${sumParts.length ? ` (${sumParts.join(' + ')})` : ''}</div>
+          ${reqLine('Zaliczenie warunkowe', p.warunkowe)}
+          ${reqLine('Zaliczenie pełne', p.pelne)}
+          ${missingLine('Do warunkowego brakuje', pod.brakujeWarunkowe || [])}
+          ${missingLine('Do pełnego brakuje', pod.brakujePelne || [])}
+          ${reqs.length ? `
+          <details class="usospp-disclosure">
+            <summary>Wymagania przedmiotowe (${reqs.length})</summary>
+            <div class="usospp-disclosure-list">
+              ${reqs.map((r) => `
+              <div class="usospp-disclosure-row">
+                <div><span class="usospp-disclosure-row-label">${esc(r.nazwa || '—')}</span>${r.kod ? `<span class="usospp-disclosure-row-range"> [${esc(r.kod)}]</span>` : ''}${r.podpiecie ? `<div style="font-size:12px;color:var(--ink-3);">Podpięcie: ${esc(r.podpiecie)}</div>` : ''}</div>
+                ${this.etapStatusBadge(r.status)}
+              </div>`).join('')}
+            </div>
+          </details>` : ''}`;
+      } else if (detailsLoading) {
+        body = `<div class="usospp-empty-hint" style="margin-top:8px;">Dociąganie szczegółów etapu…</div>`;
+      }
+      return `
+        <div class="usospp-list-row" style="align-items:flex-start;flex-direction:column;">
+          <div style="display:flex;justify-content:space-between;gap:10px;width:100%;align-items:baseline;">
+            <div>
+              <div style="font-size:14px;font-weight:600;">${esc(e.label)}</div>
+              <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(e.programLabel)}</div>
+              <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">Cykl: ${esc(e.cycle || '—')} · koniec: ${esc(e.endDate || '—')}</div>
+            </div>
+            <div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);flex-shrink:0;">${esc(e.status || '—')}</div>
+          </div>
+          ${body}
+        </div>`;
+    }
+
+    // Programme settlement state, grouped per programme (classic USOS shows
+    // it in each programme frame's footer). Read-only here: the actual
+    // "Zgłoś program do rozliczenia" action (confirm dialog + POST) stays
+    // in classic USOS behind the deep link.
+    renderRozliczenie() {
+      const seen = new Map();
+      this.etapy.forEach((e) => {
+        if (e && e.programLabel && e.rozliczenie && !seen.has(e.programLabel)) {
+          seen.set(e.programLabel, e.rozliczenie);
+        }
+      });
+      if (!seen.size) return '';
+      const rozliczenieUrl = `${location.origin}/kontroler.php?_action=dla_stud/studia/zaliczenia/index&usospp_off=1`;
+      return `
+        <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px;">
+          ${[...seen].map(([program, r]) => `
+          <div style="margin-bottom:10px;">
+            <div style="font-size:13px;">Rozliczenie programu: <strong>${esc(r.stan || '—')}</strong></div>
+            ${r.podpowiedz ? `<div class="usospp-muted-text" style="font-size:12px;margin-top:2px;">${esc(r.podpowiedz)}</div>` : ''}
+            ${r.doZgloszenia ? `<button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(rozliczenieUrl)}" style="margin-top:8px;">Zgłoś program do rozliczenia w USOS →</button>` : ''}
+            <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">${esc(program)}</div>
+          </div>`).join('')}
+        </div>`;
+    }
+
     renderEcts() {
       const etapy = this.etapy;
       const s = this.state;
@@ -9148,17 +9249,12 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       return `
         <div class="usospp-view">
           <div class="usospp-card">
-            <div class="usospp-card-title" style="margin-bottom:16px;">Zaliczenia etapów</div>
-            ${etapy.length === 0 ? `<div class="usospp-empty-hint">Brak danych o etapach studiów.</div>` : etapy.map((e) => `
-              <div class="usospp-list-row">
-                <div>
-                  <div style="font-size:14px;font-weight:600;">${esc(e.label)}</div>
-                  <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${esc(e.programLabel)}</div>
-                  <div style="font-size:12px;color:var(--ink-3);margin-top:2px;">Cykl: ${esc(e.cycle || '—')} · koniec: ${esc(e.endDate || '—')}</div>
-                </div>
-                <div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);">${esc(e.status || '—')}</div>
-              </div>
-            `).join('')}
+            <div class="usospp-card-head">
+              <div class="usospp-card-title">Zaliczenia etapów</div>
+              <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dla_stud/studia/zaliczenia/index&usospp_off=1">Otwórz w USOS →</button>
+            </div>
+            ${etapy.length === 0 ? `<div class="usospp-empty-hint">Brak danych o etapach studiów.</div>` : etapy.map((e) => this.renderEtapCard(e)).join('')}
+            ${this.renderRozliczenie()}
           </div>
 
           <div class="usospp-card">
@@ -9540,8 +9636,8 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         {
           label: 'Działają niezależnie od panelu USOS++',
           keys: {
-            quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, gdy panel USOS++ jest wyłączony'],
-            classicWidgets: ['Widżety na stronach klasycznych', 'Średnia w Ocenach, zaległości w Płatnościach, licznik zajęć w Planie i podsumowanie w Mój USOSweb'],
+            quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, tylko gdy panel USOS++ jest wyłączony (znikają po włączeniu panelu)'],
+            classicWidgets: ['Widżety na stronach klasycznych', 'Średnia w Ocenach, mini „Ten tydzień” w Planie i podsumowanie w Mój USOSweb — tylko gdy panel jest wyłączony; na pustym koncie pokazują stan pusty'],
           },
         },
       ];

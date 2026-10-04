@@ -15,6 +15,12 @@
     home: 'kontroler.php?_action=home/index',
     grupy: 'kontroler.php?_action=home/grupy',
     zaliczenia: 'kontroler.php?_action=dla_stud/studia/zaliczenia/index',
+    // Per-stage settlement details (see adapter.getEtapDetails) — one per
+    // detailsId scraped from the zaliczenia list's "Szczegóły" links, so it
+    // generalizes to however many stages a given account happens to list.
+    etapDetails(detailsId) {
+      return `kontroler.php?_action=dla_stud/studia/zaliczenia/pokazEtap&etpos_id=${encodeURIComponent(detailsId)}`;
+    },
     oceny: 'kontroler.php?_action=dla_stud/studia/oceny/index',
     plan: 'kontroler.php?_action=home/plan',
     egzaminy: 'kontroler.php?_action=dla_stud/rejestracja/egzaminy',
@@ -444,7 +450,8 @@
     return {
       user, etapyResult, gradesResult, planResult, myGroupsResult, examsResult, registrationsResult,
       personalCalendarResult,
-      ownProgrammesResult, stageSubjectsResult, newsResult, paymentsResult,
+      ownProgrammesResult, stageSubjectsResult, etapDetailsResult: { supported: false, verified: false, byId: {} },
+      newsResult, paymentsResult,
       scholarshipsResult, testsResult, petitionsResult, surveysResult,
       // True when every single fetch of this run was a 503 dispatch — USOSweb
       // is down (see the counters' block comment above). Partial failure keeps
@@ -477,6 +484,7 @@
       personalCalendarResult: { supported: false, verified: false, sections: [] },
       ownProgrammesResult: { supported: false, verified: false, programmes: [] },
       stageSubjectsResult: { supported: false, verified: false, stages: [] },
+      etapDetailsResult: { supported: false, verified: false, byId: {} },
       newsResult,
       paymentsResult: {
         supported: false,
@@ -619,6 +627,28 @@
     return result;
   }
 
+  async function fetchEtapDetailsResult(adapter, data) {
+    if (!data || data.etapDetailsResultLoaded) return data ? data.etapDetailsResult : null;
+    let result = { supported: false, verified: false, byId: {} };
+    const etapy = data.etapyResult && Array.isArray(data.etapyResult.etapy) ? data.etapyResult.etapy : [];
+    const ids = [...new Set(etapy.map((e) => e && e.detailsId).filter(Boolean))];
+    if (ids.length && typeof adapter.getEtapDetails === 'function') {
+      try {
+        const docs = await Promise.all(ids.map((id) => fetchDoc(PATHS.etapDetails(id))));
+        const byId = {};
+        ids.forEach((id, i) => {
+          const doc = docs[i];
+          if (!doc) return;
+          byId[id] = adapter.getEtapDetails(doc);
+        });
+        result = { supported: Object.keys(byId).length > 0, verified: true, byId };
+      } catch (e) { /* keep default */ }
+    }
+    data.etapDetailsResult = result;
+    data.etapDetailsResultLoaded = true;
+    return result;
+  }
+
   async function fetchStageSubjectsResult(adapter, data) {
     if (!data || data.stageSubjectsResultLoaded) return data ? data.stageSubjectsResult : null;
     let result = { supported: false, verified: false, stages: [] };
@@ -733,5 +763,5 @@
     data.mlegitymacjaResultLoaded = true;
     return result;
   }
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchStageSubjectsResult, fetchMlegitymacjaResult };
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchEtapDetailsResult, fetchStageSubjectsResult, fetchMlegitymacjaResult };
 })();

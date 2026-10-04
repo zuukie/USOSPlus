@@ -14,8 +14,8 @@ const FEATURE_GROUPS = [
   {
     label: 'Działają niezależnie od panelu USOS++',
     keys: {
-      quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, gdy USOS++ jest wyłączony'],
-      classicWidgets: ['Widżety na stronach klasycznych', 'Średnia w Ocenach, zaległości w Płatnościach, licznik zajęć w Planie i podsumowanie w Mój USOSweb'],
+      quickbar: ['Szybkie akcje w toolbarze', 'Widoczne w klasycznym USOS, tylko gdy panel USOS++ jest wyłączony (znikają po włączeniu panelu)'],
+      classicWidgets: ['Widżety na stronach klasycznych', 'Średnia w Ocenach, mini „Ten tydzień” w Planie i podsumowanie w Mój USOSweb — tylko gdy panel jest wyłączony; na pustym koncie pokazują stan pusty'],
     },
   },
 ];

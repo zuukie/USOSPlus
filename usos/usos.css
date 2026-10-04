@@ -21,13 +21,116 @@
 .usospp-classic-widget strong { font-size: 18px; font-weight: 700; }
 .usospp-classic-widget-tag { font-size: 11px; opacity: 0.6; margin-left: auto; white-space: nowrap; }
 .usospp-classic-widget--info { background: oklch(94% 0.03 45); color: oklch(30% 0.02 45); }
-.usospp-classic-widget--warning { background: oklch(93% 0.06 95); color: oklch(35% 0.05 90); }
+/* Empty state (A-full): the widget is alive but the account has no data to
+   show (no grades / no sessions). Dashed outline + muted text so it
+   reads as "all clear", not as a data card. */
+.usospp-classic-widget--empty { background: transparent; border: 1.5px dashed oklch(70% 0.05 45); color: oklch(45% 0.04 45); }
+.usospp-classic-widget--empty strong { color: inherit; }
+/* Week summary on the classic plan page (see injectPlanWidget): a mini "Ten
+   tydzień" — header row plus compact stat lines, same native tokens. */
+.usospp-classic-plan { flex-direction: column; align-items: stretch; gap: 4px; }
+.usospp-classic-plan-head { display: flex; align-items: baseline; gap: 8px; }
+.usospp-classic-plan-line { font-size: 13px; }
+.usospp-classic-plan-types { font-size: 12.5px; opacity: 0.75; }
 
 .usospp-classic-home-summary {
   padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
   font-family: Roboto, system-ui, sans-serif; font-size: 13.5px; color: oklch(30% 0.02 45);
 }
 .usospp-classic-home-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.usospp-classic-home-row--empty { color: oklch(50% 0.04 45); }
+
+/* ---- home layout editor ("Mój USOSweb", home/index) — edit-mode only
+   chrome + hidden state. Native look is untouched outside editing. ---- */
+.usospp-home-toolbar {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  margin: 0 0 6px 0; font-family: Roboto, system-ui, sans-serif; font-size: 13px;
+  /* Native .local-home-table pulls up over preceding content
+     (margin-top:-24px) and its stretched empty columns would otherwise cover
+     this bar and swallow clicks — stay painted and clickable on top. */
+  position: relative; z-index: 10;
+}
+.usospp-home-toolbar--edit { justify-content: flex-start; margin: 0 0 14px 0; }
+.usospp-home-toolbar--edit > * { margin-bottom: 6px; }
+/* Edit-mode icons live inside the card's own title row (see homeAttachIcons):
+   the native h2 is itself positioned, so anchor them to it deliberately and
+   center optically on the title — never straddling its bottom border. */
+.local-home-table usos-frame.usospp-home-editing { position: relative; }
+.local-home-table .usospp-home-editing { outline: 2px solid oklch(75% 0.08 45); outline-offset: -2px; border-radius: 6px; }
+/* Edit mode collapses cards to title bar + corner icons only — no widget
+   content while rearranging. */
+.local-home-table usos-frame.usospp-home-editing > :not(h2):not(.usospp-home-gripbox):not(.usospp-home-eyebox) { display: none !important; }
+.local-home-table usos-frame.usospp-home-editing > h2 { padding-left: 22px; padding-right: 20px; }
+.usospp-home-gripbox {
+  position: absolute !important; left: 10px; z-index: 5;
+  transform: translateY(-50%);
+  display: flex; align-items: center;
+  font-family: Roboto, system-ui, sans-serif;
+  margin: 0 !important; padding: 0;
+  /* Titles are white links on dark bars, but the h2 itself carries dark
+     ink — force white so the icons stay visible on every bar color. */
+  color: #fff;
+}
+.usospp-home-eyebox {
+  position: absolute !important; right: 10px; z-index: 5;
+  transform: translateY(-50%);
+  display: flex; align-items: center;
+  font-family: Roboto, system-ui, sans-serif;
+  margin: 0 !important; padding: 0;
+  color: #fff;
+}
+/* Edit-mode icons mimic native USOS title-bar controls: transparent, in the
+   title's own color, no pill backgrounds — as if they were always there. */
+.usospp-home-grip {
+  font-weight: 700; letter-spacing: 2px; color: #fff !important; opacity: 0.65;
+  cursor: grab; padding: 4px 2px; background: transparent; border: 0; margin: 0;
+}
+.usospp-home-grip:hover { opacity: 1; }
+.usospp-home-grip:focus { outline: 2px solid currentColor; outline-offset: 1px; opacity: 1; }
+.usospp-home-gripbox, .usospp-home-eyebox { color: inherit; }
+.usospp-home-eye {
+  display: flex; align-items: center; padding: 4px 2px; cursor: pointer;
+  background: transparent; border: 0; color: #fff !important; opacity: 0.75; margin: 0;
+}
+.usospp-home-eye:hover, .usospp-home-eye:focus-visible { opacity: 1; }
+.usospp-home-eye:focus { outline: 2px solid currentColor; outline-offset: 1px; }
+.usospp-home-eye[aria-pressed="true"] { opacity: 0.55; }
+/* Ghost = hidden-in-edit, kept in place. */
+.local-home-table usos-frame.usospp-home-ghost {
+  opacity: 0.55; filter: grayscale(0.6);
+  outline: 2px dashed oklch(65% 0.06 45); outline-offset: -2px; border-radius: 6px;
+}
+/* While editing, the table drops its native margin-top:-24px pull-up so the
+   edit bar no longer overlaps the columns (their tops would hide under the
+   buttons, including the column drop preview). Restored on exit — native look
+   outside edit mode is untouched. */
+.local-home-table.usospp-home-editing-table { margin-top: 0; }
+/* View-mode trigger: same subtle design as the USOS++ tag on classic widgets,
+   one clickable element with a padded hit-area. */
+.usospp-home-editbtn {
+  display: inline-block; line-height: 1.4; vertical-align: middle;
+  font-size: 11px; opacity: 0.6; white-space: nowrap; cursor: pointer;
+  font-family: Roboto, system-ui, sans-serif; padding: 6px 10px; margin: 0;
+}
+.usospp-home-editbtn:hover, .usospp-home-editbtn:focus { opacity: 1; text-decoration: underline; outline: none; }
+.usospp-home-editbtn:focus-visible { outline: 2px solid #d9773a; outline-offset: 2px; }
+.usospp-home-btn {
+  font: inherit; font-weight: 600; padding: 7px 14px; border-radius: 9px; cursor: pointer;
+  border: 1px solid oklch(80% 0.04 45); background: #fff; color: oklch(35% 0.05 45);
+  white-space: nowrap;
+}
+.usospp-home-btn:hover { background: oklch(96% 0.02 45); }
+.usospp-home-btn--primary { background: #d9773a; border-color: #d9773a; color: #fff; }
+.usospp-home-btn--primary:hover { background: oklch(52% 0.15 45); }
+.usospp-home-btn--danger { color: oklch(50% 0.17 25); }
+.local-home-table .usospp-home-dragging { opacity: 0.5; }
+/* Drop previews paint INSIDE the edge (negative offset / inset shadow): an
+   outward outline would spill past the table edges and get clipped by the
+   .autoscroll scroll container, hiding side borders. */
+.local-home-table .usospp-home-dragover { outline: 2px solid #d9773a; outline-offset: -2px; border-radius: 6px; }
+.local-home-table .usospp-home-drop-before { box-shadow: 0 -4px 0 0 #d9773a; }
+.local-home-table .usospp-home-drop-after { box-shadow: 0 4px 0 0 #d9773a; }
+.usospp-home-hidden { display: none !important; }
 .usospp-classic-home-row strong { font-weight: 700; }
 .usospp-classic-home-row a { color: #d9773a; text-decoration: none; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
 .usospp-classic-home-row a:hover { color: oklch(48% 0.16 45); }

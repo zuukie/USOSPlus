@@ -413,7 +413,7 @@
   }
 
   // ---- classic-page widgets: small native-styled hints injected straight
-  // into classic USOSweb pages (Oceny/Płatności/Plan/Mój USOSweb) when the
+  // into classic USOSweb pages (Oceny/Plan/Mój USOSweb) when the
   // full redesign is off. Same "independent" spirit as the quickbar above,
   // just page-specific — each function reads whatever the current page
   // already renders (via the adapter's `doc = document` default) instead of
@@ -424,6 +424,9 @@
   let homeSummaryPending = false;
 
   function removeClassicWidgets() {
+    removeHomeLayout();
+    try { if (planTimetableObserver) planTimetableObserver.disconnect(); } catch (e) { /* ignore */ }
+    planTimetableObserver = null;
     if (classicWidgetEl) {
       classicWidgetEl.remove();
       classicWidgetEl = null;
@@ -447,77 +450,381 @@
   }
 
   // UNVERIFIED: same caveat as adapter.getGrades — only the empty state has
-  // ever been observed live, so this only renders once real rows show up.
+  // ever been observed live, so the populated-row path renders once real rows
+  // show up; the empty path below renders unconditionally so an empty account
+  // still sees proof the widget is alive instead of silence.
   function injectOcenyWidget() {
     const adapter = selectAdapter();
     const frame = document.querySelector('usos-frame#oceny, usos-frame.oceny');
-    if (!adapter || !frame) return;
+    if (!adapter || !frame) {
+      logClassicSkip('oceny', !adapter ? 'no adapter' : 'no anchor');
+      return;
+    }
     const avg = averageFromGradeRows(adapter.getGrades().rows);
-    if (!avg) return;
     const el = document.createElement('div');
-    el.className = 'usospp-classic-widget usospp-classic-widget--info';
-    const strong = document.createElement('strong');
-    strong.textContent = avg.avg;
-    const desc = document.createElement('span');
-    desc.textContent = `średnia z ${avg.count} widocznych ocen`;
-    el.append(strong, desc, widgetTag());
+    if (avg) {
+      el.className = 'usospp-classic-widget usospp-classic-widget--info';
+      const strong = document.createElement('strong');
+      strong.textContent = avg.avg;
+      const desc = document.createElement('span');
+      desc.textContent = `średnia z ${avg.count} widocznych ocen`;
+      el.append(strong, desc, widgetTag());
+    } else {
+      el.className = 'usospp-classic-widget usospp-classic-widget--info usospp-classic-widget--empty';
+      el.dataset.empty = 'true';
+      const desc = document.createElement('span');
+      desc.textContent = 'Brak ocen końcowych — średnia niepoliczona';
+      el.append(desc, widgetTag());
+    }
     frame.before(el);
     classicWidgetEl = el;
+    logClassicInjected('oceny', avg ? 'with-avg' : 'empty');
   }
 
-  function injectPlatnosciWidget() {
-    const adapter = selectAdapter();
-    const main = document.querySelector('#layout-main-content');
-    if (!adapter || !main) return;
-    const result = adapter.getPaymentGroups();
-    const totalRows = countUnpaidRows(result);
-    if (!totalRows) return;
-    const anchor = main.querySelector('usos-frame, info-box');
-    const el = document.createElement('div');
-    el.className = 'usospp-classic-widget usospp-classic-widget--warning';
-    const strong = document.createElement('strong');
-    strong.textContent = result.grandTotal || `${totalRows} ${totalRows === 1 ? 'pozycja' : 'pozycje'} do zapłaty`;
-    const desc = document.createElement('span');
-    desc.textContent = 'masz nierozliczone należności';
-    el.append(strong, desc, widgetTag());
-    if (anchor) anchor.before(el);
-    else main.prepend(el);
-    classicWidgetEl = el;
+  // Classic plan page (home/plan): a mini "Ten tydzień" for the week USOS
+  // actually rendered — the same aggregate the panel's left box shows
+  // (count + hours, busiest day, free days, per-type breakdown), computed
+  // from the rendered weekly timetable, in any format: the new UI's live
+  // <usos-timetable> (see colsFromNewUi inline in render) or the old html
+  // grid table (see colsFromOldPlanTable). The old approach (getMyGroups
+  // on this page's DOM + the static register() literal) could never work
+  // here: the groups frame lives on home/grupy, and on week views register()
+  // carries params instead of events (see getPlan's comment) — so it always
+  // showed a false "Brak zajęć". Counting rendered <timetable-entry> nodes
+  // needs no fetches and follows USOS's own week logic (selected week,
+  // holidays, cancelled classes) including the week selector: entries are
+  // re-rendered client-side, so one persistent observer keeps the summary in
+  // sync as the user flips weeks.
+  const PLAN_DAY_ORDER = { PN: 0, WT: 1, 'ŚR': 2, CZ: 3, PT: 4, SO: 5, ND: 6 };
+  function planDayKey(name) {
+    // Same normalization as adapters.js's stripPl: NFD alone is NOT enough
+    // because Ł/ł have no decomposition ("Poniedziałek" would never match).
+    const norm = (name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l');
+    if (norm.startsWith('poniedzial')) return 'PN';
+    if (norm.startsWith('wtorek') || norm.startsWith('wtorku')) return 'WT';
+    if (norm.startsWith('srod')) return 'ŚR';
+    if (norm.startsWith('czwartek')) return 'CZ';
+    if (norm.startsWith('piatek') || norm.startsWith('piatku')) return 'PT';
+    if (norm.startsWith('sobot')) return 'SO';
+    if (norm.startsWith('niedziel')) return 'ND';
+    return null;
   }
-
-  // Classic home/plan page: count sessions from the student's own groups
-  // (server-rendered on home/grupy) instead of the client-side timetable
-  // register(), which fetch()+DOMParser never sees populated. Falls back
-  // to the static register() literal when groups are unavailable.
+  function planToMin(t) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(t || '');
+    return m ? (+m[1]) * 60 + (+m[2]) : null;
+  }
+  function planFmtDur(min) {
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    if (h && m) return `${h} h ${m} min`;
+    if (h) return `${h} h`;
+    return `${m} min`;
+  }
+  function planZajeciaWord(n) {
+    if (n === 1) return '1 zajęcie';
+    if ([2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100)) return `${n} zajęcia`;
+    return `${n} zajęć`;
+  }
+  // "05.10.2026 – 11.10.2026" for the displayed week. Primary source is the
+  // page's own h1 ("Mój plan zajęć (2026-10-05 - 2026-10-11)") — present in
+  // every weekly format, old and new. Falls back to the plan_week_sel_week
+  // URL param, then to the current week's Monday.
+  function planWeekLabel() {
+    const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+    const fmtIso = (y, m, d) => `${d}.${m}.${y}`;
+    try {
+      const h1 = document.querySelector('h1');
+      const hm = h1 && /\((\d{4})-(\d{2})-(\d{2})\s*-\s*(\d{4})-(\d{2})-(\d{2})\)/.exec(h1.textContent || '');
+      if (hm) return `${fmtIso(hm[1], hm[2], hm[3])} – ${fmtIso(hm[4], hm[5], hm[6])}`;
+    } catch (e) { /* fall through */ }
+    let monday = null;
+    try {
+      const param = new URLSearchParams(location.search).get('plan_week_sel_week');
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(param || '');
+      if (m) monday = new Date(+m[1], +m[2] - 1, +m[3]);
+    } catch (e) { monday = null; }
+    if (!monday || Number.isNaN(monday.getTime())) {
+      const now = new Date();
+      const dow = (now.getDay() + 6) % 7; // Monday = 0
+      monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+    }
+    monday.setHours(0, 0, 0, 0);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return `${fmt(monday)} – ${fmt(sunday)}`;
+  }
+  // Semester view ("Okres planu zajęć: semestralny") overlays the whole
+  // semester's template — there is no single week to summarize, so the
+  // widget stays out. Detected via the timebase radio (works for full page
+  // loads and client-side switches alike) or the plan_division URL param.
+  function isPlanSemesterView() {
+    try {
+      const radio = document.querySelector('#timebase_sem');
+      if (radio && radio.checked) return true;
+      if (new URLSearchParams(location.search).get('plan_division') === 'semester') return true;
+    } catch (e) { /* fall through */ }
+    return false;
+  }
+  // Short class-type codes used by the old HTML table format ("13:15, W"),
+  // mapped to the full names the new timetable (and the panel) uses.
+  // Unknown codes pass through untouched rather than becoming "inne".
+  const PLAN_TYPE_SHORT = {
+    W: 'Wykład', 'Ć': 'Ćwiczenia', C: 'Ćwiczenia', L: 'Zajęcia laboratoryjne',
+    S: 'Seminarium', K: 'Konwersatorium', P: 'Projekt',
+    E: 'Egzamin', WF: 'Wychowanie fizyczne',
+  };
+  // Weekly grid of the OLD html table format: header row with day names +
+  // hour gutter + entry cells (td[onclick*=pokazZajecia], rowspan-sized).
+  // Days are NOT raw cell indexes: day widths come from the HEADER row's
+  // colspans (verified live: a calm week renders PN–CZ single-width with a
+  // double-width Friday, a busy week renders every day double-width so
+  // overlapping classes can sit side by side; entries always colspan=1).
+  // Days are therefore assigned via an occupancy model over the
+  // header-derived sub-columns, not by counting cells. Returns
+  // [{key, entries:[{start, end, label}]}] like the new-ui path, or null
+  // when no weekly grid table is present (other formats / not rendered yet).
+  function colsFromOldPlanTable(wrapper) {
+    const tables = [...wrapper.querySelectorAll('table')];
+    const grid = tables.find((t) => {
+      const first = t.rows && t.rows[0];
+      return first && [...first.cells].some((c) => planDayKey((c.textContent || '').trim()));
+    });
+    if (!grid || !grid.rows.length) return null;
+    // Skip the corner cell; each header cell's colspan is its day's width
+    // (missing/empty colspan = 1).
+    const dayWidths = [...grid.rows[0].cells]
+      .slice(1)
+      .map((c) => ({ key: planDayKey((c.textContent || '').trim()), w: Math.max(1, parseInt(c.getAttribute('colspan') || '1', 10) || 1) }))
+      .filter((d) => d.key);
+    if (!dayWidths.length) return null;
+    const subDay = [];
+    dayWidths.forEach((d, di) => {
+      for (let k = 0; k < d.w; k++) subDay.push(di);
+    });
+    const dayCols = dayWidths.map((d) => d.key);
+    const busySub = new Array(subDay.length).fill(0);
+    const cols = dayCols.map((key) => ({ key, entries: [] }));
+    for (let i = 1; i < grid.rows.length; i++) {
+      const cells = [...grid.rows[i].cells];
+      cells.forEach((cell) => {
+        const text = (cell.textContent || '').replace(/\s+/g, ' ').trim();
+        // Hour gutter ("7:00") — not a day column. Entry cells carry the
+        // group link in onclick and a "13:15, W" note, never a bare hour.
+        if (!cell.hasAttribute('onclick') && /^\d{1,2}:\d{2}$/.test(text)) return;
+        const rs = parseInt(cell.getAttribute('rowspan') || '1', 10) || 1;
+        const cs = Math.max(1, parseInt(cell.getAttribute('colspan') || '1', 10) || 1);
+        // First run of cs free sub-columns; degrade to a narrower run
+        // rather than dropping the cell entirely.
+        let sub = -1;
+        for (let want = cs; want >= 1 && sub === -1; want--) {
+          for (let s = 0; s + want <= busySub.length; s++) {
+            let free = true;
+            for (let k = 0; k < want; k++) {
+              if (busySub[s + k] > i) { free = false; break; }
+            }
+            if (free) { sub = s; break; }
+          }
+        }
+        if (sub === -1) return; // fully covered row — ignore
+        for (let k = 0; k < cs && sub + k < busySub.length; k++) busySub[sub + k] = i + rs;
+        const col = subDay[sub];
+        if (col == null || col >= dayCols.length) return;
+        const onclick = cell.getAttribute('onclick') || '';
+        if (!/pokazZajecia/.test(onclick)) return; // empty filler cell
+        const noteEl = cell.querySelector('span.note');
+        const nm = noteEl && /^(\d{1,2}):(\d{2}),\s*(.+)$/.exec((noteEl.textContent || '').replace(/\s+/g, ' ').trim());
+        if (!nm) return;
+        const start = `${nm[1].padStart(2, '0')}:${nm[2]}`;
+        const code = nm[3].trim();
+        // Grid rows are 5 minutes each (hour gutter cells use rowspan=12).
+        const dur = rs * 5;
+        const endMin = planToMin(start) + dur;
+        const end = `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+        cols[col].entries.push({ start, end, label: PLAN_TYPE_SHORT[code] || code || 'inne' });
+      });
+    }
+    return cols;
+  }
+  let planTimetableObserver = null;
   function injectPlanWidget() {
     const adapter = selectAdapter();
     const wrapper = document.querySelector('.timetable-wrapper');
-    if (!adapter || !wrapper) return;
-    const show = (count) => {
-      if (!count) return;
-      const el = document.createElement('div');
-      el.className = 'usospp-classic-widget usospp-classic-widget--info';
-      const strong = document.createElement('strong');
-      strong.textContent = String(count);
-      const desc = document.createElement('span');
-      desc.textContent = count === 1 ? 'zajęcia w tygodniu (z Twoich grup)' : 'zajęć w tygodniu (z Twoich grup)';
-      el.append(strong, desc, widgetTag());
-      wrapper.prepend(el);
-      classicWidgetEl = el;
-    };
-    if (typeof adapter.getMyGroups === 'function') {
-      try {
-        const res = adapter.getMyGroups();
-        if (res && res.supported) {
-          const count = (res.subjects || []).reduce(
-            (n, s) => n + (s.groups || []).reduce((m, g) => m + (g.sessions || []).length, 0), 0);
-          if (count) { show(count); return; }
-        }
-      } catch (e) { /* fall through to register() */ }
+    if (!adapter || !wrapper || typeof adapter.getSubjectTimetable !== 'function') {
+      logClassicSkip('plan', !adapter ? 'no adapter' : 'no anchor');
+      return;
     }
-    const events = adapter.getPlan().raw;
-    if (!Array.isArray(events) || !events.length) return;
-    show(events.length);
+    try { if (planTimetableObserver) planTimetableObserver.disconnect(); } catch (e) { /* ignore */ }
+    planTimetableObserver = null;
+    const render = () => {
+      // Semester view has no single week — the widget must not show there.
+      // Handled first so a week→semester switch removes an existing widget.
+      if (isPlanSemesterView()) {
+        if (classicWidgetEl) {
+          try { classicWidgetEl.remove(); } catch (e) { /* ignore */ }
+          classicWidgetEl = null;
+          logClassicSkip('plan', 'semester view has no single week');
+        }
+        return;
+      }
+      // Weekly views, any format: new-ui renders <usos-timetable> (entries
+      // arrive via XHR), the old html format renders a server-side grid
+      // table. Day columns are the readiness signal in both: USOS renders
+      // them even for an empty week, so columns + zero entries = genuinely
+      // free, while no columns at all = not rendered yet.
+      let cols = null;
+      const ttEl = wrapper.querySelector('usos-timetable');
+      if (ttEl && ttEl.querySelector('timetable-day')) {
+        let byLabel = {};
+        try {
+          const tt = adapter.getSubjectTimetable();
+          if (tt && tt.supported) {
+            (tt.days || []).forEach((d) => {
+              byLabel[(d.day || '').trim()] = d.entries || [];
+            });
+          }
+        } catch (e) { byLabel = {}; }
+        cols = [...ttEl.children]
+          .filter((c) => c.querySelector && c.querySelector('timetable-day'))
+          .map((c) => {
+            const lblEl = c.querySelector('div > div');
+            const label = lblEl && lblEl.textContent ? lblEl.textContent.trim() : '';
+            const entries = byLabel[label] || [];
+            // Fallback when the parser didn't claim the day (e.g. label
+            // drift): count raw entries so the number never under-reports.
+            const raw = entries.length ? entries : [...c.querySelectorAll('timetable-entry')].map(() => ({}));
+            return { key: planDayKey(label), entries: raw };
+          })
+          .filter((c) => c.key)
+          .sort((a, b) => PLAN_DAY_ORDER[a.key] - PLAN_DAY_ORDER[b.key]);
+      } else {
+        cols = colsFromOldPlanTable(wrapper);
+      }
+      // null = not rendered yet (or image format, which has no parseable
+      // timetable at all) — keep waiting for the observer/timeout path.
+      if (!cols || !cols.length) return;
+      if (classicWidgetEl && classicWidgetEl.parentNode !== wrapper) return; // navigated away
+      let count = 0;
+      let minutes = 0;
+      const byDayMin = {};
+      const byDayCount = {};
+      const byType = {};
+      cols.forEach((col) => {
+        (col.entries || []).forEach((e) => {
+          count += 1;
+          byDayCount[col.key] = (byDayCount[col.key] || 0) + 1;
+          const s = planToMin(e.start);
+          const en = planToMin(e.end);
+          if (s !== null && en !== null && en > s) {
+            minutes += en - s;
+            byDayMin[col.key] = (byDayMin[col.key] || 0) + (en - s);
+          }
+          const t = ((e.label || '').split(',')[0] || '').trim() || 'inne';
+          byType[t] = (byType[t] || 0) + 1;
+        });
+      });
+      let el = classicWidgetEl;
+      if (!el) {
+        el = document.createElement('div');
+        wrapper.prepend(el);
+        classicWidgetEl = el;
+      }
+      el.innerHTML = '';
+      delete el.dataset.empty;
+      if (!count) {
+        // Zero entries with rendered day columns = a genuinely empty week
+        // (holiday break etc.), not a read failure.
+        el.className = 'usospp-classic-widget usospp-classic-widget--info usospp-classic-widget--empty';
+        el.dataset.empty = 'true';
+        const desc = document.createElement('span');
+        desc.textContent = 'Brak zajęć w tym tygodniu';
+        el.append(desc, widgetTag());
+        logClassicInjected('plan', 'empty-week');
+        return;
+      }
+      let busiest = null;
+      Object.keys(PLAN_DAY_ORDER).forEach((d) => {
+        if (byDayMin[d] && (!busiest || byDayMin[d] > byDayMin[busiest])) busiest = d;
+      });
+      // Free = rendered columns with no entries. Weekend columns only exist
+      // when the grid actually spans them — same spirit as the panel, which
+      // hides "Wolne: SO, ND" noise when the weekend is never taught.
+      const freeDays = cols.filter((c) => !(byDayCount[c.key] > 0)).map((c) => c.key);
+      const types = Object.entries(byType)
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `${t} ×${n}`)
+        .join(' · ');
+      el.className = 'usospp-classic-widget usospp-classic-widget--info usospp-classic-plan';
+      const head = document.createElement('div');
+      head.className = 'usospp-classic-plan-head';
+      const strong = document.createElement('strong');
+      strong.textContent = planZajeciaWord(count);
+      const week = document.createElement('span');
+      week.textContent = minutes > 0
+        ? `· łącznie ${planFmtDur(minutes)} · ${planWeekLabel()}`
+        : `· ${planWeekLabel()}`;
+      head.append(strong, week, widgetTag());
+      el.append(head);
+      if (busiest) {
+        const busy = document.createElement('div');
+        busy.className = 'usospp-classic-plan-line';
+        busy.append('Najbardziej zapracowany: ');
+        const b = document.createElement('b');
+        b.textContent = busiest;
+        busy.append(b, ` (${planFmtDur(byDayMin[busiest])})`);
+        el.append(busy);
+      }
+      const free = document.createElement('div');
+      free.className = 'usospp-classic-plan-line';
+      if (freeDays.length) {
+        free.append('Wolne: ');
+        const b = document.createElement('b');
+        b.textContent = freeDays.join(', ');
+        free.append(b);
+      } else {
+        free.textContent = 'Brak dni wolnych w tym tygodniu.';
+      }
+      el.append(free);
+      if (types) {
+        const t = document.createElement('div');
+        t.className = 'usospp-classic-plan-types';
+        t.textContent = types;
+        el.append(t);
+      }
+      logClassicInjected('plan', `week-summary:${count}`);
+    };
+    let settled = false;
+    let debounce = null;
+    const schedule = () => {
+      if (settled) {
+        // Week-flip re-render: USOS swaps entries in bursts, debounce so we
+        // count once per settled DOM.
+        try { clearTimeout(debounce); } catch (e) { /* ignore */ }
+        debounce = setTimeout(render, 300);
+        return;
+      }
+      render();
+      if (classicWidgetEl) {
+        settled = true;
+        try { clearTimeout(timer); } catch (e) { /* ignore */ }
+      }
+    };
+    if (typeof MutationObserver !== 'undefined') {
+      planTimetableObserver = new MutationObserver(schedule);
+      try {
+        planTimetableObserver.observe(wrapper, { childList: true, subtree: true });
+      } catch (e) { planTimetableObserver = null; }
+    }
+    const timer = setTimeout(() => {
+      // No parseable timetable after 10s (XHR failed, odd view, or the
+      // image format, which carries no DOM data at all): inject nothing —
+      // a fake "Brak zajęć" would be worse than silence.
+      if (!settled && !classicWidgetEl) {
+        logClassicSkip('plan', 'no parseable weekly timetable after 10s');
+        try { if (planTimetableObserver) planTimetableObserver.disconnect(); } catch (e) { /* ignore */ }
+        planTimetableObserver = null;
+      }
+    }, 10000);
+    schedule(); // synchronous first attempt — timetable may already be there
   }
 
   // Cross-page card for "Mój USOSweb" (home/index) — the only classic widget
@@ -528,7 +835,10 @@
     if (homeSummaryPending) return;
     const table = document.querySelector('.local-home-table');
     const adapter = selectAdapter();
-    if (!table || !adapter) return;
+    if (!table || !adapter) {
+      logClassicSkip('home', !adapter ? 'no adapter' : 'no anchor');
+      return;
+    }
     homeSummaryPending = true;
     try {
       const { fetchDoc, PATHS } = window.USOSPP_SCRAPE;
@@ -543,10 +853,12 @@
 
       const avg = ocenyDoc ? averageFromGradeRows(adapter.getGrades(ocenyDoc).rows) : null;
       const paymentsResult = platnosciDoc ? adapter.getPaymentGroups(platnosciDoc) : { groups: [] };
-      const totalRows = countUnpaidRows(paymentsResult);
-      if (!avg && !totalRows) return;
+      const totalRows = platnosciDoc ? countUnpaidRows(paymentsResult) : 0;
+      const isEmpty = !avg && !totalRows;
 
       const frame = document.createElement('usos-frame');
+      frame.id = 'usospp-home-summary';
+      if (isEmpty) frame.dataset.empty = 'true';
       const h2 = document.createElement('h2');
       h2.setAttribute('slot', 'title');
       h2.textContent = 'USOS++ — podsumowanie';
@@ -555,25 +867,41 @@
       const body = document.createElement('div');
       body.className = 'usospp-classic-home-summary';
 
-      if (avg) {
+      // Row 1 (oceny): always rendered — average, honest empty state, or
+      // fetch-failure notice. Two rows (oceny + płatności) even when empty
+      // so an empty account still sees proof the widget is alive.
+      {
         const row = document.createElement('div');
-        row.className = 'usospp-classic-home-row';
+        row.className = 'usospp-classic-home-row' + ((!ocenyDoc || !avg) ? ' usospp-classic-home-row--empty' : '');
         const label = document.createElement('span');
-        label.append('Średnia ocen: ');
-        const strong = document.createElement('strong');
-        strong.textContent = avg.avg;
-        label.appendChild(strong);
+        if (avg) {
+          label.append('Średnia ocen: ');
+          const strong = document.createElement('strong');
+          strong.textContent = avg.avg;
+          label.appendChild(strong);
+        } else if (!ocenyDoc) {
+          label.textContent = 'Nie udało się pobrać ocen';
+        } else {
+          label.textContent = 'Brak ocen końcowych — średnia niepoliczona';
+        }
         const link = document.createElement('a');
         link.href = `${location.origin}/kontroler.php?_action=dla_stud/studia/oceny/index`;
         link.textContent = 'oceny →';
         row.append(label, link);
         body.appendChild(row);
       }
-      if (totalRows) {
+      // Row 2 (płatności): same always-render contract as above.
+      {
         const row = document.createElement('div');
-        row.className = 'usospp-classic-home-row';
+        row.className = 'usospp-classic-home-row' + ((!platnosciDoc || !totalRows) ? ' usospp-classic-home-row--empty' : '');
         const label = document.createElement('span');
-        label.textContent = paymentsResult.grandTotal || `${totalRows} nierozliczonych należności`;
+        if (totalRows) {
+          label.textContent = paymentsResult.grandTotal || `${totalRows} nierozliczonych należności`;
+        } else if (!platnosciDoc) {
+          label.textContent = 'Nie udało się pobrać płatności';
+        } else {
+          label.textContent = 'Brak nierozliczonych należności — wszystko uregulowane';
+        }
         const link = document.createElement('a');
         link.href = `${location.origin}/kontroler.php?_action=dodatki/platnosci/naleznosciNierozliczone`;
         link.textContent = 'płatności →';
@@ -583,22 +911,547 @@
       frame.appendChild(body);
       table.prepend(frame);
       classicWidgetEl = frame;
+      logClassicInjected('home', isEmpty ? 'empty' : 'with-data');
     } finally {
       homeSummaryPending = false;
     }
   }
 
-  function applyClassicWidgets(settings) {
+  function logClassicSkip(page, reason) {
+    try { console.info(`[USOS++] classic widget skipped (${page}): ${reason}`); } catch (e) { /* never break inject over logging */ }
+  }
+
+  function logClassicInjected(page, state) {
+    try { console.info(`[USOS++] classic widget injected (${page}): ${state}`); } catch (e) { /* never break inject over logging */ }
+  }
+
+  // The classic USOS shell sometimes paints its content late (client-side
+  // timetable/Angular sections): a one-shot querySelector at document_idle
+  // can miss an anchor that shows up a moment later. Wait briefly for it
+  // instead of silently giving up — one observer per page load at most,
+  // always disconnected via finish().
+  function waitForClassicAnchor(selector, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+      const found = document.querySelector(selector);
+      if (found) { resolve(found); return; }
+      let done = false;
+      let observer = null;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try { if (observer) observer.disconnect(); } catch (e) { /* ignore */ }
+        clearTimeout(timer);
+        resolve(document.querySelector(selector));
+      };
+      if (typeof MutationObserver !== 'undefined') {
+        observer = new MutationObserver(() => {
+          if (document.querySelector(selector)) finish();
+        });
+        try {
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+        } catch (e) { observer = null; }
+      }
+      const timer = setTimeout(finish, timeoutMs);
+    });
+  }
+
+  // ---- home layout editor ("Mój USOSweb", home/index): rearrange cards
+  // between the native columns + change order + hide cards. Part of
+  // classicWidgets (no separate flag): visible only while the panel is off.
+  // Native look is untouched outside edit mode — cards are only *moved*
+  // between the page's own column containers, never restyled.
+  const HOME_LAYOUT_KEY = 'usospp:homeLayout:' + location.origin;
+  let homeToolbarEl = null;
+  let homeEdit = null; // { snapshot: [{el, parent, next}], tray } while editing
+
+  function homeSlug(text) {
+    return (text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'karta';
+  }
+
+  // Stable card id: existing DOM id wins, then title slug, then positional
+  // fallback. Uniqueness enforced by the caller (first wins, later get :2).
+  function homeCardId(el, fallbackIdx) {
+    if (el.id) return '#' + el.id;
+    const h = el.querySelector('h2[slot="title"]');
+    const t = h ? h.textContent.trim() : '';
+    if (t) return 't:' + homeSlug(t);
+    return 'x:' + fallbackIdx;
+  }
+
+  // Column containers: the DIVs directly under .local-home-table. Table-level
+  // frames (our summary) live in the virtual "top" zone = the table itself.
+  function homeColumns() {
+    const table = document.querySelector('.local-home-table');
+    if (!table) return { table: null, cols: [] };
+    const cols = [...table.children].filter((el) =>
+      el.tagName !== 'USOS-FRAME'
+      && el.id !== 'usospp-home-summary');
+    return { table, cols };
+  }
+
+  function homeCards() {
+    const { table, cols } = homeColumns();
+    if (!table) return [];
+    const out = [];
+    const seen = new Set();
+    const push = (el) => {
+      let id = homeCardId(el, out.length);
+      if (seen.has(id)) id += ':' + out.length;
+      seen.add(id);
+      out.push({ el, id });
+    };
+    [...table.children].forEach((el) => { if (el.tagName === 'USOS-FRAME') push(el); });
+    cols.forEach((col) => {
+      [...col.children].forEach((el) => { if (el.tagName === 'USOS-FRAME') push(el); });
+    });
+    return out;
+  }
+
+  function homeCardsById() {
+    const map = new Map();
+    homeCards().forEach(({ el, id }) => { if (!map.has(id)) map.set(id, el); });
+    return map;
+  }
+
+  async function homeLayoutLoad() {
+    try {
+      const res = await chrome.storage.local.get({ [HOME_LAYOUT_KEY]: null });
+      const v = res[HOME_LAYOUT_KEY];
+      if (v && Array.isArray(v.cols) && Array.isArray(v.hidden)) return v;
+    } catch (e) { /* storage unavailable — default layout */ }
+    return null;
+  }
+
+  async function homeLayoutSave(layout) {
+    try { await chrome.storage.local.set({ [HOME_LAYOUT_KEY]: layout }); } catch (e) { /* best effort */ }
+  }
+
+  function homeSerialize() {
+    const { table, cols } = homeColumns();
+    if (!table) return null;
+    const byEl = new Map(homeCards().map(({ el, id }) => [el, id]));
+    const idsOf = (container) => [...container.children]
+      .filter((el) => el.tagName === 'USOS-FRAME' && byEl.has(el))
+      .map((el) => byEl.get(el));
+    // Top zone first, then each native column in DOM order. Ghosts (hidden
+    // in edit) land in `hidden`, never in the visible order lists.
+    const zones = [table, ...cols];
+    const hidden = [...document.querySelectorAll('.local-home-table .usospp-home-ghost')]
+      .map((el) => byEl.get(el)).filter(Boolean);
+    return {
+      v: 1,
+      cols: zones.map((z) => idsOf(z).filter((id) => !hidden.includes(id))),
+      hidden,
+    };
+  }
+
+  function homeApplyLayout(layout) {
+    if (!layout) return;
+    const byId = homeCardsById();
+    const { table, cols } = homeColumns();
+    if (!table) return;
+    (layout.hidden || []).forEach((id) => {
+      const el = byId.get(id);
+      if (el) el.classList.add('usospp-home-hidden');
+    });
+    const zoneLists = layout.cols || [];
+    // Top zone (table-level cards like our summary): insert in order before
+    // the first native column so they stay on top instead of sinking below.
+    const anchor = cols[0] || null;
+    (zoneLists[0] || []).forEach((id) => {
+      const el = byId.get(id);
+      if (!el || el.classList.contains('usospp-home-hidden')) return;
+      table.insertBefore(el, anchor);
+    });
+    zoneLists.slice(1).forEach((ids, ci) => {
+      const zone = cols[ci];
+      if (!zone) return;
+      (ids || []).forEach((id) => {
+        const el = byId.get(id);
+        if (!el || el.classList.contains('usospp-home-hidden')) return;
+        zone.appendChild(el);
+      });
+    });
+    // Unknown/new cards keep their native position (never moved).
+  }
+
+  function homeExitEdit() {
+    document.querySelectorAll('.usospp-home-gripbox, .usospp-home-eyebox').forEach((h) => h.remove());
+    document.querySelectorAll('.usospp-home-editing-table').forEach((t) => t.classList.remove('usospp-home-editing-table'));
+    document.querySelectorAll('.usospp-home-dragover, .usospp-home-drop-before, .usospp-home-drop-after')
+      .forEach((el) => el.classList.remove('usospp-home-dragover', 'usospp-home-drop-before', 'usospp-home-drop-after'));
+    document.querySelectorAll('.local-home-table usos-frame').forEach((el) => {
+      el.classList.remove('usospp-home-editing');
+    });
+    homeEdit = null;
+  }
+
+  function renderHomeToolbar(editing) {
+    if (homeToolbarEl) { homeToolbarEl.remove(); homeToolbarEl = null; }
+    const table = document.querySelector('.local-home-table');
+    if (!table || !table.isConnected) return;
+    const bar = document.createElement('div');
+    bar.className = 'usospp-home-toolbar' + (editing ? ' usospp-home-toolbar--edit' : '');
+    if (!editing) {
+      // Deliberately subtle: one clickable element in the USOS++ tag style
+      // (see .usospp-home-editbtn in usos.css), right-aligned with a padded
+      // hit-area so the whole label — not just the glyphs — is clickable.
+      const btn = document.createElement('span');
+      btn.className = 'usospp-home-editbtn';
+      btn.setAttribute('role', 'button');
+      btn.setAttribute('tabindex', '0');
+      btn.textContent = 'Edytuj układ · USOS++';
+      btn.addEventListener('click', homeStartEdit);
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); homeStartEdit(); }
+      });
+      bar.append(btn);
+    } else {
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.className = 'usospp-home-btn usospp-home-btn--primary';
+      save.textContent = 'Zapisz';
+      save.addEventListener('click', homeSaveEdit);
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'usospp-home-btn';
+      cancel.textContent = 'Anuluj';
+      cancel.addEventListener('click', homeCancelEdit);
+      const reset = document.createElement('button');
+      reset.type = 'button';
+      reset.className = 'usospp-home-btn usospp-home-btn--danger';
+      reset.textContent = 'Przywróć domyślny';
+      reset.addEventListener('click', homeResetLayout);
+      bar.append(save, cancel, reset);
+    }
+    table.before(bar);
+    homeToolbarEl = bar;
+  }
+
+  // Edit-mode icons live inside the card's own title (h2): the native h2 is
+  // itself positioned, so it would otherwise hijack absolute positioning from
+  // the card and the icons would sink to the title's bottom edge, straddling
+  // its border. Anchored to the h2 and optically centered via top:50% +
+  // translateY, so every widget keeps a single row.
+  const HOME_EYE_OPEN = '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10z"></path><circle cx="10" cy="10" r="2.4"></circle></svg>';
+  const HOME_EYE_OFF = '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10z"></path><circle cx="10" cy="10" r="2.4"></circle><line x1="3.5" y1="16.5" x2="16.5" y2="3.5"></line></svg>';
+
+  function homeTitleEl(cardEl) {
+    return cardEl.querySelector(':scope > h2') || null;
+  }
+
+  function homeRefreshEye(cardEl) {
+    const eye = cardEl.querySelector('.usospp-home-eye');
+    if (!eye) return;
+    const hidden = cardEl.classList.contains('usospp-home-ghost');
+    eye.innerHTML = hidden ? HOME_EYE_OFF : HOME_EYE_OPEN;
+    eye.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+    eye.title = hidden ? 'Pokaż okienko' : 'Ukryj okienko';
+  }
+
+  function homeToggleHidden(cardEl) {
+    // Ghost = hidden-in-edit, kept in place (no separate tray). Persisted as
+    // hidden on save; converted to display:none then.
+    cardEl.classList.toggle('usospp-home-ghost');
+    homeRefreshEye(cardEl);
+  }
+
+  // Edit-mode icons: anchored to the CARD's edges (flush left/right) and
+  // vertically centered on the title row. Anchoring to the h2 was tried and
+  // abandoned: native USOS indents the h2 ~17px inside the card, so h2-based
+  // offsets can never reach the card edges. The title center is measured from
+  // live layout (robust to any native indentation/padding).
+  function homeAttachIcons(cardEl) {
+    const title = homeTitleEl(cardEl);
+    const left = document.createElement('span');
+    left.className = 'usospp-home-gripbox';
+    const grip = document.createElement('span');
+    grip.className = 'usospp-home-grip';
+    grip.textContent = '⋮⋮';
+    grip.setAttribute('draggable', 'true');
+    grip.setAttribute('tabindex', '0');
+    grip.setAttribute('role', 'button');
+    grip.setAttribute('aria-label', 'Przeciągnij lub użyj strzałek, aby przenieść okienko');
+    grip.title = 'Przeciągnij, aby przenieść (strzałki też działają)';
+    grip.addEventListener('dragstart', (e) => {
+      try { e.dataTransfer.setData('text/plain', 'home-card'); e.dataTransfer.effectAllowed = 'move'; } catch (err) { /* ignore */ }
+      homeEdit.dragEl = cardEl;
+      cardEl.classList.add('usospp-home-dragging');
+    });
+    grip.addEventListener('dragend', () => {
+      cardEl.classList.remove('usospp-home-dragging');
+      if (homeEdit) homeEdit.dragEl = null;
+      homeClearDropMarks();
+    });
+    grip.addEventListener('keydown', (e) => {
+      const moves = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+      const mv = moves[e.key];
+      if (!mv) return;
+      e.preventDefault();
+      homeMoveCardKey(cardEl, mv[0], mv[1]);
+    });
+    left.append(grip);
+    const right = document.createElement('span');
+    right.className = 'usospp-home-eyebox';
+    const eye = document.createElement('button');
+    eye.type = 'button';
+    eye.className = 'usospp-home-eye';
+    eye.addEventListener('click', (e) => {
+      e.stopPropagation();
+      homeToggleHidden(cardEl);
+    });
+    right.append(eye);
+    cardEl.append(left, right);
+    // Pin both boxes to the title's vertical middle; fall back to the
+    // card's top edge for untitled cards (CSS translateY is cleared there).
+    if (title && title.offsetHeight) {
+      const mid = `${title.offsetTop + title.offsetHeight / 2}px`;
+      left.style.top = mid;
+      right.style.top = mid;
+    } else {
+      left.style.top = '8px';
+      left.style.transform = 'none';
+      right.style.top = '8px';
+      right.style.transform = 'none';
+    }
+  }
+
+  function homeClearDropMarks() {
+    document.querySelectorAll('.usospp-home-drop-before, .usospp-home-drop-after, .usospp-home-dragover')
+      .forEach((el) => el.classList.remove('usospp-home-drop-before', 'usospp-home-drop-after', 'usospp-home-dragover'));
+  }
+
+  function homeMoveCardTo(cardEl, targetZone, beforeEl) {
+    if (!cardEl || !targetZone) return;
+    if (beforeEl && beforeEl.parentElement === targetZone && beforeEl !== cardEl) targetZone.insertBefore(cardEl, beforeEl);
+    else if (beforeEl !== cardEl) targetZone.appendChild(cardEl);
+  }
+
+  // Keyboard move: [dx, dy] between/inside zones (zones = top + columns).
+  // Ghost (hidden-in-edit) cards move like the rest — their position is
+  // kept and applies once unhidden.
+  function homeMoveCardKey(cardEl, dx, dy) {
+    const { table, cols } = homeColumns();
+    if (!table) return;
+    const zones = [table, ...cols];
+    const zone = cardEl.parentElement;
+    const zi = zones.indexOf(zone);
+    if (zi === -1) return;
+    if (dy !== 0) {
+      const sibs = [...zone.children].filter((el) => el.tagName === 'USOS-FRAME');
+      const i = sibs.indexOf(cardEl);
+      const j = i + dy;
+      if (j >= 0 && j < sibs.length) zone.insertBefore(cardEl, dy < 0 ? sibs[j] : sibs[j].nextSibling);
+    }
+    if (dx !== 0) {
+      const nz = zones[(zi + dx + zones.length) % zones.length];
+      if (nz && nz !== zone) nz.appendChild(cardEl);
+    }
+    const grip = cardEl.querySelector('.usospp-home-grip');
+    if (grip) grip.focus();
+  }
+
+  function wireHomeDropZone(zoneEl) {
+    // Wired once per element (edit mode can be entered repeatedly); the
+    // handlers consult the live homeEdit state, so re-wiring is unnecessary.
+    if (zoneEl.dataset.homeWired) return;
+    zoneEl.dataset.homeWired = '1';
+    zoneEl.addEventListener('dragover', (e) => {
+      if (!homeEdit || !homeEdit.dragEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try { e.dataTransfer.dropEffect = 'move'; } catch (err) { /* ignore */ }
+      const after = homeAfterElement(zoneEl, e.clientY);
+      homeClearDropMarks();
+      zoneEl.classList.add('usospp-home-dragover');
+      if (after) {
+        // Orange line above the card the dragged element would precede.
+        after.classList.add('usospp-home-drop-before');
+      } else {
+        // Cursor past the last card (or an empty column): mark the end of
+        // the list instead, otherwise dropping last shows no indicator.
+        const cards = [...zoneEl.children].filter((el) =>
+          el.tagName === 'USOS-FRAME' && el !== homeEdit.dragEl);
+        const last = cards[cards.length - 1];
+        if (last) last.classList.add('usospp-home-drop-after');
+      }
+      homeEdit.dropTarget = { zone: zoneEl, before: after || null };
+    });
+    zoneEl.addEventListener('dragleave', (e) => {
+      // Only clear when truly leaving the zone (not bubbling from a card).
+      if (e.target === zoneEl) zoneEl.classList.remove('usospp-home-dragover');
+    });
+    zoneEl.addEventListener('drop', (e) => {
+      if (!homeEdit || !homeEdit.dragEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const el = homeEdit.dragEl;
+      const target = homeEdit.dropTarget;
+      const zone = (target && target.zone && target.zone.isConnected) ? target.zone : zoneEl;
+      const before = target ? target.before : null;
+      // Ghost state is preserved across moves — hiding is eye-only.
+      homeMoveCardTo(el, zone, before);
+      homeEdit.dropTarget = null;
+      homeClearDropMarks();
+    });
+  }
+
+  function homeAfterElement(zoneEl, y) {
+    const cards = [...zoneEl.children].filter((el) =>
+      el.tagName === 'USOS-FRAME'
+      && !(homeEdit.dragEl && el === homeEdit.dragEl)
+      && !el.classList.contains('usospp-home-dragging'));
+    let closest = null;
+    let closestOff = Number.NEGATIVE_INFINITY;
+    cards.forEach((el) => {
+      const box = el.getBoundingClientRect();
+      const off = y - (box.top + box.height / 2);
+      if (off < 0 && off > closestOff) { closestOff = off; closest = el; }
+    });
+    return closest;
+  }
+
+  function homeStartEdit() {
+    const { table } = homeColumns();
+    if (!table || homeEdit) return;
+    // Drop the native margin-top pull-up while editing (see
+    // .usospp-home-editing-table in usos.css).
+    table.classList.add('usospp-home-editing-table');    // Snapshot for Anuluj: exact DOM positions + ghost/hidden classes.
+    const snapshot = homeCards().map(({ el }) => ({
+      el,
+      parent: el.parentElement,
+      next: el.nextSibling,
+      ghost: el.classList.contains('usospp-home-ghost'),
+      hidden: el.classList.contains('usospp-home-hidden'),
+    }));
+    homeEdit = { snapshot, dragEl: null, dropTarget: null };
+    renderHomeToolbar(true);
+    homeCards().forEach(({ el }) => {
+      el.classList.add('usospp-home-editing');
+      // Saved-hidden cards become visible ghosts in place — no tray.
+      if (el.classList.contains('usospp-home-hidden')) {
+        el.classList.remove('usospp-home-hidden');
+        el.classList.add('usospp-home-ghost');
+      }
+      // Icons go into the title row when there is one (grip left, eye
+      // right, both measured off the live title center); untitled cards get
+      // a top-anchored fallback (see usos.css).
+      homeAttachIcons(el);
+      homeRefreshEye(el);
+    });
+    const { table: t2, cols } = homeColumns();
+    if (t2) wireHomeDropZone(t2);
+    cols.forEach((c) => wireHomeDropZone(c));
+    try { console.info('[USOS++] home layout edit started'); } catch (e) { /* ignore */ }
+  }
+
+  function homeSaveEdit() {
+    if (!homeEdit) return;
+    const layout = homeSerialize();
+    if (layout) homeLayoutSave(layout);
+    // Ghosts become truly hidden only now, on explicit save.
+    document.querySelectorAll('.local-home-table .usospp-home-ghost')
+      .forEach((el) => {
+        el.classList.remove('usospp-home-ghost');
+        el.classList.add('usospp-home-hidden');
+      });
+    homeExitEdit();
+    initHomeLayoutToolbar();
+    try { console.info('[USOS++] home layout saved'); } catch (e) { /* ignore */ }
+  }
+
+  function homeCancelEdit() {
+    if (!homeEdit) return;
+    homeEdit.snapshot.forEach(({ el, parent, next, ghost, hidden }) => {
+      if (!el.isConnected || !parent.isConnected) return;
+      parent.insertBefore(el, next);
+      if (ghost) el.classList.add('usospp-home-ghost');
+      else el.classList.remove('usospp-home-ghost');
+      if (hidden) el.classList.add('usospp-home-hidden');
+      else el.classList.remove('usospp-home-hidden');
+    });
+    homeExitEdit();
+    initHomeLayoutToolbar();
+    try { console.info('[USOS++] home layout edit cancelled'); } catch (e) { /* ignore */ }
+  }
+
+  async function homeResetLayout() {
+    try { await chrome.storage.local.remove(HOME_LAYOUT_KEY); } catch (e) { /* ignore */ }
+    location.reload();
+  }
+
+  function initHomeLayoutToolbar() {
+    renderHomeToolbar(false);
+  }
+
+  // Entry point for home/index (called after the summary widget is in place):
+  // re-apply saved order/hidden, then offer the Edit button.
+  async function initHomeLayout() {
+    const { table } = homeColumns();
+    if (!table) return;
+    const layout = await homeLayoutLoad();
+    // Re-check: user may have navigated away during the async load.
+    if (!document.body.contains(table)) return;
+    if (layout) homeApplyLayout(layout);
+    initHomeLayoutToolbar();
+  }
+
+  function removeHomeLayout() {
+    if (homeEdit) {
+      // Restore pre-edit DOM before tearing down (same as cancel, no save).
+      homeEdit.snapshot.forEach(({ el, parent, next, ghost, hidden }) => {
+        try {
+          if (el.isConnected && parent.isConnected) {
+            parent.insertBefore(el, next);
+            if (ghost) el.classList.add('usospp-home-ghost');
+            else el.classList.remove('usospp-home-ghost');
+            if (hidden) el.classList.add('usospp-home-hidden');
+            else el.classList.remove('usospp-home-hidden');
+          }
+        } catch (e) { /* ignore */ }
+      });
+      homeEdit = null;
+    } else {
+      // Feature turned off (or panel on): leave a pristine native page —
+      // saved hidden/order stays in storage and re-applies on next load.
+      document.querySelectorAll('.local-home-table .usospp-home-hidden, .local-home-table .usospp-home-ghost')
+        .forEach((el) => el.classList.remove('usospp-home-hidden', 'usospp-home-ghost'));
+    }
+    document.querySelectorAll('.usospp-home-gripbox, .usospp-home-eyebox').forEach((h) => h.remove());
+    document.querySelectorAll('.usospp-home-editing-table').forEach((t) => t.classList.remove('usospp-home-editing-table'));
+    if (homeToolbarEl) { homeToolbarEl.remove(); homeToolbarEl = null; }
+  }
+
+  async function applyClassicWidgets(settings) {
     if (!settings.features.classicWidgets || settings.enabled) {
       removeClassicWidgets();
       return;
     }
     if (classicWidgetEl) return; // already injected for this page load
     const action = new URLSearchParams(location.search).get('_action');
+    const anchorSelector =
+      action === 'dla_stud/studia/oceny/index' ? 'usos-frame#oceny, usos-frame.oceny'
+      : action === 'home/plan' ? '.timetable-wrapper'
+      : action === 'home/index' ? '.local-home-table'
+      : null;
+    if (!anchorSelector) return; // not a widget page — nothing to wait for
+    const anchor = await waitForClassicAnchor(anchorSelector);
+    if (!anchor) {
+      logClassicSkip(action, 'anchor not found after 5s');
+      return;
+    }
+    // The toggle may have flipped, or the page navigated away, while waiting.
+    if (!currentSettings || !currentSettings.features.classicWidgets || currentSettings.enabled) return;
+    if (classicWidgetEl) return;
     if (action === 'dla_stud/studia/oceny/index') injectOcenyWidget();
-    else if (action === 'dodatki/platnosci/naleznosciNierozliczone') injectPlatnosciWidget();
     else if (action === 'home/plan') injectPlanWidget();
-    else if (action === 'home/index') injectHomeSummary();
+    else if (action === 'home/index') {
+      await injectHomeSummary();
+      // Layout after the summary exists so it joins as a regular card.
+      if (!currentSettings || !currentSettings.features.classicWidgets || currentSettings.enabled) return;
+      initHomeLayout();
+    }
   }
 
   function onKeydown(e) {
@@ -731,10 +1584,26 @@
   })();
 
   onStateChange(async () => {
-    // Live check (not the load-time const): the quickbar toggle clears the
-    // tab flag and this same tab must then pick up the change.
-    if (isBypassed()) return;
     const settings = await getState();
+    if (isBypassed()) {
+      // Sticky native tab (see NATIVE_TAB_KEY): the panel must never mount
+      // here, but lightweight features toggled from another tab/the popup
+      // should still apply live instead of waiting for a reload. The quickbar
+      // toggle clears the tab flag itself and re-applies via applyState
+      // directly, so this path only handles *other* tabs' changes.
+      const active = settings.pluginEnabled !== false;
+      const effective = active
+        ? { ...settings, enabled: false }
+        : {
+          ...settings,
+          enabled: false,
+          features: Object.fromEntries(Object.keys(settings.features).map((k) => [k, false])),
+        };
+      currentSettings = effective;
+      applyIndependentFeatures(effective);
+      applyClassicWidgets(effective);
+      return;
+    }
     await applyState(settings);
   });
 })();

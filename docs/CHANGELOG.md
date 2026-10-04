@@ -1,5 +1,11 @@
 # Co nowego w USOS++
 
+## 0.9.11
+
+- **Klasyczny USOS też żyje** — widżety na stronach klasycznych pokazują uczciwy stan pusty zamiast znikać (średnia, plan, podsumowanie w Mój USOSweb — zaległości widać w podsumowaniu, osobny widżet na stronie Płatności wypadł jako zbędny), a w Mój USOSweb jest „Edytuj układ”: przestawianie okienek między kolumnami (mysz, strzałki), ukrywanie do duszków i pomarańczowa kreska pokazująca, gdzie karta wyląduje.
+- **Mini „Ten tydzień” na klasycznym planie** — nad planem widać podsumowanie jak w panelu: liczba zajęć i godziny, najbardziej zapracowany dzień, dni wolne i rozbicie na typy; działa w widoku tygodniowym w formacie HTML nowym i starym (w starym liczy z siatki tabeli, łącznie z nakładającymi się zajęciami), a w widoku semestralnym i obrazkowym się nie pokazuje, bo tam nie ma pojedynczego tygodnia do podsumowania.
+- **Postęp studiów z prawdziwymi danymi** — karta „Zaliczenia etapów” pokazuje punkty (razem, z etapu, z poprzednich), wymagania warunkowe i pełne, listę braków oraz rozwijane wymagania przedmiotowe z podpięciami i statusami; na dole stan rozliczenia programu z przyciskiem do klasyka (samo zgłoszenie zostaje w USOS), a na dashboardzie przy „Etapie studiów” jest link „więcej →”.
+
 ## 0.9.10
 
 - **Generator: nakładki obok siebie, nie na sobie** — terminy w jednym slocie dzielą się na równe pasy lewo/prawo (stary termin i nowy draft też), każdy od razu klikalny; koniec z rozwijanym „N grup” i hoverowaniem.

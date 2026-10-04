@@ -19,6 +19,14 @@
     return el ? el.textContent.replace(/\s+/g, ' ').trim() : null;
   }
 
+  // <local-time datetime="YYYY-MM-DD[ HH:MM:SS]"> renders client-side, so a
+  // fetched (never-upgraded) document has no text there — the datetime
+  // attribute is the source of truth. Normalized to DD.MM.YYYY for display.
+  function isoDatePl(dt) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dt || '');
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : null;
+  }
+
   // USOS duplicates tooltip text (round state, subject registration status,
   // attribute icons…) into a plain-text screen-reader-only element
   // referenced via aria-labelledby — reading that is simpler and safer than
@@ -507,12 +515,36 @@
 
     // Verified against real markup at
     // .../kontroler.php?_action=dla_stud/studia/zaliczenia/index
+    // Each stage section carries its own "Szczegóły" link with etpos_id
+    // (the key for the per-stage details page); each programme frame's
+    // div[slot=foot] carries the rozliczenie state + the auto-settlement
+    // hint. We only read the state — the actual "Zgłoś program do
+    // rozliczenia" POST (behind a confirm dialog) stays in classic USOS.
     getEtapy(doc = document) {
       const out = [];
       doc.querySelectorAll('usos-frame').forEach((frame) => {
         const titleEl = frame.querySelector('h2[slot="title"]');
         const programLabel = textOf(titleEl);
         if (!programLabel) return;
+        const foot = frame.querySelector('div[slot="foot"]');
+        // The tooltip embeds the auto-settlement date as <local-time>
+        // (no text in fetched docs), so rebuild from child nodes with the
+        // datetime attribute resolved to DD.MM.YYYY.
+        const tip = foot ? foot.querySelector('usos-tooltip') : null;
+        let podpowiedz = null;
+        if (tip) {
+          podpowiedz = [...tip.childNodes].map((n) => {
+            if (n.nodeType === 1 && n.tagName === 'LOCAL-TIME') return isoDatePl(n.getAttribute('datetime')) || '';
+            return n.textContent || '';
+          }).join('').replace(/\s+/g, ' ').trim() || null;
+        }
+        const rozliczenie = foot ? {
+          stan: (textOf(foot.querySelector('b')) || '').replace(/\s+/g, ' ').trim() || null,
+          // "Program zostanie zgłoszony do rozliczenia automatycznie
+          // <date>. Jeśli masz zaliczenia…" — kept as plain text hint.
+          podpowiedz,
+          doZgloszenia: /zgłoś program do rozliczenia/i.test(textOf(foot.querySelector('button')) || ''),
+        } : null;
         frame.querySelectorAll('usos-frame-section').forEach((section) => {
           const label = section.getAttribute('section-title') || '';
           const kv = {};
@@ -520,20 +552,116 @@
             const cells = row.querySelectorAll(':scope > div');
             if (cells.length >= 2) {
               const key = textOf(cells[0]).replace(/:$/, '');
-              kv[key] = textOf(cells[1]);
+              // Dates render via <local-time> (empty text in fetched docs).
+              const lt = cells[1].querySelector('local-time');
+              kv[key] = (lt && isoDatePl(lt.getAttribute('datetime'))) || textOf(cells[1]);
             }
           });
           const statusTag = section.querySelector('usos-tag');
+          const detailsLink = section.querySelector('a[href*="zaliczenia/pokazEtap"]');
+          const detailsHref = detailsLink ? (detailsLink.getAttribute('href') || '') : '';
+          const detailsMatch = detailsHref.match(/[?&]etpos_id=(\d+)/);
           out.push({
             programLabel,
             label,
             cycle: kv['Cykl realizacji'] || null,
             endDate: kv['Data zakończenia'] || null,
             status: textOf(statusTag),
+            detailsId: detailsMatch ? detailsMatch[1] : null,
+            rozliczenie,
           });
         });
       });
       return { supported: true, verified: true, etapy: out };
+    },
+
+    // "Szczegółowe informacje o zaliczeniu etapu"
+    // (.../zaliczenia/pokazEtap&etpos_id=N). Verified against real markup:
+    // context kv-list (Program/Etap/Cykl), one table.grey with the point
+    // totals + conditional/full requirements, ul.wymagania-przedmiotowe
+    // with per-subject status, and a kv-list Podsumowanie ("Do zaliczenia
+    // warunkowego/pełnego brakuje:" + "Status zaliczenia:"). Unknown rows
+    // are kept as plain text rather than dropped; missing sections yield
+    // null instead of failing the whole parse.
+    getEtapDetails(doc = document) {
+      const kvPairs = (root) => {
+        const kv = {};
+        if (!root) return kv;
+        root.querySelectorAll(':scope > div').forEach((row) => {
+          const cells = row.querySelectorAll(':scope > div');
+          if (cells.length >= 2) {
+            kv[(textOf(cells[0]) || '').replace(/:$/, '')] = textOf(cells[1]);
+          }
+        });
+        return kv;
+      };
+      const statusOf = (text) => {
+        const t = (text || '').toLowerCase();
+        if (/niespełnione/.test(t)) return 'niespełnione';
+        if (/spełnione/.test(t)) return 'spełnione';
+        return null;
+      };
+      const main = doc.querySelector('#layout-main-content') || doc;
+      const ctx = kvPairs(main.querySelector('.inline-keyvalue-list.context-list'));
+      const punkty = { zEtapu: null, zPoprzednich: null, razem: null, warunkowe: null, pelne: null };
+      const table = main.querySelector('table.grey');
+      if (table) {
+        [...table.rows].forEach((row, ri) => {
+          const cells = [...row.cells].map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim());
+          if (ri === 0 || cells.length < 2) return; // header ("P1 / Status")
+          const label = cells[0];
+          const value = cells[1] || null;
+          const status = cells.length > 2 ? statusOf(cells[2]) : null;
+          if (/^suma punktów z etapu/i.test(label)) punkty.zEtapu = value;
+          else if (/poprzednich/i.test(label)) punkty.zPoprzednich = value;
+          else if (/^razem/i.test(label)) punkty.razem = value;
+          else if (/warunkowego/i.test(label)) punkty.warunkowe = { wymagane: value, status };
+          else if (/pełnego/i.test(label)) punkty.pelne = { wymagane: value, status };
+        });
+      }
+      const wymagania = [];
+      main.querySelectorAll('ul.wymagania-przedmiotowe > li').forEach((li) => {
+        const text = (li.textContent || '').replace(/\s+/g, ' ').trim();
+        const codeMatch = text.match(/\[([^\]]+)\]/);
+        const nameEl = li.querySelector('a') || li.querySelector('span.font-medium');
+        const podMatch = text.match(/program \/ etap podpięcia:\s*(.*?)\s*(spełnione|niespełnione)?$/i);
+        wymagania.push({
+          nazwa: textOf(nameEl) || text.split('[')[0].trim() || null,
+          kod: codeMatch ? codeMatch[1] : null,
+          podpiecie: podMatch ? (podMatch[1].trim() || null) : null,
+          status: statusOf(text),
+        });
+      });
+      const podsumowanie = { brakujeWarunkowe: [], brakujePelne: [], status: null };
+      const dl = main.querySelector('kv-list dl');
+      if (dl) {
+        [...dl.children].forEach((child) => {
+          if (child.tagName === 'DT') {
+            const key = (child.textContent || '').replace(/\s+/g, ' ').trim();
+            const dd = child.nextElementSibling;
+            const items = dd
+              ? [...dd.querySelectorAll('li')].map((li) => (li.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+              : [];
+            if (/warunkowego/i.test(key)) podsumowanie.brakujeWarunkowe = items;
+            else if (/pełnego/i.test(key)) podsumowanie.brakujePelne = items;
+            else if (/status zaliczenia/i.test(key)) {
+              podsumowanie.status = items[0] || (dd ? (dd.textContent || '').replace(/\s+/g, ' ').trim() : null) || null;
+            }
+          }
+        });
+      }
+      const statusTag = main.querySelector('usos-tag');
+      if (!podsumowanie.status) podsumowanie.status = textOf(statusTag) || null;
+      return {
+        supported: true,
+        verified: true,
+        program: ctx['Program'] || null,
+        etap: ctx['Etap'] || null,
+        cykl: ctx['Cykl realizacji'] || null,
+        punkty,
+        wymagania,
+        podsumowanie,
+      };
     },
 
     // The rendered <usos-timetable> only builds its grid client-side inside
@@ -2160,6 +2288,7 @@
     matches() { return !hasModernShell() && looksLikeUsos(); },
     getUser() { return { name: null, album: null, faculty: null }; },
     getEtapy() { return { supported: false, verified: false, etapy: [] }; },
+    getEtapDetails() { return { supported: false, verified: false }; },
     getPlan() { return { supported: false, verified: false, raw: null }; },
     getMyGroups() { return { supported: false, verified: false, subjects: [] }; },
     getGroupDetails() { return { supported: false, verified: false }; },
