@@ -121,6 +121,7 @@ const MODULE_FILES = {
       'usos/leaflet-loader.js',
       'usos/qrcode-loader.js',
       'usos/planner-store.js',
+      'usos/shared-plans-store.js',
       'usos/adapters.js',
       'usos/scraping.js',
       'usos/generator.js',

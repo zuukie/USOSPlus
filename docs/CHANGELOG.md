@@ -1,5 +1,14 @@
 # Co nowego w USOS++
 
+## 0.9.12
+
+- **Budynek na mapie prosto z planu** — w szczegółach zajęć wiersz Budynek ma „Zobacz na mapie →" i otwiera mapkę kampusu ze znacznikiem (ten sam wzorzec co lista studentów); na dole jest skok do pełnej Mapy.
+- **Skróty z menu działają przy wyłączonym panelu** — kliknięcie Planu, Ocen czy Studencich włącza panel i prowadzi do widoku zamiast na Mój USOSweb (albo w ogóle nic nie robić); menu z góry mówi, że klik włączy panel.
+- **Eksport planu do kalendarza** — jeden przycisk „Eksportuj plan" z wyborem PNG, PDF i Kalendarz; Kalendarz pobiera cały semestr jako plik do Google, Apple i Outlooka (tylko tryb Dynamiczny, bo tylko on ma prawdziwe daty), z tytułami [W]/[C]/[L], salą, budynkiem i prowadzącym w każdym wpisie. Importuj do osobnego kalendarza — łatwo cofnąć.
+- **Progres semestru na Panelu** — nowa pierwsza karta z ringiem: ile godzin zajęć już za Tobą, a ile w całym semestrze (liczone po czasie, więc 3-godzinne lab waży więcej niż lektorat). Gdy części grup nie da się dociągnąć, wynik ma „≈" i dopisek o niepełnych danych.
+- **Kreska „teraz" w planie** — w trybie Dynamicznym, w bieżącym tygodniu, dzisiejsza kolumna ma czerwoną linię na aktualnej godzinie jak w normalnym kalendarzu; pełznie co minutę, a w nocy i poza osią godzin się chowa.
+- **Cudze plany pod Twoim planem** — w widoku Planu jest przełącznik „Czyj plan”: wklej link do udostępnionego planu (token spod share w USOS albo os_id, gdy osoba włączyła udostępnianie zalogowanym) i przeglądaj go w tej samej siatce, z nawigacją tygodni. Linki-tokeny żyją ok. 14 dni — gdy wygaśnie, plan sam o tym powie. W tej samej sekcji pokażesz też własny link do wysłania komuś (przycisk Kopiuj) i na żywo zobaczysz, czy masz włączone stałe udostępnianie dla zalogowanych.
+
 ## 0.9.11
 
 - **Klasyczny USOS też żyje** — widżety na stronach klasycznych pokazują uczciwy stan pusty zamiast znikać (średnia, plan, podsumowanie w Mój USOSweb — zaległości widać w podsumowaniu, osobny widżet na stronie Płatności wypadł jako zbędny), a w Mój USOSweb jest „Edytuj układ”: przestawianie okienek między kolumnami (mysz, strzałki), ukrywanie do duszków i pomarańczowa kreska pokazująca, gdzie karta wyląduje.

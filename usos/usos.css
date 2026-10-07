@@ -188,6 +188,19 @@
 .usospp-plan-week .usospp-tt-entry-label,
 .usospp-plan-week .usospp-tt-entry-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* "Now" line in the plan week grid (concrete scope, current week only):
+   the classic calendar red line + dot. Paints above the blocks (z-index)
+   but stays click-through so session clicks keep working. */
+.usospp-nowline {
+  position: absolute; left: 0; right: 0; height: 2px; margin-top: -1px;
+  background: oklch(58% 0.15 45); pointer-events: none; z-index: 3;
+}
+.usospp-nowline::before {
+  content: ''; position: absolute; left: -1px; top: -4px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: oklch(58% 0.15 45);
+}
+
 /* ---- schedule planner ---- */
 .usospp-planner-layout { display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start; }
 @media (max-width: 1000px) { .usospp-planner-layout { grid-template-columns: 1fr; } }
@@ -407,4 +420,6 @@
     border-left: 1px solid #d4d4d8;
     padding-left: 6px;
   }
+  /* The "now" line is a snapshot of a moment — it must not reach paper. */
+  body.usospp-print-plan .usospp-nowline { display: none !important; }
 }

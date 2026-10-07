@@ -164,6 +164,35 @@
     unitPrograms(kod) {
       return `kontroler.php?_action=katalog2/programy/szukajProgramu&method=by_faculty&jed_org_kod=${encodeURIComponent(kod)}`;
     },
+    // Somebody-else's shared timetable for one week (see
+    // adapter.getSharedPlan and usos/shared-plans-store.js). baseUrl is the
+    // stored canonical page URL (…pokazPlanZajecStudenta&token=… or
+    // &os_id=…); week switching is a plain GET with plan_week_sel_week
+    // (verified live 2026-10-06). Stale week params are stripped first so
+    // navigating back and forth can't stack them.
+    sharedPlanWeek(baseUrl, mondayIso) {
+      try {
+        const u = new URL(baseUrl, location.origin);
+        u.searchParams.delete('plan_week_sel_week');
+        if (/^\d{4}-\d{2}-\d{2}$/.test(mondayIso || '')) {
+          u.searchParams.set('plan_week_sel_week', mondayIso);
+        }
+        return u.toString();
+      } catch (e) {
+        return null;
+      }
+    },
+    // The user's own public plan link dialog (see adapter.getOwnPlanLink)
+    // — a read-only fragment, fetched only on explicit user request (see
+    // app.js's sharedOwnLinkShow).
+    ownPlanLink() {
+      return 'kontroler.php?_action=home/publicznyLinkDoPlanu';
+    },
+    // Plan-sharing preference page (see adapter.getPlanVisibility) —
+    // read-only GET, parsed for which radio is checked.
+    planPreferences() {
+      return 'kontroler.php?_action=home/preferencje/preferencjeUsosweb';
+    },
     // Four small "Moje studia" pages, all verified live against an empty
     // account (semester just started — no scholarship decisions, checkpoint
     // rules, petitions or open surveys yet): each one renders either a plain
@@ -598,6 +627,48 @@
     }
     return res;
   }
+  // One week of somebody-else's shared timetable (see adapter.getSharedPlan).
+  // Deliberately NOT cached: token links die after 14 days and os_id sharing
+  // can be revoked — a cached week would masquerade as live data. The panel
+  // keeps a short in-memory copy per viewed week instead (see app.js).
+    // The user's own public plan link (see adapter.getOwnPlanLink). Same
+  // no-persistence rule as fetchSharedPlan: the token URL is an access
+  // credential, so it lives in panel memory only, never in any cache.
+  async function fetchOwnPlanLink(adapter) {
+    const miss = { supported: false, verified: false, url: null };
+    if (!adapter || typeof adapter.getOwnPlanLink !== 'function') return miss;
+    const doc = await fetchDoc(PATHS.ownPlanLink());
+    if (!doc) return miss;
+    try {
+      return adapter.getOwnPlanLink(doc);
+    } catch (e) {
+      return miss;
+    }
+  }
+  // Which plan-sharing mode is on (see adapter.getPlanVisibility).
+  // Read-only like everything else here — the toggle itself stays a
+  // manual click in classic USOS.
+  async function fetchPlanVisibility(adapter) {
+    const miss = { supported: false, verified: false, mode: null };
+    if (!adapter || typeof adapter.getPlanVisibility !== 'function') return miss;
+    const doc = await fetchDoc(PATHS.planPreferences());
+    if (!doc) return miss;
+    try {
+      return adapter.getPlanVisibility(doc);
+    } catch (e) {
+      return miss;
+    }
+  }
+  async function fetchSharedPlan(adapter, url, mondayIso) {    const miss = { supported: false, verified: false, notShared: false, ownerName: null, sessions: [] };
+    if (!url || !adapter || typeof adapter.getSharedPlan !== 'function') return miss;
+    const doc = await fetchDoc(url);
+    if (!doc) return miss;
+    try {
+      return adapter.getSharedPlan(doc, mondayIso);
+    } catch (e) {
+      return miss;
+    }
+  }
   async function fetchExamsResult(adapter, data) {
     if (!data || data.examsResultLoaded) return data ? data.examsResult : null;
     try {
@@ -763,5 +834,5 @@
     data.mlegitymacjaResultLoaded = true;
     return result;
   }
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchEtapDetailsResult, fetchStageSubjectsResult, fetchMlegitymacjaResult };
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchSharedPlan, fetchOwnPlanLink, fetchPlanVisibility, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchEtapDetailsResult, fetchStageSubjectsResult, fetchMlegitymacjaResult };
 })();

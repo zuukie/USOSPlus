@@ -339,6 +339,123 @@
     return Number.isFinite(z) && z > 0 ? z : 1;
   }
 
+  // ---- plan → calendar (.ics) export ----
+  // Pure builders (no DOM — safe in tests); the Blob download lives on the
+  // App next to exportPlanPdf/exportPlanPng. Times are floating local (no
+  // TZID): without a timezone database that's the only honest option —
+  // Google/Apple/Outlook read them in the calendar's own zone.
+
+  // RFC 5545 TEXT escaping: backslash, semicolon, comma and newlines.
+  function icsEscape(value) {
+    return String(value == null ? '' : value)
+      .replace(/\r\n|\r/g, '\n')
+      .replace(/\\/g, '\\\\')
+      .replace(/;/g, '\\;')
+      .replace(/,/g, '\\,')
+      .replace(/\n/g, '\\n');
+  }
+
+  // RFC 5545 line folding: at most 75 octets per line, continuation lines
+  // starting with a single space (which leaves 74 for content). Byte-aware,
+  // not char-aware — Polish diacritics are multibyte in UTF-8 and must
+  // never be split mid-character.
+  function icsFold(line) {
+    if (line.length <= 75 && /^[\x00-\x7F]*$/.test(line)) return line;
+    let out = '';
+    let cur = '';
+    let curBytes = 0;
+    let budget = 75;
+    const flush = () => { out += cur + '\r\n '; cur = ''; curBytes = 0; budget = 74; };
+    for (let i = 0; i < line.length;) {
+      const c = line.charCodeAt(i);
+      let ch = line[i];
+      let len = c < 0x80 ? 1 : (c < 0x800 ? 2 : 3);
+      let next = i + 1;
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < line.length) {
+        const lo = line.charCodeAt(i + 1);
+        if (lo >= 0xdc00 && lo <= 0xdfff) { ch = line.slice(i, i + 2); len = 4; next = i + 2; }
+      }
+      if (curBytes + len > budget) flush();
+      cur += ch;
+      curBytes += len;
+      i = next;
+    }
+    return out + cur;
+  }
+
+  // "2026-10-05" + "15:15" → "20261005T151500" (floating local). null for
+  // anything that doesn't look like a real date/time — the caller skips
+  // such sessions instead of emitting broken VEVENTs.
+  function icsDateTime(dateIso, hhmm) {
+    const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateIso || '');
+    const tm = /^(\d{1,2}):(\d{2})$/.exec(hhmm || '');
+    if (!dm || !tm) return null;
+    const hh = String(tm[1]).padStart(2, '0');
+    if (Number(hh) > 23 || Number(tm[2]) > 59) return null;
+    return `${dm[1]}${dm[2]}${dm[3]}T${hh}${tm[2]}00`;
+  }
+
+  function icsStamp(date) {
+    const d = date instanceof Date ? date : new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}T${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
+  }
+
+  // Whole VCALENDAR from concrete sessions (real dates). opts: { dtstamp,
+  // calName, domain }. Returns { ics, count } — count is the VEVENTs
+  // actually emitted. UIDs are a stable hash of detailsUrl|date|start|end
+  // (+ a per-file index against intra-file collisions), so re-importing an
+  // unchanged plan doesn't duplicate events. Each event carries the
+  // subject's own color (same golden-angle hue as the plan grid and the PNG
+  // export) via the RFC 7986 COLOR property — honored by some calendars,
+  // ignored by others, never harmful.
+  function buildPlanIcs(sessions, opts) {
+    const o = opts || {};
+    const list = Array.isArray(sessions) ? sessions : [];
+    const stamp = o.dtstamp || icsStamp(new Date());
+    const domain = String(o.domain || 'usospp').replace(/\s+/g, '') || 'usospp';
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//USOS++//Plan//PL',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+    ];
+    if (o.calName) lines.push(`X-WR-CALNAME:${o.calName}`);
+    let n = 0;
+    list.forEach((s) => {
+      if (!s) return;
+      const start = icsDateTime(s.date, s.start);
+      const end = icsDateTime(s.date, s.end);
+      if (!start || !end || end <= start) return;
+      // "[W] Programowanie obiektowe" — the same short type codes the plan
+      // grid uses (see shortClassType), so the calendar reads like USOS++.
+      const tag = s.type ? `[${shortClassType(s.type)}] ` : '';
+      const title = `${tag}${s.subject || 'Zajęcia'}`;
+      const locBits = [];
+      if (s.room) locBits.push(s.room + (s.building ? ` (${s.building})` : ''));
+      else if (s.building) locBits.push(s.building);
+      const hue = Math.round(planExportHue(hashStr(s.code || s.subject || '')) * 10) / 10;
+      const uidBase = [s.detailsUrl || '', s.date, s.start, s.end, s.subject || '', s.type || ''].join('|');
+      const uid = `usospp-${(hashStr(uidBase) >>> 0).toString(16)}-${n}@${domain}`;
+      n++;
+      lines.push(
+        'BEGIN:VEVENT',
+        `UID:${uid}`,
+        `DTSTAMP:${stamp}`,
+        `DTSTART:${start}`,
+        `DTEND:${end}`,
+        `COLOR:hsl(${hue},65%,45%)`,
+        `SUMMARY:${icsEscape(title)}`,
+      );
+      if (locBits.length) lines.push(`LOCATION:${icsEscape(locBits.join(' · '))}`);
+      if (s.teacher) lines.push(`DESCRIPTION:${icsEscape(s.teacher)}`);
+      lines.push('END:VEVENT');
+    });
+    lines.push('END:VCALENDAR');
+    return { ics: lines.map(icsFold).join('\r\n') + '\r\n', count: n };
+  }
+
   // Panel lookahead: how far ahead the "next sessions" box searches for
   // the nearest upcoming session when the current week has nothing left.
   const PANEL_LOOKAHEAD_DAYS = 21;
@@ -361,6 +478,13 @@
     return `${verb} za ${days} ${days === 1 ? 'dzień' : 'dni'}`;
   }
 
+  // Minutes → "12,3 h" / "40 h": one decimal (Polish comma) under 10 h
+  // where rounding would hide everything, whole hours above.
+  function fmtHoursPl(min) {
+    const h = (Number(min) || 0) / 60;
+    return (h < 10 ? h.toFixed(1).replace('.', ',') : String(Math.round(h))) + ' h';
+  }
+
   // Minute ticker for panel countdowns. Updates only the [data-countdown]
   // spans in place — never a full re-render (which would replay the page
   // fade-in). Started lazily on first panel render; no-ops when the box
@@ -377,6 +501,18 @@
         const target = Number(el.getAttribute('data-target') || 0);
         if (!target) return;
         el.textContent = formatCountdownPl(target, now, el.getAttribute('data-mode') || 'start');
+      });
+      // The plan's "now" line creeps with the same 60 s cadence: geometry
+      // rides along in data attributes, so no re-render is needed. Off
+      // after the axis ends (or before it starts) the line hides itself.
+      document.querySelectorAll('[data-nowline]').forEach((el) => {
+        const hourStart = Number(el.getAttribute('data-hour-start') || 7);
+        const totalH = Number(el.getAttribute('data-total-height') || 0);
+        const d = new Date(now);
+        const top = d.getHours() * 60 + d.getMinutes() - hourStart * 60;
+        if (top < 0 || top > totalH) { el.style.display = 'none'; return; }
+        el.style.display = '';
+        el.style.top = `${top}px`;
       });
     }, 60000);
   }
@@ -494,13 +630,6 @@
     // stay in classic USOS by project policy) — same low-traffic shelf
     // as the other "Moje studia" pages above, not a top-level slot.
     { id: 'mlegitymacja', label: 'mLegitymacja', icon: 'idcard' },
-    // USOSmail's own UI is 100% client-rendered against an internal,
-    // CSRF-walled endpoint whose own error message says not to use it as an
-    // API — and every USOSweb page sends X-Frame-Options: deny, so it can't
-    // even be embedded in an iframe. No legitimate way to show it in our own
-    // UI, so this is a pure link-out (see renderSidebar) rather than a real
-    // nav view: it never becomes the active view and isn't in VALID_VIEWS.
-    { id: 'wiadomosci', label: 'Wiadomości', icon: 'mail', external: 'kontroler.php?_action=home/usos_mail/nowaWiadomosc&usospp_off=1' },
   ];
 
   // Temporarily hidden from the sidebar (the views aren't reliable yet) —
@@ -549,8 +678,8 @@
   // section a *different* tab last looked at (chrome.storage would do that).
   const VIEW_STORAGE_KEY = 'usospp_lastView';
   const VALID_VIEWS = new Set([
-    ...NAV_ITEMS.filter((item) => !item.external).map((item) => item.id),
-    ...MORE_NAV_ITEMS.filter((item) => !item.external).map((item) => item.id),
+    ...NAV_ITEMS.map((item) => item.id),
+    ...MORE_NAV_ITEMS.map((item) => item.id),
     'przedmiotyLista', 'zapisy', 'zapisTura', 'zapisGrupy', 'planer', 'ustawienia', 'subjectPage', 'catalogPage',
   ]);
 
@@ -600,7 +729,6 @@
     ring: '<circle cx="10" cy="10" r="7.2" stroke-opacity="0.35"></circle><path d="M10 2.8a7.2 7.2 0 0 1 5.1 12.3"></path>',
     bell: '<path d="M5 8.2a5 5 0 0 1 10 0c0 3.6 1.3 4.8 1.3 4.8H3.7S5 11.8 5 8.2z"></path><path d="M8.2 15.6a1.9 1.9 0 0 0 3.6 0"></path>',
     card: '<rect x="2" y="4.5" width="16" height="11" rx="2"></rect><line x1="2" y1="8" x2="18" y2="8"></line><line x1="5" y1="12.5" x2="9" y2="12.5"></line>',
-    mail: '<rect x="2" y="4" width="16" height="12" rx="2"></rect><path d="M3 5.5l7 5.5 7-5.5"></path>',
     settings: '<line x1="3" y1="5" x2="17" y2="5"></line><circle cx="12" cy="5" r="1.8" fill="var(--bg-page)"></circle><line x1="3" y1="10" x2="17" y2="10"></line><circle cx="7" cy="10" r="1.8" fill="var(--bg-page)"></circle><line x1="3" y1="15" x2="17" y2="15"></line><circle cx="14" cy="15" r="1.8" fill="var(--bg-page)"></circle>',
     close: '<line x1="5" y1="5" x2="15" y2="15"></line><line x1="15" y1="5" x2="5" y2="15"></line>',
     coins: '<circle cx="7.5" cy="8" r="4.3"></circle><circle cx="12.5" cy="12" r="4.3"></circle>',
@@ -928,6 +1056,14 @@
         planDetailsLoading: false,
         planSessionModal: null, // weeklyPlan session object or null
         planGroupList: null, // session snapshot for the group roster modal or null
+        planBuildingMap: null, // session snapshot for the building map modal or null
+        planExportOpen: false, // export picker popup over the plan view
+        sharedPlans: { plans: [], activeId: 'self' }, // somebody-else's timetables (see shared-plans-store.js)
+        sharedPlansReady: false, // persisted list loaded from storage
+        sharedPlanAddOpen: false, // "Dodaj plan" modal over the plan view
+        sharedPlanAddError: null, // validation error in the add modal
+        sharedOwnLink: null, // own public plan link {status, url} — memory only, never stored
+        sharedVisibility: null, // plan-sharing mode {status, mode} — read-only display, memory only
         studenciQuery: '',
         studenciExcluded: [], // subject names excluded from Studenci matching
         studenciHideLectures: false, // hide Wykład groups from Studenci matching
@@ -1173,6 +1309,7 @@
     destroy() {
       if (this._leafletMap) { this._leafletMap.remove(); this._leafletMap = null; }
       if (this._unitMap) { this._unitMap.remove(); this._unitMap = null; this._unitMapMarkersByKod = null; }
+      if (this._sessionMap) { this._sessionMap.remove(); this._sessionMap = null; }
       this.root.removeEventListener('click', this._onClick);
       this.root.removeEventListener('change', this._onChange);
       this.root.removeEventListener('input', this._onInput);
@@ -1499,16 +1636,20 @@
       const el = this.root.querySelector('[data-modal-root]');
       if (!el) { this.render(); return; }
       el.innerHTML = this.renderModals();
+      // The building map modal may carry an inline Leaflet preview
+      // ([data-session-map]) — mount it after every modal-root patch, same
+      // as render() does after a full rebuild.
+      this.mountSessionMapPreview();
     }
 
     // At most one of these is ever open at once, but data-modal-root holds
     // whichever it is — each renderer returns '' when it isn't the open one.
     renderModals() {
-      return this.renderPaymentDetailsModal() + this.renderGroupsModal() + this.renderLinksModal() + this.renderPlanSessionModal() + this.renderPlanGroupListModal();
+      return this.renderPaymentDetailsModal() + this.renderGroupsModal() + this.renderLinksModal() + this.renderPlanSessionModal() + this.renderPlanGroupListModal() + this.renderPlanBuildingMapModal() + this.renderPlanExportModal() + this.renderSharedPlanAddModal();
     }
 
     closeAnyModal() {
-      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false, planSessionModal: null, planGroupList: null });
+      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false, planSessionModal: null, planGroupList: null, planBuildingMap: null, planExportOpen: false, sharedPlanAddOpen: false });
     }
 
     // The search dropdown patches on every keystroke (after a debounce) —
@@ -1824,24 +1965,84 @@
         case 'planScopeGeneric':
           this.setState({ planScope: 'generic' });
           break;
+        case 'sharedPlanSelect': {
+          const id = (el.dataset.id || 'self').trim() || 'self';
+          // The re-render persistSharedPlans does kicks ensureSharedPlanWeek
+          // from renderPlan when a foreign plan becomes active.
+          this.persistSharedPlans((d) => ({ ...d, activeId: id }));
+          break;
+        }
+        case 'sharedPlanAddOpen':
+          this.setModalState({ sharedPlanAddOpen: true, sharedPlanAddError: null });
+          break;
+        case 'sharedPlanAddClose':
+          this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+          break;
+        case 'sharedPlanAddCloseBackdrop':
+          // Only the modal goes away — the plan view stays behind.
+          if (e.target === el) this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+          break;
+        case 'sharedPlanAddSubmit':
+          this.submitSharedPlanAdd();
+          break;
+        case 'sharedPlanRemove': {
+          const id = (el.dataset.id || '').trim();
+          if (id) {
+            this.persistSharedPlans((d) => ({
+              plans: (d.plans || []).filter((p) => p && p.id !== id),
+              activeId: d.activeId === id ? 'self' : d.activeId,
+            }));
+          }
+          break;
+        }
+        case 'sharedPlanRetry': {
+          // Drop the cached week (ready or not) — the re-render refetches it.
+          const plan = this.activeSharedPlan;
+          if (plan) {
+            if (!this._sharedCache) this._sharedCache = {};
+            delete this._sharedCache[this.sharedWeekKey(plan, this.state.planWeekOffset)];
+          }
+          this.render();
+          break;
+        }
+        case 'sharedOwnLinkShow':
+          this.showSharedOwnLink();
+          break;
         case 'planExportPdf':
+          // From the export picker: the modal must be gone from the DOM
+          // before window.print() — the print stylesheet isolates the plan
+          // card, and an open modal would print as garbage. setModalState
+          // patches the DOM synchronously, so close-then-export in one
+          // handler is enough.
+          this.setModalState({ planExportOpen: false });
           this.exportPlanPdf();
           break;
         case 'planExportPng':
+          this.setModalState({ planExportOpen: false });
           this.exportPlanPng();
+          break;
+        case 'planExportIcs':
+          this.setModalState({ planExportOpen: false });
+          this.exportPlanIcs();
+          break;
+        case 'openPlanExport':
+          this.setModalState({ planExportOpen: true });
+          break;
+        case 'closePlanExport':
+          this.setModalState({ planExportOpen: false });
           break;
         case 'planSessionDetails': {
           const idx = parseInt(el.dataset.idx || '-1', 10);
           const sess = this.planVisibleSessions()[idx];
           if (sess) {
             this.setModalState({ planSessionModal: sess });
-            // Eager roster: the "Studenci" row fills in on its own instead
-            // of waiting for "Zobacz listę" — patched in place (just the
-            // cell, no modal rebuild), with a full modal repaint only as
-            // a fallback when the details are gone by landing time.
-            this.ensureParticipantsResult(() => {
-              if (!this.patchPlanRosterCell()) this.setModalState({});
-            });
+            // Foreign sessions have no own-group roster behind them (and
+            // must never match one by subject+type+nr) — details only.
+            if (!sess.foreign) {
+              this.ensureParticipantsResult(() => {
+                if (!this.patchPlanRosterCell()) this.setModalState({});
+              });
+            }
           }
           break;
         }
@@ -1896,6 +2097,34 @@
           break;
         case 'openMapaFocused':
           this.openMapaFocused(el.dataset.kod);
+          break;
+        case 'planSessionOpenMapa': {
+          // Escape hatch from the building map modal: both modals must
+          // close first — openMapaFocused's navigate() keeps modal state,
+          // which would otherwise leave the stack over the Mapa view.
+          const kod = el.dataset.kod || '';
+          this.setModalState({ planSessionModal: null, planGroupList: null, planBuildingMap: null });
+          if (kod) this.openMapaFocused(kod);
+          break;
+        }
+        case 'openPlanBuildingMap': {
+          if (this.state.planSessionModal) {
+            this.setModalState({ planBuildingMap: this.state.planSessionModal });
+            // Warm the campus list on demand (same lazy idea as the roster
+            // behind "Zobacz listę") — repaints just the modal when it lands.
+            this.ensureSessionMapaData();
+          }
+          break;
+        }
+        case 'closePlanBuildingMap':
+          this.setModalState({ planBuildingMap: null });
+          break;
+        case 'closePlanBuildingMapBackdrop':
+          // Only the map goes away — the session details stay open behind.
+          if (e.target === el) this.setModalState({ planBuildingMap: null });
+          break;
+        case 'planSessionMapRetry':
+          this.retrySessionMapa();
           break;
         case 'mapaSetFilter':
           this.setMapaFilter(el.dataset.unit || '');
@@ -2318,11 +2547,175 @@
               <tr><td>Termin</td><td><strong>${esc(this.planDayName(s.day))} ${esc(s.start)}–${esc(s.end)}</strong> · ${esc(when)}</td></tr>
               <tr><td>Zajęcia</td><td>${esc(s.type || '—')}${s.nr ? `, grupa ${esc(String(s.nr))}` : ''}${s.code ? ` <span class="usospp-muted-text">[${esc(s.code)}]</span>` : ''}</td></tr>
               <tr><td>Sala</td><td>${roomLine ? esc(roomLine) : '—'}</td></tr>
-              ${s.building ? `<tr><td>Budynek</td><td>${esc(s.building)}</td></tr>` : ''}
+              ${s.building ? `<tr><td>Budynek</td><td>${esc(s.building)} <a data-action="openPlanBuildingMap" style="font-weight:600;cursor:pointer;">Zobacz na mapie →</a></td></tr>` : ''}
               <tr><td>Prowadzący</td><td>${s.teacher ? esc(s.teacher) : '<span class="usospp-muted-text">brak danych w USOS</span>'}</td></tr>
               ${this.planSessionRosterRow(s)}
             </tbody></table>
             ${groupUrl ? `<div style="margin-top:12px;"><button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(groupUrl)}">Otwórz grupę w USOS →</button></div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // Matches a plan session's building string (e.g. "Gmach - Nowy
+    // Elektryczny [D-1]") against the campus building list. Primary key is
+    // the bracketed code via buildingCode() compared case-insensitively to
+    // bud_kod; fallback is a name-contains match for strings without a
+    // bracket. Returns {kod, building} (building null when the kod is known
+    // but not on the mappable list) or null when there is nothing to match.
+    sessionBuildingMatch(s) {
+      if (!s || !s.building) return null;
+      const norm = (v) => String(v || '').trim().toLowerCase();
+      const list = Array.isArray(this.state.mapaBuildings) ? this.state.mapaBuildings : [];
+      const rawKod = buildingCode(s.building);
+      if (rawKod) {
+        const hit = list.find((b) => b && b.kod && norm(b.kod) === norm(rawKod));
+        if (hit) return { kod: hit.kod, building: hit };
+        return { kod: rawKod, building: null };
+      }
+      const base = String(s.building).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (!base) return null;
+      const hit = list.find((b) => b && b.name && (base.includes(b.name.toLowerCase()) || b.name.toLowerCase().includes(base)));
+      if (hit) return { kod: hit.kod, building: hit };
+      return null;
+    }
+
+    // Separate "building on map" modal, opened from the session modal's
+    // Budynek row ("Zobacz na mapie →") — the same two-modal pattern as
+    // the Studenci roster (row + "Zobacz listę →" opens the planGroupList
+    // modal behind which the session details stay open).
+    renderPlanBuildingMapModal() {
+      const s = this.state.planBuildingMap;
+      if (!s) return '';
+      const match = this.sessionBuildingMatch(s);
+      const kod = match && match.kod;
+      let body;
+      if (this.state.mapaError) {
+        body = `
+          <div class="usospp-empty-hint">Nie udało się wczytać mapy budynków.</div>
+          <div style="margin-top:10px;"><a data-action="planSessionMapRetry" style="text-decoration:underline;cursor:pointer;font-size:13px;">Spróbuj ponownie</a></div>`;
+      } else if (!this.state.mapaBuildings.length) {
+        body = `
+          <div class="usospp-empty-hint">Wczytywanie mapy…</div>
+          <div class="usospp-map-container" data-session-map style="height:320px;border-radius:12px;overflow:hidden;margin-top:12px;"></div>`;
+      } else if (!match || !match.building) {
+        body = `<div class="usospp-empty-hint">Tego budynku nie ma na mapie kampusu.</div>`;
+      } else {
+        body = `<div class="usospp-map-container" data-session-map style="height:320px;border-radius:12px;overflow:hidden;"></div>`;
+      }
+      const title = s.building ? `Budynek — ${s.building}` : 'Budynek na mapie';
+      return `
+        <div class="usospp-modal-backdrop" data-action="closePlanBuildingMapBackdrop">
+          <div class="usospp-modal">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">${esc(title)}</div>
+              <button class="usospp-icon-btn" data-action="closePlanBuildingMap" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            ${body}
+            ${kod ? `<div style="margin-top:12px;"><a data-action="planSessionOpenMapa" data-kod="${esc(kod)}" style="font-size:12px;font-weight:600;color:#d9773a;cursor:pointer;">Zobacz na pełnej mapie →</a></div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // Mounts the single-marker preview rendered by
+    // renderPlanBuildingMapModal. Same teardown-before-remount discipline
+    // as mountMapaIfNeeded/mountUnitMapPreview: render() replaces the modal
+    // DOM on every call, so a previous instance would be stranded on a
+    // detached node. Called from render(), setModalState() and destroy().
+    mountSessionMapPreview() {
+      if (this._sessionMap) { this._sessionMap.remove(); this._sessionMap = null; }
+      const s = this.state.planBuildingMap;
+      if (!s) return;
+      const container = this.root.querySelector('[data-session-map]');
+      if (!container) return;
+      const match = this.sessionBuildingMatch(s);
+      if (!match || !match.building) return;
+      if (!window.L) {
+        const loader = window.USOSPP_LEAFLET;
+        if (loader && !this._leafletLoading) {
+          this._leafletLoading = true;
+          loader.ensureLeaflet().then(() => {
+            this._leafletLoading = false;
+            this.mountSessionMapPreview();
+          }).catch(() => { this._leafletLoading = false; });
+        }
+        return;
+      }
+      const b = match.building;
+      const map = window.L.map(container, { center: [b.lat, b.lng], zoom: 17, scrollWheelZoom: false });
+      window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      }).addTo(map);
+      const marker = window.L.marker([b.lat, b.lng], { icon: this.mapaMarkerIcon() })
+        .bindPopup(`<b>${esc(b.name)}</b>${b.address ? `<br>${esc(b.address)}` : ''}`);
+      marker.addTo(map).openPopup();
+      try { map.invalidateSize(); } catch (e) { /* cosmetic only */ }
+      this._sessionMap = map;
+    }
+
+    // Warms the campus building list when the building map modal opens
+    // (idempotent via ensureMapaData + cache) and repaints just the
+    // modal root when the data lands, so the preview appears without a full
+    // render. Fire-and-forget from the openPlanBuildingMap action.
+    async ensureSessionMapaData() {
+      if (this.state.mapaBuildings.length) {
+        if (this.state.planBuildingMap) this.setModalState({});
+        return;
+      }
+      if (this.state.mapaLoading || this.state.mapaError) return;
+      await this.ensureMapaData();
+      if (this.state.planBuildingMap) this.setModalState({});
+    }
+
+    // Modal-scoped retry: same cache-busting fetch as mapaRefresh, but
+    // repaints only the modal root (a full render() would be fine too, yet
+    // the modal-scoped patch avoids replaying the view fade underneath).
+    async retrySessionMapa() {
+      const cacheKey = 'usospp:campusBuildings:' + location.origin;
+      try { await chrome.storage.local.remove(cacheKey); } catch (e) { /* ignore */ }
+      this.state.mapaBuildings = [];
+      this.state.mapaLoading = true;
+      this.state.mapaError = false;
+      this.setModalState({});
+      await this.fetchMapaData(cacheKey);
+      if (this.state.planBuildingMap) this.setModalState({});
+    }
+
+    // Export picker popup over the plan view: one "Eksportuj plan" button
+    // opens this short wide modal with the three formats side by side,
+    // instead of three competing buttons in the toolbar. PNG/PDF export
+    // what's on screen; Kalendarz exports the whole semester as .ics
+    // (concrete scope only — the generic template has no real dates).
+    // Tiles reuse the existing planExport* actions, which close this modal
+    // first (see their cases — PDF must print without a modal in the DOM).
+    renderPlanExportModal() {
+      if (!this.state.planExportOpen) return '';
+      const scope = this.state.planScope === 'generic' ? 'generic' : 'concrete';
+      const loading = !!this.state.planDetailsLoading;
+      const calDisabled = scope === 'generic' || loading;
+      const calTitle = scope === 'generic'
+        ? 'Eksport kalendarza wymaga trybu Dynamicznego (prawdziwe daty)'
+        : loading ? 'Dociąganie sal i prowadzących…' : 'Pobierz cały semestr jako plik do kalendarza';
+      const tile = (action, title, desc, tip, disabled) => `
+        <button class="usospp-btn-ghost" data-action="${action}" title="${tip}" ${disabled ? 'disabled style="opacity:.4;"' : ''} style="display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:14px;text-align:left;flex:1;min-width:0;">
+          <span style="font-weight:700;font-size:14px;">${title}</span>
+          <span class="usospp-muted-text" style="font-size:12px;font-weight:400;">${desc}</span>
+        </button>`;
+      return `
+        <div class="usospp-modal-backdrop" data-action="closeModalBackdrop">
+          <div class="usospp-modal usospp-modal-wide">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">Eksportuj plan</div>
+              <button class="usospp-icon-btn" data-action="closePlanExport" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            <div style="display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;">
+              ${tile('planExportPng', 'PNG', 'Obraz tego, co widać — do wysłania i wydruku', 'Pobierz obraz planu (PNG)')}
+              ${tile('planExportPdf', 'PDF', 'Dokument na jedną stronę A4', 'Drukuj / zapisz jako PDF')}
+              ${tile('planExportIcs', 'Kalendarz', 'Plik do kalendarza (Google, Apple, Outlook) — cały semestr', calTitle, calDisabled)}
+            </div>
+            <div class="usospp-muted-text" style="font-size:12px;margin-top:12px;">Kalendarz importuj do <strong>osobnego kalendarza</strong> — łatwo cofnąć.</div>
           </div>
         </div>
       `;
@@ -2380,6 +2773,10 @@
     }
 
     planSessionRosterRow(s) {
+      // No roster for somebody-else's sessions: there is no own-group list
+      // behind them, and the subject+type+nr fallback in planSessionRoster
+      // could match one of MY groups with a misleading student list.
+      if (s && s.foreign) return '';
       return `<tr><td>Studenci</td><td data-plan-roster-cell>${this.planSessionRosterCellHtml(s)}</td></tr>`;
     }
     planSessionRosterCellHtml(s) {
@@ -5377,6 +5774,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       this.updateDocumentTitle();
       this.mountMapaIfNeeded();
       this.mountUnitMapPreview();
+      this.mountSessionMapPreview();
       this.drawMlegQrIfNeeded();
     }
 
@@ -5405,19 +5803,13 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       // Logged out, only PUBLIC_VIEWS render real content — everything else
       // lands on the login prompt (renderView's gate). The click behavior
       // stays exactly the same, but locked rows get a lock icon + dimmed
-      // style so it's obvious upfront which sections need a login. External
-      // link-outs (Wiadomości) have no view id in PUBLIC_VIEWS, so they read
-      // as locked too.
+      // style so it's obvious upfront which sections need a login.
       const loggedOut = !!this.data.loggedOut;
       const renderNavItem = (item, sub) => {
         const locked = loggedOut && !PUBLIC_VIEWS.has(item.id);
         const lockedClass = locked ? ' usospp-nav-item-locked' : '';
         const lockedTitle = locked ? ' title="Wymaga zalogowania"' : '';
-        return item.external ? `
-        <div class="usospp-nav-item${sub ? ' sub' : ''}${lockedClass}" data-action="openUsos" data-url="${esc(location.origin)}/${item.external}" title="${locked ? 'Wymaga zalogowania — ' : ''}Otwiera klasyczny USOS w nowej karcie">
-          ${icon(locked ? 'lock' : item.icon)}<span>${esc(item.label)}</span>
-        </div>
-      ` : `
+        return `
         <div class="usospp-nav-item${sub ? ' sub' : ''}${this.isNavActive(item.id) ? ' active' : ''}${lockedClass}" data-action="nav" data-view="${item.id}"${lockedTitle}>
           ${icon(locked ? 'lock' : item.icon)}<span>${esc(item.label)}</span>
           ${this.navItemDot(item.id) ? '<span class="usospp-nav-dot"></span>' : ''}
@@ -5805,6 +6197,25 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       });
     }
 
+    // Position of the Google-style "now" line in the week grid, or null
+    // when it must not render: generic scope (a recurring template has no
+    // real dates), a non-current week offset, today not among the
+    // displayed day columns (an empty weekend renders no column), or now
+    // outside the hour axis. top is px from the day-body top — rowH is 60
+    // px/hour, so 1 px = 1 minute. nowMs is a test seam (defaults to now).
+    planNowline(layout, scope, nowMs = Date.now()) {
+      if (scope === 'generic') return null;
+      if (Number(this.state.planWeekOffset || 0) !== 0) return null;
+      if (!layout || !Array.isArray(layout.days)) return null;
+      const d = new Date(nowMs);
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const today = this.planWeekDates(0).find((r) => r.iso === iso);
+      if (!today || !layout.days.some((c) => c.day === today.day)) return null;
+      const top = d.getHours() * 60 + d.getMinutes() - layout.hourStart * 60;
+      if (top < 0 || top > layout.totalHeight) return null;
+      return { day: today.day, top };
+    }
+
     // Concrete week sessions: group meetings (see getGroupDetails) whose
     // date falls into the given week offset. Room/teacher come from the
     // concrete meeting itself (a meeting can move rooms), falling back to
@@ -6016,7 +6427,103 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // Sessions actually on screen right now (concrete week or generic
     // template) — the plan modal indexes into this via data-idx.
     planVisibleSessions() {
+      // A foreign plan replaces the own-plan source for THIS view only —
+      // dashboard summaries, semester progress and exports keep reading
+      // the own-plan getters directly, so they never see somebody else.
+      if (this.activeSharedPlan) return this.sharedWeekSessions;
       return this.state.planScope === 'generic' ? this.weeklyPlan : this.concreteWeekSessions;
+    }
+
+    // Somebody-else's timetables (see usos/shared-plans-store.js): the
+    // persisted list loads once, fire-and-forget, re-rendering only when
+    // the plan view is the one asking. Week data itself is never persisted
+    // (token links die after 14 days — a stored week would masquerade as
+    // live); it lives in _sharedCache keyed `${planId}|${weekOffset}`.
+    async loadSharedPlans() {
+      if (this.state.sharedPlansReady) return;
+      const store = window.USOSPP_SHARED_PLANS;
+      if (store) {
+        try {
+          const data = await store.getData();
+          this.state.sharedPlans = {
+            plans: Array.isArray(data.plans) ? data.plans : [],
+            activeId: data.activeId || 'self',
+          };
+        } catch (e) { /* keep defaults */ }
+      }
+      this.state.sharedPlansReady = true;
+      if (this.state.view === 'plan') this.render();
+    }
+
+    get activeSharedPlan() {
+      const sp = this.state.sharedPlans || {};
+      if (!sp || sp.activeId === 'self') return null;
+      return (sp.plans || []).find((p) => p && p.id === sp.activeId) || null;
+    }
+
+    sharedPlanDisplayName(plan) {
+      if (!plan) return 'Mój plan';
+      return plan.nickname || plan.ownerName || 'Cudzy plan';
+    }
+
+    sharedWeekKey(plan, offset) {
+      return `${plan.id}|${Number(offset || 0)}`;
+    }
+
+    sharedWeekState() {
+      const plan = this.activeSharedPlan;
+      if (!plan) return null;
+      const cache = this._sharedCache || {};
+      return cache[this.sharedWeekKey(plan, this.state.planWeekOffset)] || null;
+    }
+
+    get sharedWeekSessions() {
+      const hit = this.sharedWeekState();
+      return hit && hit.status === 'ready' ? hit.sessions : [];
+    }
+
+    // Kicks off the fetch for the active foreign week (once per plan+week)
+    // and re-renders when it lands, if the plan view is still showing.
+    // Called from renderPlan — the render itself reads sharedWeekState()
+    // synchronously, so the first paint is a loading hint, never a block.
+    ensureSharedPlanWeek() {
+      const plan = this.activeSharedPlan;
+      if (!plan) return;
+      const offset = Number(this.state.planWeekOffset || 0);
+      const key = this.sharedWeekKey(plan, offset);
+      if (!this._sharedCache) this._sharedCache = {};
+      if (this._sharedCache[key] || this._sharedLoadingKey === key) return;
+      this._sharedLoadingKey = key;
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+      const mondayIso = this.planWeekDates(offset)[0].iso;
+      const url = scrape && scrape.PATHS ? scrape.PATHS.sharedPlanWeek(plan.url, mondayIso) : null;
+      (async () => {
+        let entry = { status: 'error', sessions: [], ownerName: null };
+        try {
+          const res = url && adapter && scrape
+            ? await scrape.fetchSharedPlan(adapter, url, mondayIso)
+            : null;
+          if (res && res.supported) {
+            entry = { status: 'ready', sessions: res.sessions || [], ownerName: res.ownerName || null };
+          } else if (res && res.notShared) {
+            entry = { status: 'not-shared', sessions: [], ownerName: res.ownerName || null };
+          }
+        } catch (e) { /* keep error entry */ }
+        this._sharedCache[key] = entry;
+        if (this._sharedLoadingKey === key) this._sharedLoadingKey = null;
+        if (this.state.view === 'plan') this.render();
+      })();
+    }
+
+    async persistSharedPlans(mutator) {
+      const store = window.USOSPP_SHARED_PLANS;
+      if (!store) return;
+      const data = await store.setData(mutator);
+      this.setState({
+        sharedPlans: { plans: data.plans || [], activeId: data.activeId || 'self' },
+      });
     }
 
     // Normalized "names surname" key for cross-group student dedup.
@@ -6404,7 +6911,28 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
 
       return `
         <div class="usospp-view">
-          <div class="usospp-stat-grid usospp-stat-grid--3">
+          <div class="usospp-stat-grid">
+            ${(() => {
+              // Semester teaching progress (minutes-weighted): done hours
+              // over all hours, past + future. Not the calendar semester —
+              // exam sessions have no plan meetings, so the ring completes
+              // at the last class. Hence the hint says "zajęć", not
+              // "semestru".
+              const p = this.semesterProgress;
+              if (!p) return `
+                <div class="usospp-card usospp-stat">
+                  <div class="usospp-stat-label">Progres semestru</div>
+                  <div class="usospp-stat-value">—</div>
+                  <div class="usospp-stat-hint">brak zajęć w planie</div>
+                </div>`;
+              const approx = p.missing > 0 ? '≈ ' : '';
+              return `
+                <div class="usospp-card usospp-stat">
+                  <div class="usospp-stat-label">Progres semestru</div>
+                  <div class="usospp-ring" style="--p:${p.pct};" role="img" aria-label="Progres semestru: za Tobą ${approx}${p.pct}% godzin zajęć"><span>${p.pct}%</span></div>
+                  <div class="usospp-stat-hint">${approx}${fmtHoursPl(p.doneMin)} z ${fmtHoursPl(p.totalMin)} zajęć za Tobą${p.missing > 0 ? ' · niepełne dane' : ''}</div>
+                </div>`;
+            })()}
             <div class="usospp-card usospp-stat">
               <div class="usospp-stat-label">Średnia (z widocznych ocen)</div>
               <div class="usospp-stat-value">${avg ? esc(avg) : '—'}</div>
@@ -6462,8 +6990,16 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     }
 
     renderPlan() {
-      const scope = this.state.planScope === 'generic' ? 'generic' : 'concrete';
-      const sessions = scope === 'generic' ? this.weeklyPlan : this.concreteWeekSessions;
+      // Foreign-plan mode: a shared page is always one real week, so the
+      // scope is forced to concrete and the sessions come from the
+      // per-week fetch cache. Own-plan getters stay untouched — dashboard
+      // widgets, semester progress and exports never see somebody else.
+      this.loadSharedPlans();
+      const foreign = this.activeSharedPlan;
+      if (foreign) this.ensureSharedPlanWeek();
+      this.loadSharedVisibility();
+      const scope = foreign ? 'concrete' : (this.state.planScope === 'generic' ? 'generic' : 'concrete');
+      const sessions = this.planVisibleSessions();
       const mg = this.data.myGroupsResult || {};
       const rawEvents = this.planEvents;
       const offset = Number(this.state.planWeekOffset || 0);
@@ -6472,27 +7008,36 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       // Groups whose details (meetings behind the Dynamiczny scope) never
       // landed: an empty concrete week with missing details is a fetch
       // failure, not a free week — offer a retry instead of "wolne".
-      let detailsMissing = 0;
-      {
-        const det = (this.data.groupDetails && typeof this.data.groupDetails === 'object') ? this.data.groupDetails : {};
-        (Array.isArray(mg.subjects) ? mg.subjects : []).forEach((s) => {
-          ((s && s.groups) || []).forEach((g) => {
-            if (g && g.detailsUrl && !det[g.detailsUrl]) detailsMissing++;
-          });
-        });
-      }
+      const detailsMissing = this.planDetailsMissing();
+      const planTitle = foreign ? `Plan zajęć — ${this.sharedPlanDisplayName(foreign)}` : 'Plan zajęć';
+      const planBody = foreign
+        ? this.renderForeignPlanBody(foreign, sessions, mode)
+        : `${!hasTemplate ? `
+              ${!mg.supported ? `<div class="usospp-empty-hint">Nie udało się odczytać planu zajęć (ani terminarza, ani Twoich grup) ze strony USOS.</div>`
+                : `<div class="usospp-empty-hint">Brak zajęć w Twoich grupach — nie jesteś zapisany na żadne zajęcia ze stałym terminem.</div>`}
+            ` : !sessions.length ? `
+              ${scope === 'concrete' && detailsMissing > 0 && !this.state.planDetailsLoading ? `
+                <div class="usospp-empty-hint">Nie udało się dociągnąć terminów ${detailsMissing} ${detailsMissing === 1 ? 'grupy' : 'grup'} — to może być chwilowy błąd USOSa, a nie wolny tydzień.<br><a data-action="planRetryDetails" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div>
+              ` : `
+                <div class="usospp-empty-hint">W tym tygodniu nie masz żadnych zajęć — wolne.</div>
+              `}
+            ` : mode === 'week' ? this.renderPlanWeekGrid(sessions, scope) : this.renderPlanList(sessions, scope)}`;
       return `
         <div class="usospp-view">
           <div class="usospp-card usospp-plan-card">
             <div class="usospp-card-head">
-              <div class="usospp-card-title">Plan zajęć</div>
+              <div class="usospp-card-title">${esc(planTitle)}</div>
               <div class="usospp-plan-head-actions" style="display:flex;gap:10px;align-items:center;">
-                <button class="usospp-btn-ghost" data-action="planExportPng">Eksport PNG</button>
-                <button class="usospp-btn-ghost" data-action="planExportPdf">Eksport PDF</button>
-                <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=home/plan&usospp_off=1">Otwórz w USOS →</button>
+                ${foreign ? `
+                  <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(foreign.url)}" title="Otwiera udostępniony plan w klasycznym USOS">Otwórz w USOS →</button>
+                ` : `
+                  <button class="usospp-btn-ghost" data-action="openPlanExport">Eksportuj plan</button>
+                  <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=home/plan&usospp_off=1">Otwórz w USOS →</button>
+                `}
               </div>
               <div class="usospp-print-brand"><span class="usospp-print-brand-word">USOS<em>++</em></span></div>
             </div>
+            ${!foreign ? `
             <div class="usospp-plan-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
               <button class="usospp-mode-btn${scope === 'concrete' ? ' active' : ''}" data-action="planScopeConcrete">Dynamiczny</button>
               <button class="usospp-mode-btn${scope === 'generic' ? ' active' : ''}" data-action="planScopeGeneric">Ogólny</button>
@@ -6500,6 +7045,14 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               <button class="usospp-mode-btn${mode === 'week' ? ' active' : ''}" data-action="planViewWeek">Tydzień</button>
               <button class="usospp-mode-btn${mode === 'list' ? ' active' : ''}" data-action="planViewList">Lista</button>
             </div>
+            ` : `
+            <div class="usospp-plan-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+              <span class="usospp-muted-text" style="font-size:12.5px;">Udostępniony plan — konkretny tydzień</span>
+              <span style="flex:1;"></span>
+              <button class="usospp-mode-btn${mode === 'week' ? ' active' : ''}" data-action="planViewWeek">Tydzień</button>
+              <button class="usospp-mode-btn${mode === 'list' ? ' active' : ''}" data-action="planViewList">Lista</button>
+            </div>
+            `}
             <div class="usospp-plan-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
               ${scope === 'concrete' ? `
                 <button class="usospp-btn-ghost" data-action="planWeekPrev">← Poprzedni</button>
@@ -6517,23 +7070,222 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               const sems = [...new Set(sessions.map((e) => e && e.semester).filter(Boolean))];
               return sems.length > 1 ? `<div class="usospp-notice"><span>Ogólny miesza terminy z ${sems.length} semestrów (${esc(sems.join(' · '))}). Zakres Dynamiczny pokazuje konkretny tydzień z datami.</span></div>` : '';
             })() : ''}
-            ${!hasTemplate ? `
-              ${!mg.supported ? `<div class="usospp-empty-hint">Nie udało się odczytać planu zajęć (ani terminarza, ani Twoich grup) ze strony USOS.</div>`
-                : `<div class="usospp-empty-hint">Brak zajęć w Twoich grupach — nie jesteś zapisany na żadne zajęcia ze stałym terminem.</div>`}
-            ` : !sessions.length ? `
-              ${scope === 'concrete' && detailsMissing > 0 && !this.state.planDetailsLoading ? `
-                <div class="usospp-empty-hint">Nie udało się dociągnąć terminów ${detailsMissing} ${detailsMissing === 1 ? 'grupy' : 'grup'} — to może być chwilowy błąd USOSa, a nie wolny tydzień.<br><a data-action="planRetryDetails" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div>
-              ` : `
-                <div class="usospp-empty-hint">W tym tygodniu nie masz żadnych zajęć — wolne.</div>
-              `}
-            ` : mode === 'week' ? this.renderPlanWeekGrid(sessions, scope) : this.renderPlanList(sessions, scope)}
-            ${!hasTemplate && rawEvents.length ? `
+            ${planBody}
+            ${!foreign && !hasTemplate && rawEvents.length ? `
               <p class="usospp-muted-text">Surowe dane terminarza USOS:</p>
               <div class="usospp-raw-dump">${esc(JSON.stringify(rawEvents, null, 2))}</div>
             ` : ''}
           </div>
+          <div class="usospp-card" style="margin-top:16px;">
+            <div class="usospp-card-title" style="margin-bottom:6px;">Czyj plan</div>
+            <div class="usospp-muted-text" style="margin-bottom:16px;">Podejrzyj plan innej osoby — wklej link spod share w USOS (Plan zajęć → share). Linki-tokeny działają ok. 14 dni, potem trzeba wkleić nowy.</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="usospp-mode-btn${!foreign ? ' active' : ''}" style="flex:none;" data-action="sharedPlanSelect" data-id="self">Mój plan</button>
+              ${(this.state.sharedPlans.plans || []).map((p) => `
+                <button class="usospp-mode-btn${foreign && foreign.id === p.id ? ' active' : ''}" style="flex:none;" data-action="sharedPlanSelect" data-id="${esc(p.id)}" title="${esc(p.ownerName || '')}">${esc(this.sharedPlanDisplayName(p))}</button>
+              `).join('')}
+              <button class="usospp-btn-ghost" style="flex:none;" data-action="sharedPlanAddOpen" title="Wklej link do udostępnionego planu (token lub os_id)">+ Dodaj plan…</button>
+              ${foreign ? `<button class="usospp-btn-ghost" style="flex:none;" data-action="sharedPlanRemove" data-id="${esc(foreign.id)}" title="Usuń ten plan z listy">Usuń</button>` : ''}
+            </div>
+            ${this.renderSharedOwnLink()}
+          </div>
         </div>
       `;
+    }
+
+    // Body of the plan view in foreign mode: loading / not-shared /
+    // error states, otherwise the same week grid / list as the own plan
+    // (sessions already carry real dates, so scope is always concrete).
+    renderForeignPlanBody(foreign, sessions, mode) {
+      const name = this.sharedPlanDisplayName(foreign);
+      const hit = this.sharedWeekState();
+      if (!hit) {
+        return this._sharedLoadingKey
+          ? `<div class="usospp-empty-hint">Pobieranie planu (${esc(name)})…</div>`
+          : `<div class="usospp-empty-hint">Nie udało się pobrać planu — to może być chwilowy błąd USOSa.<br><a data-action="sharedPlanRetry" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div>`;
+      }
+      if (hit.status === 'not-shared') {
+        return `<div class="usospp-empty-hint"><strong>${esc(hit.ownerName || name)}</strong> nie udostępnia swojego planu zajęć — link wygasł albo wyłączono udostępnianie. Poproś o nowy odnośnik spod share w USOS.<br><a data-action="sharedPlanRetry" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a> · <a data-action="sharedPlanRemove" data-id="${esc(foreign.id)}" style="font-size:12.5px;font-weight:600;cursor:pointer;">Usuń plan</a></div>`;
+      }
+      if (hit.status !== 'ready') {
+        return `<div class="usospp-empty-hint">Nie udało się pobrać planu (${esc(name)}) — to może być chwilowy błąd USOSa.<br><a data-action="sharedPlanRetry" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div>`;
+      }
+      if (!sessions.length) {
+        return `<div class="usospp-empty-hint">W tym tygodniu ${esc(name)} nie ma żadnych zajęć — wolne.</div>`;
+      }
+      return mode === 'week' ? this.renderPlanWeekGrid(sessions, 'concrete') : this.renderPlanList(sessions, 'concrete');
+    }
+
+    // "Dodaj plan" modal: paste the shared-plan link (token or os_id), get
+    // it validated live on submit, optional nickname. The token itself is
+    // never rendered back anywhere (not even in the plan list) — only the
+    // nickname / owner name.
+    renderSharedPlanAddModal() {
+      if (!this.state.sharedPlanAddOpen) return '';
+      const err = this.state.sharedPlanAddError;
+      return `
+        <div class="usospp-modal-backdrop" data-action="sharedPlanAddCloseBackdrop">
+          <div class="usospp-modal">
+            <div class="usospp-modal-head">
+              <div class="usospp-card-title">Dodaj cudzy plan</div>
+              <button class="usospp-icon-btn" data-action="sharedPlanAddClose" title="Zamknij">${icon('close', 15)}</button>
+            </div>
+            <div class="usospp-muted-text" style="font-size:12.5px;margin-bottom:12px;">Poproś o link do planu: w USOS <strong>Mój USOSweb → Plan zajęć → share</strong> („wyślij komuś ten plan”). Link-token działa ok. 14 dni; na stałe działa też opcja <strong>Preferencje USOSweb → udostępnij wszystkim zalogowanym</strong> + link do profilu osoby.</div>
+            <div style="font-size:12.5px;font-weight:600;margin-bottom:4px;">Link do planu</div>
+            <input class="usospp-input" data-sharedplan-url type="url" inputmode="url" placeholder="https://web.usos…/kontroler.php?_action=katalog2/osoby/pokazPlanZajecStudenta&token=…" style="width:100%;margin-bottom:10px;">
+            <div style="font-size:12.5px;font-weight:600;margin-bottom:4px;">Podpis (np. Ania) — opcjonalnie</div>
+            <input class="usospp-input" data-sharedplan-name type="text" maxlength="40" placeholder="Jak podpisać ten plan" style="width:100%;margin-bottom:12px;">
+            ${err ? `<div class="usospp-empty-hint" style="color:#b3402e;">${esc(err)}</div>` : ''}
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+              <button class="usospp-btn-ghost" data-action="sharedPlanAddClose">Anuluj</button>
+              <button class="usospp-btn-ghost" data-action="sharedPlanAddSubmit" style="font-weight:700;">Dodaj plan</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Which plan-sharing mode is on (see adapter.getPlanVisibility).
+    // Fetched once per panel lifetime on first plan-view render — a plain
+    // read of the preferences page, displayed only, never flipped.
+    async loadSharedVisibility() {
+      if (this.state.sharedVisibility || this._sharedVisLoading) return;
+      this._sharedVisLoading = true;
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+      let entry = { status: 'error', mode: null };
+      try {
+        const res = scrape && adapter ? await scrape.fetchPlanVisibility(adapter) : null;
+        if (res && res.supported && res.mode) entry = { status: 'ready', mode: res.mode };
+      } catch (e) { /* keep error entry */ }
+      this._sharedVisLoading = false;
+      this.state.sharedVisibility = entry;
+      if (this.state.view === 'plan') this.render();
+    }
+
+    // Fetches the user's own public plan link (a read-only dialog page).
+    // Explicit click only, once per panel lifetime: a GET here might
+    // rotate the token server-side, so it never fires automatically and
+    // the URL lives in memory — shown on request, never stored anywhere.
+    async showSharedOwnLink() {
+      if (this._sharedOwnLoading) return;
+      const cur = this.state.sharedOwnLink;
+      if (cur && cur.status === 'ready') return;
+      this._sharedOwnLoading = true;
+      this.setState({ sharedOwnLink: { status: 'loading', url: null } });
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+      let entry = { status: 'error', url: null };
+      try {
+        const res = scrape && adapter ? await scrape.fetchOwnPlanLink(adapter) : null;
+        if (res && res.supported && res.url) entry = { status: 'ready', url: res.url };
+      } catch (e) { /* keep error entry */ }
+      this._sharedOwnLoading = false;
+      this.setState({ sharedOwnLink: entry });
+    }
+
+    // "Udostępnij swój plan" subsection of the Czyj-plan card: reveal link
+    // on demand + copy (reuses mlegCopy) + deep-link to the classic
+    // preferences where permanent sharing is toggled (flipping it would be
+    // a server-side write — the one thing this extension never does).
+    renderSharedOwnLink() {
+      const st = this.state.sharedOwnLink;
+      const vis = this.state.sharedVisibility;
+      const prefsUrl = `${location.origin}/kontroler.php?_action=home/preferencje/preferencjeUsosweb`;
+      const prefsLink = `<a data-action="openUsos" data-url="${esc(prefsUrl)}" style="font-weight:600;cursor:pointer;">Preferencje USOS →</a> (na samym dole, sekcja „Plan zajęć studenta”)`;
+      // Live sharing status instead of a static hint: "zalogowani" means
+      // every logged-in user sees the plan with no expiry; "tylko_ja"
+      // means only the 14-day token link works. Display only — the toggle
+      // itself stays a manual click in classic USOS.
+      let statusLine;
+      if (!vis || vis.status === 'loading') {
+        statusLine = `<span class="usospp-muted-text">Sprawdzanie udostępniania…</span>`;
+      } else if (vis.status === 'ready' && vis.mode === 'zalogowani') {
+        statusLine = `<span><strong>Stałe udostępnianie: włączone</strong> — każda zalogowana osoba widzi Twój plan, bez limitu czasu. Zmiana: ${prefsLink}</span>`;
+      } else if (vis.status === 'ready') {
+        statusLine = `<span><strong>Stałe udostępnianie: wyłączone</strong> — działa tylko link 14-dniowy. Włącz na stałe: ${prefsLink}</span>`;
+      } else {
+        statusLine = `<span class="usospp-muted-text">Link-token działa ok. 14 dni; na stałe włączysz udostępnianie w USOS: ${prefsLink}</span>`;
+      }
+      let content;
+      if (!st) {
+        content = `<button class="usospp-btn-ghost" style="flex:none;" data-action="sharedOwnLinkShow">Pokaż mój link</button>`;
+      } else if (st.status === 'loading') {
+        content = `<div class="usospp-empty-hint">Pobieranie linku…</div>`;
+      } else if (st.status === 'ready' && st.url) {
+        content = `
+          <input class="usospp-input" readonly value="${esc(st.url)}" style="flex:1;min-width:200px;">
+          <button class="usospp-btn-ghost" style="flex:none;" data-action="mlegCopy" data-copy="${esc(st.url)}">Kopiuj</button>`;
+      } else {
+        content = `<div class="usospp-empty-hint">Nie udało się pobrać linku — <a data-action="sharedOwnLinkShow" style="font-size:12.5px;font-weight:600;cursor:pointer;">spróbuj ponownie</a>.</div>`;
+      }
+      return `
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-soft);">
+          <div style="font-size:13.5px;font-weight:600;margin-bottom:4px;">Udostępnij swój plan</div>
+          <div class="usospp-muted-text" style="font-size:12.5px;margin-bottom:4px;">Wyślij komuś link — zobaczy Twój plan.</div>
+          <div style="font-size:12.5px;margin-bottom:10px;">${statusLine}</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">${content}</div>
+        </div>
+      `;
+    }
+
+    // Live-validates the pasted link (one read-only fetch of the current
+    // week) before saving anything — a dead token or a random URL never
+    // lands on the list.
+    async submitSharedPlanAdd() {
+      if (this._sharedAdding) return;
+      const store = window.USOSPP_SHARED_PLANS;
+      const fail = (msg) => this.setModalState({ sharedPlanAddError: msg });
+      const urlInput = this.root && this.root.querySelector('[data-sharedplan-url]');
+      const nameInput = this.root && this.root.querySelector('[data-sharedplan-name]');
+      if (!store || !urlInput) { fail('Nie udało się odczytać formularza.'); return; }
+      const norm = store.normalizeUrl(urlInput.value);
+      if (!norm) { fail('To nie wygląda na link do udostępnionego planu — wklej pełny odnośnik spod share w USOS.'); return; }
+      this._sharedAdding = true;
+      try {
+        const data = await store.getData();
+        const dup = (data.plans || []).find((p) => p && p.url === norm.url);
+        if (dup) {
+          this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+          await this.persistSharedPlans((d) => ({ ...d, activeId: dup.id }));
+          return;
+        }
+        if ((data.plans || []).length >= store.MAX_PLANS) {
+          fail(`Lista pełna (maks. ${store.MAX_PLANS}) — usuń najpierw inny plan.`);
+          return;
+        }
+        const scrape = window.USOSPP_SCRAPE;
+        const adapters = window.USOSPP_ADAPTERS;
+        const adapter = adapters && adapters.selectAdapter ? adapters.selectAdapter() : null;
+        const mondayIso = this.planWeekDates(0)[0].iso;
+        const url = scrape && scrape.PATHS ? scrape.PATHS.sharedPlanWeek(norm.url, mondayIso) : null;
+        let res = null;
+        try {
+          res = url && adapter && scrape ? await scrape.fetchSharedPlan(adapter, url, mondayIso) : null;
+        } catch (e) { res = null; }
+        if (!res || (!res.supported && !res.notShared)) {
+          fail('Nie udało się pobrać planu spod tego linku — sprawdź go i spróbuj ponownie.');
+          return;
+        }
+        if (res.notShared) {
+          fail(`${res.ownerName || 'Ta osoba'} nie udostępnia swojego planu zajęć.`);
+          return;
+        }
+        const plan = {
+          id: store.genId(),
+          kind: norm.kind,
+          url: norm.url,
+          nickname: nameInput ? nameInput.value.trim().slice(0, 40) : '',
+          ownerName: res.ownerName || null,
+          addedAt: Date.now(),
+        };
+        this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+        await this.persistSharedPlans((d) => ({ plans: [...(d.plans || []), plan], activeId: plan.id }));
+      } finally {
+        this._sharedAdding = false;
+      }
     }
 
     // Horizontal week timetable: day columns, full morning-to-evening hour
@@ -6553,6 +7305,11 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const dateByDay = {};
       weekDates.forEach((r) => { dateByDay[r.day] = r.date; });
       const fmtDate = (d) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+      // Google-style "now" line in today's column (concrete scope, current
+      // week only — see planNowline). Rendered once here, then repositioned
+      // every 60 s by the countdown ticker via [data-nowline].
+      const nowline = this.planNowline(layout, scope);
+      if (nowline) ensureCountdownTicker();
       return `
         <div class="usospp-plan-week">
         <div class="usospp-timetable">
@@ -6573,6 +7330,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               <div class="usospp-tt-daycol">
                 <div class="usospp-tt-daylabel">${esc(shortDayName[col.day])}${date ? ` <span class="usospp-muted-text">${esc(fmtDate(date))}</span>` : ''}</div>
                 <div class="usospp-tt-daybody" style="height:${totalHeight}px;background-size:100% ${ROW_H}px;">
+                  ${nowline && col.day === nowline.day ? `<div class="usospp-nowline" data-nowline data-hour-start="${hourStart}" data-total-height="${totalHeight}" style="top:${nowline.top}px;"></div>` : ''}
                   ${!col.blocks.length ? (concrete ? `<div class="usospp-muted-text" style="position:absolute;top:10px;left:0;right:0;text-align:center;font-size:12px;">wolne</div>` : '') : col.blocks.map(({ e, lane, laneCount, top, height }) => {
                     const color = subjectColor(hashStr(e.code || e.subject || ''), dark);
                     const weeksTag = weeksLabel(e.weeks);
@@ -6716,6 +7474,136 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         a.remove();
         setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       }, 'image/png');
+      return true;
+    }
+
+    // Whole-semester concrete sessions: tiles concreteSessionsForOffset
+    // from the current week forward (meetings already sit in groupDetails —
+    // no per-week fetching). Stops after 3 consecutive empty weeks (a
+    // mid-semester break must not truncate the tail) with a hard cap of 20
+    // offsets against pathological data. Past weeks are never included.
+    planSemesterSessions() {
+      const MAX_OFF = 19;
+      const EMPTY_BREAK = 3;
+      const out = [];
+      let emptyRun = 0;
+      for (let off = 0; off <= MAX_OFF; off++) {
+        const week = this.concreteSessionsForOffset(off);
+        if (!week.length) {
+          emptyRun++;
+          if (emptyRun >= EMPTY_BREAK) break;
+          continue;
+        }
+        emptyRun = 0;
+        out.push(...week);
+      }
+      out.sort((a, b) => (a.date || '').localeCompare(b.date || '')
+        || (toMin(a.start) ?? Infinity) - (toMin(b.start) ?? Infinity));
+      return out;
+    }
+
+    // Mirror of planSemesterSessions into the past: tiles
+    // concreteSessionsForOffset backwards from last week (off -1, -2, …).
+    // Same stop rule (3 consecutive empty weeks must not truncate the head
+    // — a mid-semester break is empty in both directions) and the same
+    // hard cap. Backs the semester-progress ring on the dashboard.
+    planPastSessions() {
+      const MAX_BACK = 19;
+      const EMPTY_BREAK = 3;
+      const out = [];
+      let emptyRun = 0;
+      for (let off = -1; off >= -MAX_BACK; off--) {
+        const week = this.concreteSessionsForOffset(off);
+        if (!week.length) {
+          emptyRun++;
+          if (emptyRun >= EMPTY_BREAK) break;
+          continue;
+        }
+        emptyRun = 0;
+        out.push(...week);
+      }
+      out.sort((a, b) => (a.date || '').localeCompare(b.date || '')
+        || (toMin(a.start) ?? Infinity) - (toMin(b.start) ?? Infinity));
+      return out;
+    }
+
+    // Groups whose meeting details never loaded (same count renderPlan
+    // uses to tell a fetch failure from a free week). Their meetings are
+    // absent from every concrete computation, so semester totals built on
+    // them are a lower bound.
+    planDetailsMissing() {
+      const mg = this.data.myGroupsResult || {};
+      const det = (this.data.groupDetails && typeof this.data.groupDetails === 'object')
+        ? this.data.groupDetails : {};
+      let missing = 0;
+      (Array.isArray(mg.subjects) ? mg.subjects : []).forEach((s) => {
+        ((s && s.groups) || []).forEach((g) => {
+          if (g && g.detailsUrl && !det[g.detailsUrl]) missing++;
+        });
+      });
+      return missing;
+    }
+
+    // Semester teaching progress, minutes-weighted: a 3 h lab moves the
+    // needle more than a 45′ lektorat. done = fully finished (end <= now);
+    // a currently-running session doesn't count yet. Past weeks come from
+    // planPastSessions, the current week onwards from planSemesterSessions
+    // (deduped by identity — the walks are week-disjoint, this is just
+    // insurance). Null when there is nothing to measure; `missing` flags
+    // the lower-bound case (see planDetailsMissing).
+    get semesterProgress() {
+      const nowMs = Date.now();
+      const seen = new Set();
+      let doneMin = 0, totalMin = 0;
+      this.planPastSessions().concat(this.planSemesterSessions()).forEach((e) => {
+        if (!e) return;
+        const start = this.sessionDateTime(e, 'start');
+        const end = this.sessionDateTime(e, 'end');
+        if (start == null || end == null || end <= start) return;
+        const key = `${e.date}|${e.start}|${e.end}|${e.subject}|${e.type}|${e.nr}|${e.detailsUrl || ''}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        const mins = Math.round((end - start) / 60000);
+        totalMin += mins;
+        if (end <= nowMs) doneMin += mins;
+      });
+      if (!totalMin) return null;
+      return {
+        doneMin,
+        totalMin,
+        pct: Math.round((doneMin / totalMin) * 100),
+        missing: this.planDetailsMissing(),
+      };
+    }
+
+    // ICS = a whole-semester .ics download (same object-URL anchor trick
+    // as PNG — works from a content script, no `downloads` permission).
+    // Concrete scope only: the generic template has no real dates and USOS
+    // week parity can't be mapped onto calendar recurrence honestly.
+    // Returns false when there is nothing to export or no DOM (tests).
+    exportPlanIcs() {
+      if (typeof document === 'undefined') return false;
+      if (this.state.planScope === 'generic') return false;
+      const sessions = this.planSemesterSessions();
+      if (!sessions.length) return false;
+      const sems = [...new Set(sessions.map((s) => s && s.semester).filter(Boolean))];
+      const semSlug = sems.length
+        ? sems[0].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+        : '';
+      const label = sems.length > 1 ? `${sems.length}-semestry` : (semSlug || 'semestr');
+      const { ics } = buildPlanIcs(sessions, {
+        dtstamp: icsStamp(new Date()),
+        calName: `Plan zajęć – ${sems.length ? sems.join(' · ') : label}`,
+        domain: (() => { try { return location.hostname; } catch (e) { return 'usospp'; } })(),
+      });
+      const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `plan-${label}.ics`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       return true;
     }
 

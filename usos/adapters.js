@@ -784,6 +784,161 @@
       return { supported: subjects.length > 0, verified: true, subjects };
     },
 
+    // Somebody-else's shared timetable (pokazPlanZajecStudenta&token=… or
+    // &os_id=…, see usos/shared-plans-store.js). Same modern shell as the
+    // employee plan: <timetable-day> columns of <timetable-entry name
+    // subject name-id="CODE"> with slot="info|time|dialog-*". Verified live
+    // 2026-10-06: week switching is a plain GET with
+    // &plan_week_sel_week=YYYY-MM-DD, and <timetable-day> carries no date
+    // attribute — dates come from the requested Monday + column index.
+    // Sessions come out in the own-plan shape (weeklyPlan /
+    // concreteSessionsForOffset) plus foreign:true, so the week grid, list
+    // view and session modal render them unchanged; the roster row is
+    // skipped for foreign sessions (see planSessionRosterRow).
+    getSharedPlan(doc = document, mondayIso = null) {
+      const none = { supported: false, verified: false, notShared: false, ownerName: null, sessions: [] };
+      let bodyText = '';
+      try { bodyText = textOf(doc.body) || ''; } catch (e) { return none; }
+      const h1Text = textOf(doc.querySelector('h1')) || '';
+      let ownerName = null;
+      // The h1 carries a date-range note after the name ("X -
+      // udostępniony plan zajęć (YYYY-MM-DD - YYYY-MM-DD)") — strip the
+      // parenthetical before matching the owner.
+      const ownerMatch = h1Text.replace(/\s*\(.*?\)\s*$/, '').match(/^(.*?)\s*-\s*udostępniony plan zajęć\s*$/i);
+      if (ownerMatch && ownerMatch[1].trim()) ownerName = ownerMatch[1].trim();
+      // Same h1, no timetable: sharing off (or an expired token).
+      if (/nie udostępnia (swojego )?planu/i.test(bodyText)) {
+        return { supported: false, verified: true, notShared: true, ownerName, sessions: [] };
+      }
+      const days = [...doc.querySelectorAll('timetable-day')];
+      if (!days.length) return none;
+      // Resolve the displayed week's Monday: explicit request param wins,
+      // then the "później" switch (next Monday minus 7 days), then the
+      // "Plan udostępniony YYYY-MM-DD - …" header.
+      let monday = /^\d{4}-\d{2}-\d{2}$/.test(mondayIso || '') ? mondayIso : null;
+      if (!monday) {
+        const later = [...doc.querySelectorAll('a[data-setting-name="week_sel_week"]')]
+          .find((a) => /później/i.test(textOf(a) || ''));
+        const laterVal = later && later.getAttribute('data-setting-value');
+        if (/^\d{4}-\d{2}-\d{2}$/.test(laterVal || '')) {
+          const d = new Date(`${laterVal}T00:00:00`);
+          d.setDate(d.getDate() - 7);
+          monday = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      }
+      if (!monday) {
+        const hm = bodyText.match(/plan udostępniony\s*(\d{4}-\d{2}-\d{2})/i);
+        if (hm) monday = hm[1];
+      }
+      if (!monday) return none;
+      const DAY_KEYS = ['PN', 'WT', 'ŚR', 'CZ', 'PT', 'SO', 'ND'];
+      const isoOf = (baseIso, addDays) => {
+        const d = new Date(`${baseIso}T00:00:00`);
+        d.setDate(d.getDate() + addDays);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      };
+      const sessions = [];
+      days.forEach((dayEl, dayIdx) => {
+        const day = DAY_KEYS[dayIdx] || null;
+        if (!day) return;
+        const date = isoOf(monday, dayIdx);
+        [...dayEl.querySelectorAll('timetable-entry')].forEach((entry) => {
+          const info = textOf(entry.querySelector('[slot="info"]')) || '';
+          const eventRange = textOf(entry.querySelector('[slot="dialog-event"]')) || '';
+          const timeOnly = textOf(entry.querySelector('[slot="time"]')) || '';
+          const infoLink = entry.querySelector('[slot="dialog-info"] a');
+          const infoLinkText = textOf(infoLink) || '';
+          const rangeParts = eventRange.split(/\s*[—–-]\s*/).map((t) => t.trim()).filter(Boolean);
+          const start = rangeParts[0] || timeOnly.trim() || null;
+          const end = rangeParts[1] || null;
+          if (!start) return;
+          const infoMatch = info.match(/^([^,]+),\s*gr\.\s*(\d+)\s*\(([^)]*)\)/);
+          const place = infoMatch ? infoMatch[3] : '';
+          const roomFromInfo = place.split(',')[0].trim() || null;
+          const bcodeMatch = place.match(/bud\.\s*([A-Za-z0-9-]+)/i);
+          const personLinks = [...entry.querySelectorAll('[slot="dialog-person"] a')];
+          const teacher = personLinks.map((a) => textOf(a).trim()).filter(Boolean).join(', ') || null;
+          const placeEl = entry.querySelector('[slot="dialog-place"]');
+          const roomLinkText = textOf(placeEl && placeEl.querySelector('a')) || '';
+          const room = roomLinkText.replace(/^sala\s+/i, '').replace(/,\s*$/, '').trim() || roomFromInfo;
+          const bLinks = placeEl ? [...placeEl.querySelectorAll('a')] : [];
+          const rawBuilding = textOf(bLinks[bLinks.length - 1]) || '';
+          const normBuilding = rawBuilding.replace(/\[([^\]]+)\]\s*\[\1\]\s*$/, '[$1]').trim();
+          const building = normBuilding || (bcodeMatch ? `[${bcodeMatch[1]}]` : null);
+          const typeFull = (infoLinkText.split(',')[0] || '').trim();
+          let detailsUrl = null;
+          const href = infoLink && infoLink.getAttribute('href');
+          if (href) {
+            try { detailsUrl = new URL(href, location.origin).toString(); } catch (e) { /* keep null */ }
+          }
+          sessions.push({
+            day,
+            date,
+            start,
+            end,
+            weeks: 'every',
+            semester: null,
+            subject: entry.getAttribute('name') || 'Zajęcia',
+            code: entry.getAttribute('name-id') || null,
+            type: typeFull || (infoMatch ? infoMatch[1].trim() : null),
+            nr: infoMatch ? infoMatch[2] : null,
+            detailsUrl,
+            room: room || null,
+            roomUrl: null,
+            building,
+            teacher,
+            foreign: true,
+          });
+        });
+      });
+      const order = { PN: 0, WT: 1, ŚR: 2, CZ: 3, PT: 4, SO: 5, ND: 6 };
+      sessions.sort((a, b) => (order[a.day] ?? 9) - (order[b.day] ?? 9) || String(a.start).localeCompare(String(b.start)));
+      sessions.forEach((e, i) => { e.idx = i; });
+      return { supported: sessions.length > 0, verified: true, notShared: false, ownerName, sessions };
+    },
+
+    // The user's own public plan link (home/publicznyLinkDoPlanu) — a
+    // dialog fragment carrying the token URL in <text-field id="link14"
+    // value="…pokazPlanZajecStudenta&token=…">. Pure read; the token is
+    // the viewer's access credential, so callers display it only on
+    // explicit user request and never persist it (see app.js).
+    getOwnPlanLink(doc = document) {
+      const miss = { supported: false, verified: false, url: null };
+      let field = null;
+      try {
+        field = doc.querySelector('text-field#link14');
+      } catch (e) {
+        return miss;
+      }
+      const value = field && field.getAttribute('value');
+      if (!value || !/pokazPlanZajecStudenta/i.test(value)) return miss;
+      let url = null;
+      try {
+        url = new URL(value, location.origin).toString();
+      } catch (e) {
+        return miss;
+      }
+      return { supported: true, verified: true, url };
+    },
+
+    // Which plan-sharing mode is on (home/preferencje/preferencjeUsosweb,
+    // "Plan zajęć studenta" radios). Read-only display only — flipping it
+    // is a server-side write, the one thing this extension never does.
+    // mode: 'zalogowani' (every logged-in user sees the plan, no expiry) |
+    // 'tylko_ja' (off — only a 14-day token link works) | null (unknown).
+    getPlanVisibility(doc = document) {
+      const miss = { supported: false, verified: false, mode: null };
+      let checked = null;
+      try {
+        checked = doc.querySelector('input[name="widocznosc_planu_zajec"]:checked');
+      } catch (e) {
+        return miss;
+      }
+      const value = checked && checked.getAttribute('value');
+      if (value !== 'zalogowani' && value !== 'tylko_ja') return miss;
+      return { supported: true, verified: true, mode: value };
+    },
+
     // Verified live 2026-09-28 on a real account (PWr): the grades frame
     // (usos-frame#oceny) holds one table with a real <thead> —
     // Przedmiot | Program | Ocena | Akcje — and one row per subject. A
@@ -2319,6 +2474,9 @@
     getSubjectPage() { return { supported: false, verified: false, generalInfo: [], cycles: [] }; },
     getSubjectTimetable() { return { supported: false, verified: false, hourStart: null, hourEnd: null, days: [] }; },
     getClassGroups() { return { supported: false, verified: false, groups: [] }; },
+    getSharedPlan() { return { supported: false, verified: false, notShared: false, ownerName: null, sessions: [] }; },
+    getOwnPlanLink() { return { supported: false, verified: false, url: null }; },
+    getPlanVisibility() { return { supported: false, verified: false, mode: null }; },
   };
 
   function selectAdapter() {

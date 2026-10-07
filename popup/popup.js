@@ -40,7 +40,10 @@ const QUICK_ACTIONS = [
 // app running there yet), so quick tiles opening a NEW tab deep-link through
 // ?usospp_view=…, which the app boot honors (see usos/app.js init) —
 // including for panel-only views (studenci/mapa/zapisy/planer/ustawienia)
-// that have no classic-USOS counterpart page to open instead.
+// that have no classic-USOS counterpart page to open instead. The deep-link
+// only works when the panel mounts, so the `quick` handler flips `enabled`
+// on first whenever it isn't (same global semantics as the main toggle) —
+// both for fresh tabs and for live tabs reloaded in place with the param.
 const HOME_PATH = 'kontroler.php?_action=home/index';
 function quickUrl(origin, view) {
   return `${origin}/${HOME_PATH}&usospp_view=${view}`;
@@ -411,6 +414,7 @@ function renderMainBody() {
 
       <div style="margin-top:8px;">
         <div class="pp-section-heading">Szybki dostęp</div>
+        ${!enabled && !killed ? `<div class="pp-main-hint" style="text-align:left;margin:0 0 6px 0;">Kliknięcie skrótu włączy panel USOS++</div>` : ''}
         ${!state.myUniversity ? `
           <div class="pp-my-uni-hint">
             Wejdź na stronę swojej uczelni i kliknij <a data-action="setMyUniversity">tutaj</a>, aby ustawić ją jako Moja Uczelnia
@@ -762,7 +766,38 @@ async function onAction(el) {
       return;
     }
 
+    // Live USOS tab but the panel is off: the in-place branch above can't
+    // work (inject.js drops usospp:navigate while app is null), and opening
+    // quickUrl as-is would land on classic home/index — nothing mounts to
+    // honor usospp_view while enabled is false. So flip the panel on first
+    // (same global semantics as the "Włącz panel USOS++" toggle), then
+    // reload this tab with the deep-link param appended: app boot honors it
+    // (see usos/app.js init) and starts straight on the requested view, with
+    // no navigate/app-null race in between.
+    if (hasHostPermission && looksLikeUsos && !state.enabled && tab.url) {
+      let target = null;
+      try {
+        const u = new URL(tab.url);
+        // A sticky-native tab (?usospp_off) must stay classic — fall through
+        // to the myUniversity new-tab path instead of reloading in place
+        // (which would also flip the panel on globally for zero effect here).
+        if (!u.searchParams.has('usospp_off')) {
+          u.searchParams.set('usospp_view', qa.view);
+          target = u.toString();
+        }
+      } catch (e) { target = null; }
+      if (target) {
+        state = await setState({ enabled: true });
+        await chrome.tabs.update(tab.id, { url: target });
+        window.close();
+        return;
+      }
+    }
+
     if (state.myUniversity) {
+      // Fresh tab deep-links through ?usospp_view=…, which only works when
+      // the panel mounts — ensure it will before opening the tab.
+      if (!state.enabled) state = await setState({ enabled: true });
       chrome.tabs.create({ url: quickUrl(state.myUniversity, qa.view) });
       window.close();
       return;
@@ -770,7 +805,7 @@ async function onAction(el) {
 
     if (tab.url && looksLikeUsos) {
       const origin = new URL(tab.url).origin;
-      state = await setState({ myUniversity: origin });
+      state = await setState({ myUniversity: origin, enabled: true });
       render();
       chrome.tabs.create({ url: quickUrl(origin, qa.view) });
       window.close();

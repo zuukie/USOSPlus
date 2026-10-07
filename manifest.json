@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "USOS++ (Beta)",
-  "version": "0.9.11",
+  "version": "0.9.12",
   "description": "Nowoczesna wersja USOSweb: oceny, plan zajęć, generator planu i egzaminy w jednym, szybkim panelu.",
   "icons": {
     "16": "icons/icon16.png",
@@ -36,6 +36,7 @@
         "usos/leaflet-loader.js",
         "usos/qrcode-loader.js",
         "usos/planner-store.js",
+        "usos/shared-plans-store.js",
         "usos/adapters.js",
         "usos/scraping.js",
         "usos/generator.js",
