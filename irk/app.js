@@ -141,6 +141,29 @@
     window.open(withUsospOff(target), '_blank', 'noopener');
   }
 
+  // Zgłaszanie błędów (sekcja Pomoc w Moim koncie): zwykłe linki zewnętrzne
+  // na GitHub Issues / mailto — celowo NIE przez safeOpenUrl, który
+  // przepuszcza tylko same-origin. Treść wysyła sam użytkownik swoim
+  // GitHubem/mailem; nic nie wysyła się automatycznie (patrz PRIVACY.md).
+  function feedbackVersion() {
+    try {
+      return chrome.runtime.getManifest().version || '';
+    } catch (e) {
+      return '';
+    }
+  }
+  function feedbackDiagBlock() {
+    return `Wersja: ${feedbackVersion() || '—'}\nPlatforma: irk (${location.hostname})`;
+  }
+  function feedbackIssueHref() {
+    const body = `${feedbackDiagBlock()}\n\nOpis:\n`;
+    return `https://github.com/zuukie/USOSPlus/issues/new?title=${encodeURIComponent('[Błąd] ')}&body=${encodeURIComponent(body)}`;
+  }
+  function feedbackMailHref() {
+    const body = `${feedbackDiagBlock()}\n\nOpis:\n`;
+    return `mailto:usosplus@zuukie.dev?subject=${encodeURIComponent('USOS++ — błąd')}&body=${encodeURIComponent(body)}`;
+  }
+
   class App {
     constructor(root, data, initialSettings) {
       this.root = root;
@@ -1645,6 +1668,14 @@
             <div class="usospp-muted-text" style="margin-top:4px;">E-mail o nowych powiadomieniach: ${result.notifications.emailOnNotification ? 'włączone' : 'wyłączone'}</div>
           </div>
         ` : ''}
+        <div class="usospp-card" style="margin-top:16px;">
+          <div class="usospp-card-title">Pomoc</div>
+          <div class="usospp-muted-text" style="margin-bottom:12px;">Coś nie działa? Najszybciej zgłosisz błąd przez formularz w menu rozszerzenia (ikona USOS++ na pasku → Zgłoś błąd) — dołączy też diagnostykę techniczną.</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <a class="usospp-btn-ghost" href="${esc(feedbackIssueHref())}" target="_blank" rel="noopener">Zgłoś na GitHubie →</a>
+            <a class="usospp-btn-ghost" href="${esc(feedbackMailHref())}">Zgłoś mailem →</a>
+          </div>
+        </div>
       `;
     }
 

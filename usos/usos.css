@@ -423,3 +423,113 @@
   /* The "now" line is a snapshot of a moment — it must not reach paper. */
   body.usospp-print-plan .usospp-nowline { display: none !important; }
 }
+
+/* Sprawdziany — drzewo elementów rozliczania z wcięciami (poziom z DOM, nie z nazwy). */
+.usospp-test-tree {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.usospp-test-tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  padding: 2px 0;
+  color: var(--ink-2);
+}
+.usospp-test-tree-label {
+  flex: 1;
+  font-weight: 500;
+  color: var(--ink);
+}
+.usospp-test-tree-link {
+  flex: 1;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.usospp-test-tree-link:hover {
+  opacity: 0.85;
+}
+.usospp-test-tree-max {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.usospp-test-tree-wynik {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  min-width: 70px;
+  text-align: right;
+}
+.usospp-test-tree-children {
+  margin-left: 12px;
+  border-left: 1px dotted var(--border);
+  padding-left: 10px;
+  margin-top: 4px;
+}
+.usospp-test-card .usospp-card-head {
+  cursor: pointer;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+}
+.usospp-test-card .usospp-card-head:hover {
+  background: var(--bg-hover);
+}
+.usospp-test-toggle {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* Progress ring zaliczenia etapu (karta etapu, widok ECTS) — conic-gradient:
+   wypełnienie w brandowym #d9773a, brakująca część w --border (track).
+   --p to 0..100 ustawiane inline. */
+.usospp-etap-ring-wrap {
+  display: flex; align-items: center; gap: 16px;
+}
+/* Kolumna ringu: pierścień + (opcjonalny) chip "Warunkowe ✓" pod nim. */
+.usospp-etap-ring-col {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.usospp-etap-card-body {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+  justify-content: space-between;
+}
+.usospp-etap-card-left {
+  flex: 1;
+  min-width: 220px;
+}
+.usospp-etap-card-right {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.usospp-etap-ring {
+  --p: 0;
+  width: 92px; height: 92px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: conic-gradient(#d9773a calc(var(--p) * 1%), var(--border) 0);
+  font-size: 13px; font-weight: 700; color: var(--ink);
+}
+.usospp-etap-ring > span {
+  width: 74px; height: 74px; border-radius: 50%;
+  background: var(--bg-card);
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; line-height: 1.2;
+}
+.usospp-etap-ring-val { font-size: 16px; font-weight: 700; }
+.usospp-etap-ring-sub { font-size: 10px; color: var(--ink-3); font-weight: 500; }
+.usospp-etap-ring-label { font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+.usospp-etap-ring-label strong { color: var(--ink); }
+.usospp-etap-ring-label > div:last-child { font-size: 12px; color: var(--ink-3); margin-top: 2px; }

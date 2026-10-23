@@ -152,3 +152,35 @@ html[data-theme="light"] { background-color: oklch(97.5% 0.006 60); color-scheme
 .pp-disabled-banner a { color: var(--ink-critical); text-decoration: underline; font-weight: 700; }
 .pp-main-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .pp-quick-home.disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
+
+/* Formularz zgłaszania błędów (widok feedback — bez backendu, wysyłka
+   linkiem przez GitHub / mailto / schowek). */
+.pp-feedback-select {
+  width: 100%; font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--ink); background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 11px; padding: 9px 11px; cursor: pointer;
+}
+.pp-feedback-textarea {
+  width: 100%; font-family: inherit; font-size: 12.5px; line-height: 1.45;
+  color: var(--ink); background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 11px; padding: 9px 11px; resize: vertical;
+}
+.pp-feedback-textarea:focus, .pp-feedback-select:focus { outline: 2px solid #d9773a; outline-offset: -1px; }
+.pp-feedback-diag-row { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.pp-feedback-preview {
+  font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.5;
+  color: var(--ink-2); background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: 11px; padding: 9px 11px; margin: 0; white-space: pre-wrap; word-break: break-word;
+}
+.pp-feedback-btn {
+  flex: 1; font-family: inherit; font-size: 12.5px; font-weight: 700;
+  color: var(--ink); background: var(--bg-subtle); border: 1px solid var(--border);
+  border-radius: 11px; padding: 10px; cursor: pointer;
+}
+.pp-feedback-btn:hover { filter: brightness(0.97); }
+.pp-feedback-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.pp-feedback-link {
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+  color: var(--ink-2); font-size: 12px; font-weight: 600;
+}
+.pp-feedback-link:hover { color: var(--ink); }

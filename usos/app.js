@@ -490,6 +490,9 @@
   // fade-in). Started lazily on first panel render; no-ops when the box
   // isn't on screen. Safe to call in non-DOM contexts (tests).
   let countdownTickerStarted = false;
+  // Live App instance for the ticker's lesson-boundary check (see below).
+  // Set once at mount — there is exactly one App per page.
+  let tickerApp = null;
   function ensureCountdownTicker() {
     if (countdownTickerStarted) return;
     if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
@@ -514,6 +517,42 @@
         el.style.display = '';
         el.style.top = `${top}px`;
       });
+      // The topbar's lesson progress bar widens with the same 60 s cadence:
+      // geometry rides along in data attributes, so no re-render is needed
+      // mid-lesson. Comparing the live lesson signature against what's in
+      // the DOM detects boundary crossings (start/end) with no extra
+      // module state — a mismatch means the bar must appear, vanish or
+      // swap, which needs the topbar re-rendered (topbar-only patch, never
+      // a full render). Skipped while the user is typing in the topbar
+      // search or has a dropdown open — an outerHTML swap would eat their
+      // focus — the next tick retries.
+      document.querySelectorAll('[data-lesson-progress]').forEach((el) => {
+        const start = Number(el.getAttribute('data-start') || 0);
+        const end = Number(el.getAttribute('data-end') || 0);
+        if (!(end > start)) return;
+        const pct = Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100));
+        el.style.width = `${pct.toFixed(1)}%`;
+      });
+      if (tickerApp && typeof tickerApp.currentLessonProgress === 'function') {
+        let sig = null;
+        try {
+          const p = tickerApp.currentLessonProgress(now);
+          sig = p ? `${p.start}:${p.end}` : '';
+        } catch (e) { sig = null; }
+        const bar = document.querySelector('[data-lesson-progress]');
+        const domSig = bar ? `${bar.getAttribute('data-start')}:${bar.getAttribute('data-end')}` : '';
+        if (sig !== null && sig !== domSig && typeof tickerApp.setTopbarState === 'function') {
+          const topbar = document.querySelector('[data-topbar-root]');
+          const active = document.activeElement;
+          const topbarBusy = !!(topbar && (
+            (active && topbar.contains(active) && active.tagName === 'INPUT') ||
+            topbar.querySelector('.usospp-dropdown')
+          ));
+          if (!topbarBusy) {
+            try { tickerApp.setTopbarState({}); } catch (e) {}
+          }
+        }
+      }
     }, 60000);
   }
 
@@ -690,6 +729,13 @@
   // The topbar's search overlay isn't a view and needs no entry here.
   const PUBLIC_VIEWS = new Set(['aktualnosci', 'subjectPage', 'catalogPage', 'mapa', 'katalog', 'katalogJednostki', 'katalogPrzedmioty', 'katalogKierunki', 'katalogBudynki']);
 
+  // Views whose renderers read scraping.js tier-2 keys (paymentsResult,
+  // personalCalendarResult, ownProgrammesResult, moje-studia results) —
+  // entering one eagerly kicks ensureTier2 instead of waiting for the idle
+  // slot. zapisTura/zapisGrupy fetch a fresh calendar of their own, so
+  // despite being zapis-family views they don't belong here.
+  const TIER2_VIEWS = new Set(['platnosci', 'stypendia', 'sprawdziany', 'podania', 'ankiety', 'zapisy']);
+
   // "Is there a new announcement since I last opened Aktualności" — chrome
   // .storage.local (device-local, not synced, survives tab close unlike
   // sessionStorage) remembers a signature of the titles shown last time the
@@ -783,6 +829,43 @@
   function safeOpenUrl(url, fallback) {
     const target = isSafeOpenUrl(url) ? url : (fallback || (location.origin + '/kontroler.php'));
     window.open(withUsospOff(target), '_blank', 'noopener');
+  }
+
+  // Zgłaszanie błędów (sekcja Pomoc w Ustawieniach): zwykłe linki zewnętrzne
+  // na GitHub Issues / mailto — celowo NIE przez safeOpenUrl, który
+  // przepuszcza tylko same-origin (tu jego fallback wylądowałby na stronie
+  // głównej USOS). Treść wysyła sam użytkownik swoim GitHubem/mailem; nic
+  // nie wysyła się automatycznie (patrz PRIVACY.md).
+  function feedbackVersion() {
+    try {
+      return chrome.runtime.getManifest().version || '';
+    } catch (e) {
+      return '';
+    }
+  }
+  function feedbackDiagBlock() {
+    // Scraping timings (P2 instrumentation): the collection phases' own
+    // durations from performance.now() — "slow" complaints become
+    // actionable when they say WHICH phase was slow and how big it was.
+    // No page names, no user data — the aggregation the label itself
+    // already failed at stays just numbers (see scrape.js's runtimePerf).
+    let perfLine = '';
+    try {
+      const perf = window.USOSPP_SCRAPE && window.USOSPP_SCRAPE.getRuntimePerf && window.USOSPP_SCRAPE.getRuntimePerf();
+      const parts = [];
+      if (perf && perf.tier1 && perf.tier1.tier1Ms != null) parts.push(`tier1: ${perf.tier1.tier1Ms}ms / ${perf.tier1.tier1Pages} zapytań`);
+      if (perf && perf.tier2 && perf.tier2.tier2Ms != null) parts.push(`tier2: ${perf.tier2.tier2Ms}ms / ${perf.tier2.tier2Pages} zapytań`);
+      if (parts.length) perfLine = `\nCzasy pobierania: ${parts.join(', ')}`;
+    } catch (e) { /* diagnostics are best-effort, never load-bearing */ }
+    return `Wersja: ${feedbackVersion() || '—'}\nPlatforma: usos (${location.hostname})${perfLine}`;
+  }
+  function feedbackIssueHref() {
+    const body = `${feedbackDiagBlock()}\n\nOpis:\n`;
+    return `https://github.com/zuukie/USOSPlus/issues/new?title=${encodeURIComponent('[Błąd] ')}&body=${encodeURIComponent(body)}`;
+  }
+  function feedbackMailHref() {
+    const body = `${feedbackDiagBlock()}\n\nOpis:\n`;
+    return `mailto:usosplus@zuukie.dev?subject=${encodeURIComponent('USOS++ — błąd')}&body=${encodeURIComponent(body)}`;
   }
 
   // One row from adapter.getPaymentGroups — its `fields` are whatever
@@ -1056,12 +1139,14 @@
         planDetailsLoading: false,
         planSessionModal: null, // weeklyPlan session object or null
         planGroupList: null, // session snapshot for the group roster modal or null
+        expandedTestWezIds: new Set(), // wezId of sprawdziany with expanded details
         planBuildingMap: null, // session snapshot for the building map modal or null
         planExportOpen: false, // export picker popup over the plan view
         sharedPlans: { plans: [], activeId: 'self' }, // somebody-else's timetables (see shared-plans-store.js)
         sharedPlansReady: false, // persisted list loaded from storage
         sharedPlanAddOpen: false, // "Dodaj plan" modal over the plan view
         sharedPlanAddError: null, // validation error in the add modal
+        sharedPlanReplaceId: null, // when set: the add modal is in "podmień link" mode for this stored plan id
         sharedOwnLink: null, // own public plan link {status, url} — memory only, never stored
         sharedVisibility: null, // plan-sharing mode {status, mode} — read-only display, memory only
         studenciQuery: '',
@@ -1304,9 +1389,14 @@
       // its loading state forever (nothing ever triggers the fetch).
       // No-op for views without deferred data or already-loaded flags.
       this.ensureDeferredData(initialView);
+      // Tier 2: idle pass after mount is the normal route (inject.js's
+      // scheduleTier2 covers the fresh-aggregate case; this covers a
+      // sessionStorage restore landing straight on a tier-2 view).
+      this.ensureTier2For(initialView);
     }
 
     destroy() {
+      this._destroyed = true;
       if (this._leafletMap) { this._leafletMap.remove(); this._leafletMap = null; }
       if (this._unitMap) { this._unitMap.remove(); this._unitMap = null; this._unitMapMarkersByKod = null; }
       if (this._sessionMap) { this._sessionMap.remove(); this._sessionMap = null; }
@@ -1528,6 +1618,12 @@
         this.setState({ view, notifPanelOpen: false, avatarMenuOpen: false });
       }
       if (view === 'plan' || view === 'dashboard') this.ensurePlanDetails();
+      // Same parity with navigate() as the rest of this handler: deferred
+      // fetches react to whose view is actually showing (idempotent —
+      // every guard is a loaded flag), and a tier-2 view entered via
+      // back/forward must kick its pass eagerly too.
+      this.ensureDeferredData(view);
+      this.ensureTier2For(view);
       saveViewState(this.viewStatePayload());
     }
 
@@ -1649,7 +1745,7 @@
     }
 
     closeAnyModal() {
-      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false, planSessionModal: null, planGroupList: null, planBuildingMap: null, planExportOpen: false, sharedPlanAddOpen: false });
+      this.setModalState({ paymentDetailsOpen: false, groupsModalOpen: false, linksModalOpen: false, planSessionModal: null, planGroupList: null, planBuildingMap: null, planExportOpen: false, sharedPlanAddOpen: false, sharedPlanReplaceId: null });
     }
 
     // The search dropdown patches on every keystroke (after a debounce) —
@@ -1746,6 +1842,7 @@
       // (mlegToggleQr) shows them, and they hide again on refresh.
       if (view === 'mlegitymacja') patch.mlegQrRevealed = false;
       this.ensureDeferredData(view);
+      this.ensureTier2For(view);
     }
 
     // Lazy-loads sections deliberately left out of collectAll (exams iframe,
@@ -1758,7 +1855,23 @@
       const adapter = adapters.selectAdapter ? adapters.selectAdapter() : null;
       if (!adapter) return;
       if ((view === 'egzaminy' || view === 'dashboard') && !this.data.examsResultLoaded && scrape.fetchExamsResult) {
-        scrape.fetchExamsResult(adapter, this.data).then(() => {
+        // Straight kick when the user actually opened Egzaminy; behind an
+        // idle slot from the dashboard — the hidden-iframe run renders a
+        // whole AngularJS page (costly on the main thread), and the panel
+        // has nothing to show for it until it lands anyway, so the
+        // dashboard's first paint shouldn't wait behind it.
+        const kickExams = () => {
+          scrape.fetchExamsResult(adapter, this.data).then(() => {
+            // Same house rule as the other deferred fetches: repaint only
+            // while the view that asked is still showing.
+            if (this.state.view === view) this.render();
+          }).catch(() => {});
+        };
+        if (view === 'dashboard') this.scheduleIdle(kickExams);
+        else kickExams();
+      }
+      if (view === 'sprawdziany' && !this.data.testDetailsResultLoaded && scrape.fetchTestDetailsResult) {
+        scrape.fetchTestDetailsResult(adapter, this.data).then(() => {
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
@@ -1767,7 +1880,12 @@
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
-      if ((view === 'przedmiotyLista' || view === 'zapisy' || view === 'dashboard' || view === 'planer') && !this.data.stageSubjectsResultLoaded && scrape.fetchStageSubjectsResult) {
+      // stage subjects read ownProgrammesResult (scraped from the tier-2
+      // zapisyHub page) — while tier 2 is still pending they'd flip their
+      // loaded flag on an empty source and never retry; the tier-2-landed
+      // hook (_onTier2Landed) re-kicks this with real data in hand.
+      if ((view === 'przedmiotyLista' || view === 'zapisy' || view === 'dashboard' || view === 'planer')
+        && !this.data.stageSubjectsResultLoaded && !this.data.tier2Pending && scrape.fetchStageSubjectsResult) {
         scrape.fetchStageSubjectsResult(adapter, this.data).then(() => {
           if (this.state.view === view) this.render();
         }).catch(() => {});
@@ -1787,6 +1905,110 @@
           if (this.state.view === view) this.render();
         }).catch(() => {});
       }
+    }
+
+    // requestIdleCallback with a timeout, so the idle path is a delay, not
+    // a gamble (a busy tab might otherwise never go idle). Fallback for
+    // browsers without the API. See scheduleTier2 and the dashboard's
+    // deferred exams kick.
+    scheduleIdle(fn) {
+      if (this._destroyed) return;
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(() => { if (!this._destroyed) fn.apply(this); }, { timeout: 2500 });
+      } else {
+        setTimeout(() => { if (!this._destroyed) fn.apply(this); }, 400);
+      }
+    }
+
+    // ---- tier 2 (scraping.js) -----------------------------------------
+
+    // collectAll fetches ONLY the six pages blocking first paint (home,
+    // grupy, zaliczenia, oceny, plan, news); the other eleven land through
+    // ensureTier2. This schedules that pass for idle time after mount and
+    // after every autorefresh collection (force → fresh pass even though
+    // the model may already carry the previous tier-2 results via inject.js's
+    // stale-while-revalidate carry).
+    scheduleTier2(force) {
+      if (!this.data || (this.data.tier2Loaded && !force)) return;
+      if (this._tier2Scheduled) return;
+      this._tier2Scheduled = true;
+      this.scheduleIdle(() => {
+        this._tier2Scheduled = false;
+        this.ensureTier2DataNow(force);
+      });
+    }
+
+    // Eager, non-idle kick: every entry to a TIER2_VIEWS view (navigate(),
+    // constructor) and the tier-2 set's own drill-in paths ride here so the
+    // user never waits behind the idle callback. Dedupes with any in-flight
+    // or already-started pass (this._tier2Running / data.tier2Promise), so
+    // "eager vs scheduled" ordering doesn't double-fetch.
+    ensureTier2For(view) {
+      if (!TIER2_VIEWS.has(view)) {
+        this.scheduleTier2();
+        return;
+      }
+      this.ensureTier2DataNow(false);
+    }
+
+    ensureTier2DataNow(force) {
+      const scrape = window.USOSPP_SCRAPE;
+      const adapters = window.USOSPP_ADAPTERS;
+      if (!scrape || !scrape.ensureTier2 || !adapters || !this.data) return;
+      const adapter = adapters.selectAdapter ? adapters.selectAdapter() : null;
+      if (!adapter) return;
+      // Queued behind the app's own chain instead of a boolean guard: an
+      // autorefresh swap can put a fresh model next to a still-running pass
+      // for the previous one, and a plain "if running, return" would swallow
+      // that pass forever (the pending gate would sit on a tier-2 view with
+      // nothing left to kick it). Each queued step re-reads the CURRENT
+      // model — a step for a model that got swapped out is skipped as moot,
+      // and the live model is always the one fetched into.
+      const modelAtCall = this.data;
+      this._tier2Chain = Promise.resolve((this._tier2Chain || Promise.resolve())).catch(() => {});
+      const chain = this._tier2Chain;
+      this._tier2Chain = chain.then(() => {
+        if (this._destroyed || !this.data) return;
+        if (this.data !== modelAtCall && !force) return; // superseded model
+        if (this.data.tier2Loaded && !force) return;
+        this._tier2Running = true;
+        return scrape.ensureTier2(adapter, this.data, force === true).then(() => {
+          this._tier2Running = false;
+          this._onTier2Landed();
+        }).catch(() => { this._tier2Running = false; });
+      });
+    }
+
+    // The pass landed (or its data model completed tier 2): lazy fetches
+    // that wait for tier-2 sources (stage subjects from zapisyHub) can now
+    // run, and the re-render picks up both the current view's real data and
+    // the sidebar dots that read tier-2 keys (Płatności "do zapłaty",
+    // Ankiety). Render is gated to views that actually consume tier-2 keys —
+    // elsewhere the dots refresh on the user's next navigation anyway, and
+    // a surprise repaint of e.g. an open search dropdown would be rude.
+    _onTier2Landed() {
+      this.ensureDeferredData(this.state.view);
+      // Completeness notice for inject.js: a tier-2 pass landing is the
+      // moment the data model is fresh enough to freeze into inject's
+      // sessionStorage snapshot for the next reload (mount's idle pass,
+      // a restore's refresh pass, or an autorefresh force pass all end
+      // here — the listener side guards logged-out models out).
+      this.root.dispatchEvent(new CustomEvent('usospp:tier2', { bubbles: true }));
+      if (TIER2_VIEWS.has(this.state.view) || this.state.view === 'dashboard' || this.state.view === 'przedmiotyLista' || this.state.view === 'planer') {
+        this.render();
+      }
+    }
+
+    // First paint of a tier-2-only view (renderInfoTableView users,
+    // renderPlatnosci, renderSprawdziany): while ensureTier2's pass is
+    // still pending the underlying keys are empty-by-design, so show an
+    // honest loading line instead of flashing "brak danych"/an error card
+    // for the second or two it takes. Returns null when tier 2 is done —
+    // callers render normally.
+    tier2PendingView() {
+      return this.data && this.data.tier2Pending === true
+        ? `<div class="usospp-view"><div class="usospp-empty-hint">Dociąganie danych z USOS…</div></div>`
+        : null;
     }
 
     persistNewsSeen() {
@@ -1864,6 +2086,17 @@
         case 'toggleFeature':
           this.emitSettings({ toggleFeature: el.dataset.key });
           break;
+        case 'toggleTestDetails': {
+          const wezId = el.dataset.wezId || '';
+          if (!wezId) break;
+          this.setContentState((s) => {
+            const next = new Set(s.expandedTestWezIds);
+            if (next.has(wezId)) next.delete(wezId);
+            else next.add(wezId);
+            return { expandedTestWezIds: next };
+          });
+          break;
+        }
         case 'disableUsospp':
           this.emitSettings({ disable: true });
           break;
@@ -1973,14 +2206,20 @@
           break;
         }
         case 'sharedPlanAddOpen':
-          this.setModalState({ sharedPlanAddOpen: true, sharedPlanAddError: null });
+          this.setModalState({ sharedPlanAddOpen: true, sharedPlanAddError: null, sharedPlanReplaceId: null });
           break;
         case 'sharedPlanAddClose':
-          this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+          this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null, sharedPlanReplaceId: null });
           break;
         case 'sharedPlanAddCloseBackdrop':
           // Only the modal goes away — the plan view stays behind.
-          if (e.target === el) this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+          if (e.target === el) this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null, sharedPlanReplaceId: null });
+          break;
+        case 'sharedPlanReplaceOpen':
+          // Reuses the add modal in "podmień link" mode — same fields, but
+          // it updates the stored entry in place (nickname kept) instead
+          // of appending a new one.
+          this.setModalState({ sharedPlanAddOpen: true, sharedPlanAddError: null, sharedPlanReplaceId: (el.dataset.id || '').trim() || null });
           break;
         case 'sharedPlanAddSubmit':
           this.submitSharedPlanAdd();
@@ -5894,6 +6133,18 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       }
       const u = this.data.user || {};
       const initials = (u.name || '? ?').split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
+      // Lesson progress bar on the topbar's bottom border: only while a
+      // lesson is actually running (see currentLessonProgress). Rendered
+      // once here with geometry in data attributes, then widened in place
+      // by the countdown ticker — appearing/vanishing on lesson boundaries
+      // via a topbar-only refresh from that same ticker.
+      const lesson = this.currentLessonProgress();
+      if (lesson) ensureCountdownTicker();
+      const lessonBar = lesson ? `<div class="usospp-lesson-progress" data-lesson-progress data-start="${lesson.start}" data-end="${lesson.end}" title="Trwające zajęcia" style="width:${lesson.pct.toFixed(1)}%;"></div>` : '';
+      // One-line hover ribbon under the topbar (see .usospp-lesson-tip):
+      // pure-CSS show/hide, pointer-events off so it can't flicker. Content
+      // refreshes with the topbar itself on lesson boundaries.
+      const lessonTip = lesson && lesson.label ? `<div class="usospp-lesson-tip" aria-hidden="true">${esc(lesson.label)}</div>` : '';
       return `
         <header class="usospp-topbar" data-topbar-root>
           <div>
@@ -5941,6 +6192,8 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               ` : ''}
             </div>
           </div>
+          ${lessonBar}
+          ${lessonTip}
         </header>
       `;
     }
@@ -6282,6 +6535,30 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       return Number.isNaN(dt.getTime()) ? null : dt.getTime();
     }
 
+    // Currently-running lesson for the topbar progress bar: the
+    // earliest-started of panelUpcomingSessions().ongoing (own concrete
+    // plan only — widgets never see somebody else's). Null outside lessons
+    // or with the lessonProgressBar feature off. pct is clamped so
+    // out-of-range data can't overflow the bar. label is the one-line
+    // hover ribbon (subject · hours · room), also minimal by design.
+    currentLessonProgress(nowMs = Date.now()) {
+      if (!((this.settings && this.settings.features) || {}).lessonProgressBar) return null;
+      let ongoing = [];
+      try {
+        ongoing = (this.panelUpcomingSessions(nowMs).ongoing || []);
+      } catch (e) { return null; }
+      if (!ongoing.length) return null;
+      const e = ongoing[0];
+      if (e._start == null || e._end == null || !(e._end > e._start)) return null;
+      const pct = Math.min(100, Math.max(0, ((nowMs - e._start) / (e._end - e._start)) * 100));
+      let room = null;
+      try {
+        room = this.planRoomLine(e);
+      } catch (err) { room = null; }
+      const label = [e.subject, `${e.start}–${e.end}`, room].filter(Boolean).join(' · ');
+      return { start: e._start, end: e._end, pct, label };
+    }
+
     // Nearest sessions for the panel box: merges concrete weeks 0..2,
     // keeps everything not yet finished, capped at PANEL_LOOKAHEAD_DAYS
     // ahead. Splits into currently-running vs upcoming, both chronological.
@@ -6509,6 +6786,12 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             entry = { status: 'ready', sessions: res.sessions || [], ownerName: res.ownerName || null };
           } else if (res && res.notShared) {
             entry = { status: 'not-shared', sessions: [], ownerName: res.ownerName || null };
+          } else if (res && res.dead) {
+            // USOS rejected the link itself (HTTP 4xx — expired token,
+            // rejected os_id): a fixable configuration problem, not a
+            // transient hiccup. Distinct status → distinct message +
+            // "Podmień link" instead of a useless retry.
+            entry = { status: 'dead', sessions: [], ownerName: null };
           }
         } catch (e) { /* keep error entry */ }
         this._sharedCache[key] = entry;
@@ -7104,8 +7387,15 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           ? `<div class="usospp-empty-hint">Pobieranie planu (${esc(name)})…</div>`
           : `<div class="usospp-empty-hint">Nie udało się pobrać planu — to może być chwilowy błąd USOSa.<br><a data-action="sharedPlanRetry" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div>`;
       }
+      if (hit.status === 'dead') {
+        // Expired token / rejected os_id (HTTP 4xx from USOS). Say exactly
+        // that — "chwilowy błąd" here sent users chasing a USOS outage
+        // that wasn't happening — and offer the fix in place, without
+        // deleting the plan and losing its nickname.
+        return `<div class="usospp-empty-hint"><strong>Link do planu (${esc(name)}) wygasł albo jest nieprawidłowy.</strong><br>Linki udostępnione spod share w USOS działają ok. 14 dni — poproś tę osobę o nowy odnośnik (Plan zajęć → share), a potem podmień go tutaj.<br><div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;"><button class="usospp-btn-primary" data-action="sharedPlanReplaceOpen" data-id="${esc(foreign.id)}">Podmień link…</button><button class="usospp-btn-ghost" data-action="sharedPlanRemove" data-id="${esc(foreign.id)}">Usuń plan z listy</button></div></div>`;
+      }
       if (hit.status === 'not-shared') {
-        return `<div class="usospp-empty-hint"><strong>${esc(hit.ownerName || name)}</strong> nie udostępnia swojego planu zajęć — link wygasł albo wyłączono udostępnianie. Poproś o nowy odnośnik spod share w USOS.<br><a data-action="sharedPlanRetry" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a> · <a data-action="sharedPlanRemove" data-id="${esc(foreign.id)}" style="font-size:12.5px;font-weight:600;cursor:pointer;">Usuń plan</a></div>`;
+        return `<div class="usospp-empty-hint"><strong>${esc(hit.ownerName || name)}</strong> nie udostępnia teraz swojego planu zajęć — wyłączono udostępnianie albo wygasł link. Poproś o nowy odnośnik spod share w USOS.<br><div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;"><button class="usospp-btn-primary" data-action="sharedPlanReplaceOpen" data-id="${esc(foreign.id)}">Podmień link…</button><button class="usospp-btn-ghost" data-action="sharedPlanRemove" data-id="${esc(foreign.id)}">Usuń plan z listy</button></div></div>`;
       }
       if (hit.status !== 'ready') {
         return `<div class="usospp-empty-hint">Nie udało się pobrać planu (${esc(name)}) — to może być chwilowy błąd USOSa.<br><a data-action="sharedPlanRetry" style="font-size:12.5px;font-weight:600;cursor:pointer;">Spróbuj ponownie</a></div>`;
@@ -7119,30 +7409,57 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // "Dodaj plan" modal: paste the shared-plan link (token or os_id), get
     // it validated live on submit, optional nickname. The token itself is
     // never rendered back anywhere (not even in the plan list) — only the
-    // nickname / owner name.
+    // nickname / owner name. With sharedPlanReplaceId set the same modal
+    // runs in "podmień link" mode: the entry is updated in place (nickname
+    // kept, stale cache for that plan invalidated) instead of appended.
     renderSharedPlanAddModal() {
       if (!this.state.sharedPlanAddOpen) return '';
       const err = this.state.sharedPlanAddError;
+      const replacing = this.sharedReplaceTarget();
+      const title = replacing ? 'Podmień link do planu' : 'Dodaj cudzy plan';
+      const intro = replacing
+        ? `<div class="usospp-muted-text" style="font-size:12.5px;margin-bottom:12px;">Zaktualizij odnośnik do planu <strong>${esc(this.sharedPlanDisplayName(replacing))}</strong> — poproś o nowy link w USOS (<strong>Plan zajęć → share</strong>) i wklej go tutaj. Podpis zostaje, plan nie znika z listy.</div>`
+        : `<div class="usospp-muted-text" style="font-size:12.5px;margin-bottom:12px;">Poproś o link do planu: w USOS <strong>Mój USOSweb → Plan zajęć → share</strong> („wyślij komuś ten plan”). Link-token działa ok. 14 dni; na stałe działa też opcja <strong>Preferencje USOSweb → udostępnij wszystkim zalogowanym</strong> + link do profilu osoby.</div>`;
       return `
         <div class="usospp-modal-backdrop" data-action="sharedPlanAddCloseBackdrop">
           <div class="usospp-modal">
             <div class="usospp-modal-head">
-              <div class="usospp-card-title">Dodaj cudzy plan</div>
+              <div class="usospp-card-title">${esc(title)}</div>
               <button class="usospp-icon-btn" data-action="sharedPlanAddClose" title="Zamknij">${icon('close', 15)}</button>
             </div>
-            <div class="usospp-muted-text" style="font-size:12.5px;margin-bottom:12px;">Poproś o link do planu: w USOS <strong>Mój USOSweb → Plan zajęć → share</strong> („wyślij komuś ten plan”). Link-token działa ok. 14 dni; na stałe działa też opcja <strong>Preferencje USOSweb → udostępnij wszystkim zalogowanym</strong> + link do profilu osoby.</div>
-            <div style="font-size:12.5px;font-weight:600;margin-bottom:4px;">Link do planu</div>
+            ${intro}
+            <div style="font-size:12.5px;font-weight:600;margin-bottom:4px;">Nowy link do planu</div>
             <input class="usospp-input" data-sharedplan-url type="url" inputmode="url" placeholder="https://web.usos…/kontroler.php?_action=katalog2/osoby/pokazPlanZajecStudenta&token=…" style="width:100%;margin-bottom:10px;">
             <div style="font-size:12.5px;font-weight:600;margin-bottom:4px;">Podpis (np. Ania) — opcjonalnie</div>
-            <input class="usospp-input" data-sharedplan-name type="text" maxlength="40" placeholder="Jak podpisać ten plan" style="width:100%;margin-bottom:12px;">
+            <input class="usospp-input" data-sharedplan-name type="text" maxlength="40" placeholder="Jak podpisać ten plan" value="${esc(replacing ? (replacing.nickname || replacing.ownerName || '') : '')}" style="width:100%;margin-bottom:12px;">
             ${err ? `<div class="usospp-empty-hint" style="color:#b3402e;">${esc(err)}</div>` : ''}
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
               <button class="usospp-btn-ghost" data-action="sharedPlanAddClose">Anuluj</button>
-              <button class="usospp-btn-ghost" data-action="sharedPlanAddSubmit" style="font-weight:700;">Dodaj plan</button>
+              <button class="usospp-btn-ghost" data-action="sharedPlanAddSubmit" style="font-weight:700;">${replacing ? 'Podmień link' : 'Dodaj plan'}</button>
             </div>
           </div>
         </div>
       `;
+    }
+
+    // The stored plan being link-replaced in the add modal, or null.
+    sharedReplaceTarget() {
+      const id = this.state.sharedPlanReplaceId || null;
+      if (!id) return null;
+      return (this.state.sharedPlans.plans || []).find((p) => p && p.id === id) || null;
+    }
+
+    // Drops every cached week of one foreign plan (all offsets) and any
+    // in-flight load marker for it — needed after a link replacement so
+    // the next render refetches from the NEW link.
+    dropPlanSharedCache(planId) {
+      if (!planId) return;
+      if (!this._sharedCache) this._sharedCache = {};
+      const prefix = `${planId}|`;
+      Object.keys(this._sharedCache).forEach((key) => {
+        if (key.startsWith(prefix)) delete this._sharedCache[key];
+      });
+      if (this._sharedLoadingKey && this._sharedLoadingKey.startsWith(prefix)) this._sharedLoadingKey = null;
     }
 
     // Which plan-sharing mode is on (see adapter.getPlanVisibility).
@@ -7233,7 +7550,11 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
 
     // Live-validates the pasted link (one read-only fetch of the current
     // week) before saving anything — a dead token or a random URL never
-    // lands on the list.
+    // lands on the list. With sharedPlanReplaceId set the validated link
+    // updates an existing plan in place instead of appending a new one
+    // (nickname kept unless the user types a new one; happened-at stamp
+    // remembered; that plan's week cache is dropped so render refetches
+    // from the NEW link).
     async submitSharedPlanAdd() {
       if (this._sharedAdding) return;
       const store = window.USOSPP_SHARED_PLANS;
@@ -7243,12 +7564,22 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       if (!store || !urlInput) { fail('Nie udało się odczytać formularza.'); return; }
       const norm = store.normalizeUrl(urlInput.value);
       if (!norm) { fail('To nie wygląda na link do udostępnionego planu — wklej pełny odnośnik spod share w USOS.'); return; }
+      const replaceId = this.state.sharedPlanReplaceId || null;
       this._sharedAdding = true;
       try {
         const data = await store.getData();
         const dup = (data.plans || []).find((p) => p && p.url === norm.url);
-        if (dup) {
-          this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+        if (replaceId) {
+          // Podmień link mode: every URL collision with a DIFFERENT plan is
+          // a hard fail (silently activating the other plan here would look
+          // like the replacement did nothing). Same-URL-as-its-own is fine —
+          // re-submitting the current link just re-validates.
+          if (dup && dup.id !== replaceId) {
+            fail('Ten link jest już na liście („' + (dup.nickname || this.sharedPlanDisplayName(dup)) + '”) — każdy plan musi mieć własny link.');
+            return;
+          }
+        } else if (dup) {
+          this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null, sharedPlanReplaceId: null });
           await this.persistSharedPlans((d) => ({ ...d, activeId: dup.id }));
           return;
         }
@@ -7265,6 +7596,13 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
         try {
           res = url && adapter && scrape ? await scrape.fetchSharedPlan(adapter, url, mondayIso) : null;
         } catch (e) { res = null; }
+        if (res && res.dead) {
+          // USOS rejected the link itself (4xx): say exactly that instead
+          // of the generic fetch failure — the user asked for a NEW link
+          // precisely because the old one died.
+          fail('Ten link jest niepoprawny albo już wygasł (USOS odrzuca go jako nieprawidłowe żądanie). Skopiuj świeży odnośnik spod „share” w USOS i wklej tutaj.');
+          return;
+        }
         if (!res || (!res.supported && !res.notShared)) {
           fail('Nie udało się pobrać planu spod tego linku — sprawdź go i spróbuj ponownie.');
           return;
@@ -7273,15 +7611,36 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
           fail(`${res.ownerName || 'Ta osoba'} nie udostępnia swojego planu zajęć.`);
           return;
         }
+        const nickname = nameInput ? nameInput.value.trim().slice(0, 40) : '';
+        if (replaceId) {
+          const target = (data.plans || []).find((p) => p && p.id === replaceId);
+          if (!target) { fail('Nie znaleziono planu do podmiany — zamknij i otwórz modal jeszcze raz.'); return; }
+          this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null, sharedPlanReplaceId: null });
+          // Old token cache must not survive the swap: drop every cached
+          // week of this plan so the next render pulls from the new link.
+          this.dropPlanSharedCache(replaceId);
+          await this.persistSharedPlans((d) => ({
+            plans: (d.plans || []).map((p) => (p && p.id === replaceId ? {
+              ...p,
+              kind: norm.kind,
+              url: norm.url,
+              nickname: nickname || p.nickname || p.ownerName || '',
+              ownerName: res.ownerName || p.ownerName || null,
+              replacedAt: Date.now(),
+            } : p)),
+            activeId: replaceId,
+          }));
+          return;
+        }
         const plan = {
           id: store.genId(),
           kind: norm.kind,
           url: norm.url,
-          nickname: nameInput ? nameInput.value.trim().slice(0, 40) : '',
+          nickname,
           ownerName: res.ownerName || null,
           addedAt: Date.now(),
         };
-        this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null });
+        this.setModalState({ sharedPlanAddOpen: false, sharedPlanAddError: null, sharedPlanReplaceId: null });
         await this.persistSharedPlans((d) => ({ plans: [...(d.plans || []), plan], activeId: plan.id }));
       } finally {
         this._sharedAdding = false;
@@ -8737,9 +9096,8 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               <div class="usospp-card-title">Zapisy na przedmioty</div>
               <button class="usospp-btn-ghost" data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dla_stud/rejestracja/kalendarz&usospp_off=1">Twój kalendarz w USOS →</button>
             </div>
-            ${!personal.supported && rounds.length === 0 ? `
-              <div class="usospp-empty-hint">Nie udało się odczytać Twoich rejestracji — sprawdź w klasycznym USOS.</div>
-            ` : `
+            ${personal.supported || rounds.length > 0
+              ? `
               <p class="usospp-muted-text" style="margin-bottom:14px;">
                 ${personal.supported
                   ? 'Twoje tury zapisów z terminami — „przedmioty w turze” otwiera podgląd wewnątrz USOS++. Sam zapis odbywa się w USOSweb.'
@@ -8752,7 +9110,12 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
                 ${capped ? `<div class="usospp-tag-muted" style="display:block;margin-bottom:10px;">Pokazano ${RENDER_CAP} z ${filtered.length} tur (najbliższe terminy). Zawęź filtrem powyżej.</div>` : ''}
                 ${toRender.map((round) => this.renderRegistrationRound(round)).join('')}
               `}
-            `}
+            `
+              : this.data.tier2Pending
+                ? `<div class="usospp-empty-hint">Dociąganie Twoich tur zapisów…</div>`
+                : `
+                  <div class="usospp-empty-hint">Nie udało się odczytać Twoich rejestracji — sprawdź w klasycznym USOS.</div>
+                `}
           </div>
         </div>
       `;
@@ -10053,24 +10416,42 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
       const details = (e.detailsId && this.etapDetails[e.detailsId]) || null;
       const detailsLoading = e.detailsId && !details && !this.data.etapDetailsResultLoaded;
       let body = '';
+      let progressHtml = '';
       if (details) {
         const p = details.punkty || {};
         const sumParts = [
           p.zEtapu !== null && p.zEtapu !== undefined ? `z etapu ${esc(p.zEtapu)}` : null,
           p.zPoprzednich !== null && p.zPoprzednich !== undefined ? `z poprzednich ${esc(p.zPoprzednich)}` : null,
         ].filter(Boolean);
+        // Punkty uzyskane na tym etapie (razem, fallback zEtapu + zPoprzednich).
+        const gainedRaw = p.razem != null ? p.razem :
+          ((p.zEtapu != null ? parseFloat(p.zEtapu) : 0) + (p.zPoprzednich != null ? parseFloat(p.zPoprzednich) : 0));
+        const gained = parseFloat(gainedRaw);
+        // Poprawna polska odmiana: 1 punkt / 2 punkty / 5 punktów.
+        const ptsWord = (n) => {
+          if (n === 1) return 'punkt';
+          const u10 = n % 10;
+          const u100 = n % 100;
+          return (u10 >= 2 && u10 <= 4 && !(u100 >= 12 && u100 <= 14)) ? 'punkty' : 'punktów';
+        };
+        // "wymagane X pkt" — tylko punkty, bez statusu (spełnione/niespełnione).
         const reqLine = (label, req) => req ? `
-          <div style="font-size:12.5px;margin-top:4px;">${esc(label)}: wymagane <strong>${esc(req.wymagane || '—')}</strong> ${req.status ? `— ${esc(req.status)}` : ''}</div>` : '';
-        const missingLine = (label, items) => items.length ? `
-          <div style="font-size:12.5px;margin-top:4px;">${esc(label)}: ${items.map((i) => esc(i)).join('; ')}</div>` : '';
+          <div style="font-size:12.5px;margin-top:4px;">${esc(label)}: wymagane <strong>${esc(req.wymagane || '—')}</strong> pkt</div>` : '';
+        // "brakuje X punktów ECTS" — liczba punktów, nie lista przedmiotów.
+        const missingPts = (label, req) => {
+          const required = req ? parseFloat(req.wymagane) : NaN;
+          if (Number.isNaN(required) || Number.isNaN(gained)) return '';
+          const missing = Math.max(0, required - gained);
+          return missing > 0 ? `
+          <div style="font-size:12.5px;margin-top:4px;">${esc(label)}: <strong>${missing}</strong> ${ptsWord(missing)} ECTS</div>` : '';
+        };
         const reqs = Array.isArray(details.wymagania) ? details.wymagania : [];
-        const pod = details.podsumowanie || {};
         body = `
           <div style="font-size:12.5px;margin-top:8px;">Punkty: <strong>${esc(p.razem ?? '—')}</strong>${sumParts.length ? ` (${sumParts.join(' + ')})` : ''}</div>
           ${reqLine('Zaliczenie warunkowe', p.warunkowe)}
           ${reqLine('Zaliczenie pełne', p.pelne)}
-          ${missingLine('Do warunkowego brakuje', pod.brakujeWarunkowe || [])}
-          ${missingLine('Do pełnego brakuje', pod.brakujePelne || [])}
+          ${missingPts('Do warunkowego brakuje', p.warunkowe)}
+          ${missingPts('Do pełnego brakuje', p.pelne)}
           ${reqs.length ? `
           <details class="usospp-disclosure">
             <summary>Wymagania przedmiotowe (${reqs.length})</summary>
@@ -10082,6 +10463,31 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
               </div>`).join('')}
             </div>
           </details>` : ''}`;
+        // Progress ring for this single stage (positive = uzyskane, critical = pozostałość do wymaganych).
+        const reqRaw = (p.pelne && p.pelne.wymagane != null) ? p.pelne.wymagane :
+          (p.warunkowe && p.warunkowe.wymagane != null ? p.warunkowe.wymagane : null);
+        const req = parseFloat(reqRaw);
+        if (!Number.isNaN(gained) && !Number.isNaN(req) && req > 0) {
+          const pct = Math.min(100, Math.max(0, Math.round((gained / req) * 100)));
+          // Chip "Warunkowe ✓" pod ringiem, gdy punkty na zaliczenie warunkowe
+          // są już uzbierane (warunkowe ≤ pełne, więc nie ma ścieżki, w której
+          // chip pokazuje się fałszywie); bez danych warunkowych — brak chipu.
+          const condOk = p.warunkowe && p.warunkowe.wymagane != null &&
+            !Number.isNaN(gained) && gained >= parseFloat(p.warunkowe.wymagane);
+          progressHtml = `
+            <div class="usospp-etap-ring-wrap">
+              <div class="usospp-etap-ring-col">
+                <div class="usospp-etap-ring" style="--p:${pct};" role="img" aria-label="Postęp etapu: ${gained} z ${req} pkt (${pct}%)${condOk ? ' · warunkowe spełnione' : ''}">
+                  <span>
+                    <div class="usospp-etap-ring-val">${gained} / ${req}</div>
+                    <div class="usospp-etap-ring-sub">pkt</div>
+                  </span>
+                </div>
+                ${condOk ? `<div class="usospp-badge usospp-badge-positive">Warunkowe ✓</div>` : ''}
+              </div>
+            </div>
+          `;
+        }
       } else if (detailsLoading) {
         body = `<div class="usospp-empty-hint" style="margin-top:8px;">Dociąganie szczegółów etapu…</div>`;
       }
@@ -10095,7 +10501,12 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             </div>
             <div class="usospp-badge" style="background:var(--bg-subtle);color:var(--ink-2);flex-shrink:0;">${esc(e.status || '—')}</div>
           </div>
-          ${body}
+          ${details ? `
+            <div class="usospp-etap-card-body">
+              <div class="usospp-etap-card-left">${body}</div>
+              <div class="usospp-etap-card-right">${progressHtml}</div>
+            </div>
+          ` : body}
         </div>`;
     }
 
@@ -10122,6 +10533,35 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">${esc(program)}</div>
           </div>`).join('')}
         </div>`;
+    }
+
+    // Agreguje postęp zaliczeń po WSZystkich etapach: suma uzyskanych punktów
+    // (punkty.razem, fallback zEtapu+zPoprzednich) i suma wymaganych
+    // (punkty.pelne.wymagane, fallback warunkowe.wymagane). Zwraca null gdy
+    // brak danych do wyświetlenia.
+    ectsProgress() {
+      let uzyskane = 0;
+      let wymagane = 0;
+      let count = 0;
+      this.etapy.forEach((e) => {
+        const d = e.detailsId && this.etapDetails[e.detailsId];
+        if (!d) return;
+        const p = d.punkty || {};
+        const gainedRaw = p.razem != null ? p.razem :
+          ((p.zEtapu != null ? parseFloat(p.zEtapu) : 0) + (p.zPoprzednich != null ? parseFloat(p.zPoprzednich) : 0));
+        const gained = parseFloat(gainedRaw);
+        const reqRaw = (p.pelne && p.pelne.wymagane != null) ? p.pelne.wymagane :
+          (p.warunkowe && p.warunkowe.wymagane != null ? p.warunkowe.wymagane : null);
+        const req = parseFloat(reqRaw);
+        if (!Number.isNaN(gained) && !Number.isNaN(req) && req > 0) {
+          uzyskane += gained;
+          wymagane += req;
+          count++;
+        }
+      });
+      if (count === 0) return null;
+      const pct = wymagane > 0 ? Math.min(100, Math.max(0, Math.round((uzyskane / wymagane) * 100))) : 0;
+      return { uzyskane, wymagane, pct, count };
     }
 
     renderEcts() {
@@ -10185,6 +10625,10 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // scraping.js's PATHS.platnosci* comment for why "rozliczone" specifically
     // is folded away rather than shown as its own section here.
     renderPlatnosci() {
+      // Tier-2-only view: don't flash "wszystko opłacone" while the pass is
+      // in flight — a bogus all-clear is worse than an honest loading line.
+      const gate = this.tier2PendingView();
+      if (gate) return gate;
       const p = this.data.paymentsResult || {};
       const unpaid = p.unpaid || { groups: [] };
       const installments = p.installments || { groups: [] };
@@ -10244,6 +10688,9 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     // Shared shell for the four small "Moje studia" list pages — each is
     // just adapter.genericInfoTable's rows in one card, or an empty hint.
     renderInfoTableView(result, emptyText) {
+      // Tier-2-only view: don't flash the empty hint while the pass is in flight.
+      const gate = this.tier2PendingView();
+      if (gate) return gate;
       const rows = (result && Array.isArray(result.rows)) ? result.rows : [];
       return `
         <div class="usospp-view">
@@ -10261,7 +10708,76 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
     }
 
     renderSprawdziany() {
-      return this.renderInfoTableView(this.data.testsResult, 'Nie jesteś zapisany na żadne zajęcia lub żaden z prowadzących nie zdefiniował elektronicznych zasad rozliczania swojego przedmiotu.');
+      const t = this.data.testsResult || {};
+      // Tier-2-only view: don't flash the error/empty card while the pass is in flight.
+      const gate = this.tier2PendingView();
+      if (gate) return gate;
+      const rows = Array.isArray(t.rows) ? t.rows : [];
+      const details = this.data.testDetailsResult || {};
+      const byWezId = details.byWezId || {};
+      const expanded = this.state.expandedTestWezIds || new Set();
+
+      const renderTestTree = (node, depth = 0) => {
+        const pad = depth * 16;
+        const childrenHtml = node.children && node.children.length
+          ? `<div class="usospp-test-tree-children">${node.children.map((c) => renderTestTree(c, depth + 1)).join('')}</div>`
+          : '';
+        const label = node.nazwa || '';
+        const labelHtml = node.wezId
+          ? `<a data-action="openUsos" data-url="${esc(location.origin)}/kontroler.php?_action=dla_prac/sprawdziany/statystyki&wez_id=${esc(node.wezId)}&student=1" class="usospp-test-tree-link">${esc(label)}</a>`
+          : `<span class="usospp-test-tree-label">${esc(label)}</span>`;
+        return `
+          <div class="usospp-test-tree-row" style="padding-left:${pad}px;">
+            ${labelHtml}
+            ${node.maxPkt ? `<span class="usospp-test-tree-max">${esc(node.maxPkt)} pkt</span>` : ''}
+            <span class="usospp-test-tree-wynik">${esc(node.wynik || '—')}</span>
+          </div>
+          ${childrenHtml}
+        `;
+      };
+
+      return `
+        <div class="usospp-view">
+          <div class="usospp-card">
+            <div class="usospp-card-head">
+              <div class="usospp-card-title">Sprawdziany</div>
+            </div>
+            ${!t.supported
+              ? `<div class="usospp-empty-hint">Nie udało się odczytać sprawdzianów ze strony USOS.</div>`
+              : rows.length === 0
+                ? `<div class="usospp-empty-hint">Nie jesteś zapisany na żadne zajęcia lub żaden z prowadzących nie zdefiniował elektronicznych zasad rozliczania swojego przedmiotu.</div>`
+                : `
+                  ${rows.map((row) => {
+                    const f = row.fields || {};
+                    const det = row.wezId ? byWezId[row.wezId] : null;
+                    const isExpanded = row.wezId ? expanded.has(row.wezId) : false;
+                    const przedmiot = f['Przedmiot'] || '';
+                    const kod = f['Kod przedmiotu'] || '';
+                    const prowadzacy = f['Prowadzący'] || '';
+                    const semestr = det?.semestr || '';
+                    const grupa = det?.grupa || '';
+                    const treeHtml = det?.tree?.length
+                      ? `<div class="usospp-test-tree">${det.tree.map((n) => renderTestTree(n)).join('')}</div>`
+                      : `<div class="usospp-empty-hint" style="padding:8px 0;">Brak szczegółów rozliczania.</div>`;
+                    return `
+                      <div class="usospp-card usospp-test-card" style="margin-top:12px;">
+                        <div class="usospp-card-head" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;" data-action="toggleTestDetails" data-wez-id="${esc(row.wezId || '')}">
+                          <div>
+                            <div style="font-weight:600;">${esc(przedmiot)}${kod ? ` <span class="usospp-muted-text">(${esc(kod)})</span>` : ''}</div>
+                            <div style="font-size:12.5px;color:var(--ink-3);">${prowadzacy}${semestr ? ` · ${esc(semestr)}` : ''}${grupa ? ` · grupa ${esc(grupa)}` : ''}</div>
+                          </div>
+                          <span class="usospp-test-toggle" style="font-size:12px;color:var(--ink-3);margin-left:auto;">
+                            ${isExpanded ? '▾' : '▸'}
+                          </span>
+                        </div>
+                        ${isExpanded ? `<div class="usospp-card-body">${treeHtml}</div>` : ''}
+                      </div>
+                    `;
+                  }).join('')}
+                `}
+          </div>
+        </div>
+      `;
     }
 
     renderPodania() {
@@ -10519,6 +11035,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
             keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–9 do przełączania sekcji w USOS++'],
             autorefresh: ['Automatyczne odświeżanie danych', 'Dane odświeżają się bez przeładowania strony'],
             gradeBadge: ['Odznaka średniej na ikonie', 'Aktualizuje się, gdy panel USOS++ jest włączony'],
+            lessonProgressBar: ['Pasek postępu lekcji', 'Dolna ramka topbara pokazuje postęp trwających zajęć'],
           },
         },
         {
@@ -10563,6 +11080,15 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
                   <button class="usospp-mode-btn ${dark ? 'active' : ''}" data-action="setDark" data-value="true">☾ Ciemny</button>
                 </div>
               </div>
+
+              <div class="usospp-card">
+                <div class="usospp-card-title" style="margin-bottom:6px;">Pomoc</div>
+                <div class="usospp-muted-text" style="margin-bottom:16px;">Coś nie działa? Najszybciej zgłosisz błąd przez formularz w menu rozszerzenia (ikona USOS++ na pasku → Zgłoś błąd) — dołączy też diagnostykę techniczną.</div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                  <a class="usospp-btn-ghost" href="${esc(feedbackIssueHref())}" target="_blank" rel="noopener">Zgłoś na GitHubie →</a>
+                  <a class="usospp-btn-ghost" href="${esc(feedbackMailHref())}">Zgłoś mailem →</a>
+                </div>
+              </div>
             </div>
 
             <div style="display:flex;flex-direction:column;gap:20px;">
@@ -10593,6 +11119,7 @@ this.setPlannerState((s) => ({ plannerGroupsCache: { ...s.plannerGroupsCache, [g
   window.USOSPP_APP = {
     mount(root, data, settings) {
       const app = new App(root, data, settings);
+      tickerApp = app;
       app.render();
       return app;
     },

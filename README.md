@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-beta-orange)](#status)
 
-🌐 [Strona / projekt](https://github.com/zuukie/USOSPlus) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOSPlus)
+🌐 [Strona](https://usosplus.pl) · 🧩 [Wtyczka](https://chromewebstore.google.com/detail/usos++/bgpdopiplkcmfkpmgjmbdpdfjcpjpkoa) · 📸 [Instagram](https://instagram.com/usosplus) · 💻 [GitHub](https://github.com/zuukie/USOSPlus)
 
 </div>
 
@@ -68,7 +68,7 @@ Większe zmiany warto najpierw przedyskutować w [Issues](https://github.com/zuu
 
 ## Issues / Zgłaszanie błędów
 
-Znalazłeś błąd albo masz pomysł na nową funkcję? Zgłoś go w zakładce [Issues](https://github.com/zuukie/USOSPlus/issues) — postaraj się opisać kroki do odtworzenia problemu i (jeśli to możliwe) dodać zrzut ekranu.
+Znalazłeś błąd albo masz pomysł na nową funkcję? Najszybciej: kliknij ikonę USOS++ na pasku przeglądarki → **Zgłoś błąd** (formularz jest też w Ustawieniach panelu) — dołączy diagnostykę techniczną, a treść wyślesz sam(a) przez GitHub lub e-mail. Możesz też zgłosić go wprost w zakładce [Issues](https://github.com/zuukie/USOSPlus/issues) — postaraj się opisać kroki do odtworzenia problemu i (jeśli to możliwe) dodać zrzut ekranu.
 
 ## License
 

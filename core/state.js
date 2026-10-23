@@ -18,6 +18,7 @@ export const DEFAULT_STATE = {
     gradeBadge: true,
     keyboardNav: false,
     classicWidgets: true,
+    lessonProgressBar: true,
   },
 };
 

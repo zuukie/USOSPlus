@@ -13,6 +13,15 @@
   let autorefreshTimer = null;
   let currentSettings = null;
   let cachedLogoutUrl = null;
+  // Autorefresh bookkeeping (see applyIndependentFeatures + the
+  // visibilitychange wiring): ticks since the last full collection, when the
+  // last full collection completed, and how many light ticks separate two
+  // full ones. One full collection every FULL_EVERY ticks ≈ six minutes;
+  // everything in between is the two-page light tick.
+  let autorefreshTick = 0;
+  let lastFullCollectionAt = 0;
+  const AUTOREFRESH_FULL_EVERY = 3;
+  const AUTOREFRESH_OK_DELAY_MS = 7 * 60 * 1000;
 
   // Sticky per-tab "stay native" flag. ?usospp_off=1 used to bypass only the
   // single page load carrying it — clicking anywhere onward (or reloading)
@@ -103,6 +112,11 @@
     container.id = 'usospp-container';
     document.body.appendChild(container);
     container.addEventListener('usospp:settings', onAppSettingsEvent);
+    // app.js's tier-2-landed notice (usospp:tier2) fires whenever a tier-2
+    // pass (mount's idle pass, a restore's refresh pass, an autorefresh
+    // force pass) completes — the one moment the data model is complete
+    // enough to freeze for the next reload. See saveSnapshot below.
+    container.addEventListener('usospp:tier2', () => { if (app) saveSnapshot(app.data); });
     return container;
   }
 
@@ -132,6 +146,77 @@
       if (toggleFeature === 'gradeBadge' && app) maybeUpdateBadge(app.data);
     }
     if (rescrape) refreshData();
+  }
+
+  // ---- data snapshot (Stale-While-Revalidate across reloads) -------------
+  // A reload of the same tab used to cold-start the whole panel: ~6 fetches +
+  // parses before first paint, 17 before Płatności had data. The data model
+  // is plain JSON (built entirely by scrapers/adapters — no DOM nodes, no
+  // functions), so the last complete model is frozen into sessionStorage and
+  // the next mount renders from it immediately while a fresh collection (the
+  // same SWR cycle the autorefresh tick uses: re-scrape tier 1, carry tier 2,
+  // force pass on land) replaces it in the background. sessionStorage was
+  // chosen deliberately: per-tab, dies with the tab, survives an F5 — the
+  // exact scope where "the panel I was just looking at" is the honest
+  // expectation, and where a cold start is the only way to lose it.
+  //
+  // Privacy bound: the snapshot holds the same values the panel already
+  // displays (grades, payments, rounds) and never leaves the origin — USOS++
+  // sends nothing anywhere (see the privacy promise in the report form), so
+  // sessionStorage adds no new exfiltration surface. One accepted exposure:
+  // if two different users log into USOSweb in the same tab, the reload in
+  // between can paint the previous user's rows for the second or two until
+  // the background collection swaps in — the login-expiry path (isLoggedOut
+  // → collectAnon) never reads the snapshot, and unmountRedesign clears it,
+  // so the only bridge is a same-tab cookie handover, which matches what
+  // classic USOS itself serves on a plain F5.
+
+  const SNAPSHOT_KEY = 'usospp:data-snapshot-v1';
+
+  function saveSnapshot(data) {
+    try {
+      if (!data || !data.user || data.loggedOut || data.tier2Loaded !== true) return;
+      // Copy before scrubbing: app.data must keep its in-flight markers
+      // (examsPromise/tier2Promise) functioning for THIS session's dedupe.
+      const copy = { ...data };
+      delete copy.examsPromise;
+      delete copy.tier2Promise;
+      delete copy.perf; // last full collection's timings — stale by reload time
+      sessionStorage.setItem(SNAPSHOT_KEY, JSON.stringify(copy));
+    } catch (e) {
+      // QuotaError and friends — the snapshot is an optimization, never a
+      // dependency: completing without it is exactly how the panel already
+      // worked.
+    }
+  }
+
+  function readSnapshot() {
+    try {
+      const raw = sessionStorage.getItem(SNAPSHOT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      // Shape gate, not a schema audit: a complete-enough personal model —
+      // user resolved, tier-2 pass landed, and the two sections the shell
+      // always renders from present. Anything odd parses out to null and a
+      // cold start happens.
+      if (parsed
+        && typeof parsed === 'object'
+        && parsed.loggedOut !== true
+        && parsed.user && typeof parsed.user === 'object'
+        && parsed.tier2Loaded === true
+        && parsed.gradesResult
+        && parsed.newsResult) return parsed;
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function clearSnapshot() {
+    // No try/catch needed for removeItem, but the whole feature is one
+    // try/catch envelope deeper anyway — keep every touch defensive so a
+    // storage-disabled document (private-mode edge cases) can't kill mount.
+    try { sessionStorage.removeItem(SNAPSHOT_KEY); } catch (e) { /* noop */ }
   }
 
   async function refreshData() {
@@ -171,10 +256,27 @@
     if (app.data && app.data.groupDetails && !data.groupDetails) {
       data.groupDetails = app.data.groupDetails;
     }
+    // Same ride for tier-2 results (stale-while-revalidate): collectAll now
+    // fetches only the six pages blocking first paint, so without this the
+    // tick would blank Płatności/Zapisy's underlying data for the second or
+    // two until the fresh tier-2 force pass lands below (visible as a
+    // payment-dot flicker in the sidebar). Old values render immediately;
+    // the scheduled force pass replaces them when it lands.
+    if (app.data && app.data.tier2Loaded && window.USOSPP_SCRAPE.TIER2_KEYS) {
+      window.USOSPP_SCRAPE.TIER2_KEYS.forEach((key) => {
+        if (app.data[key] !== undefined) data[key] = app.data[key];
+      });
+      data.tier2Loaded = true;
+      data.tier2Pending = false;
+    }
     app.data = data;
     app.render();
     app.checkNewsUpdate();
     maybeUpdateBadge(data);
+    // Tier 2: the tick re-scraped only tier-1 pages — schedule a force pass
+    // so payments/zapisy/moje-studia get fresh values too (re-render on
+    // land, still no flicker thanks to the carry above).
+    app.scheduleTier2(true);
     // Race cover: the tick landed mid-fetch (the promise mutated the
     // already-replaced object) or the roster never loaded at all — an open
     // plan modal would sit on its loading state forever, so re-kick the
@@ -183,6 +285,41 @@
       && typeof app.ensureParticipantsResult === 'function') {
       app.ensureParticipantsResult(() => app.setModalState({}));
     }
+    lastFullCollectionAt = Date.now();
+  }
+
+  // The light tick between full collections — oceny + news ONLY (2 fetches),
+  // the two things background freshness actually protects: the extension
+  // badge average and the Aktualności dot. Everything else (plan unchanged
+  // mid-session, payments shift far less often than a lily pad) can wait for
+  // the full tick or a view entry's eager kicks. Success-only assignment:
+  // a failed/sparse page reads keeps the previous values rendering (same
+  // stale-while-revalidate stance as the tier-2 carry), and the next full
+  // pass re-verdicts. Not routed through scraping's collection chain — it's
+  // 2 fetches that a concurrent full collection must tolerate (their
+  // non-503 counts can only err a maintenance verdict toward "not down",
+  // same as a user-typed search already could).
+  async function refreshDataLight() {
+    const scrape = window.USOSPP_SCRAPE;
+    const adapter = selectAdapter();
+    if (!app || !scrape || !adapter || !app.data) return;
+    if (document.hidden) return;
+    try {
+      const [gradesDoc, newsResult] = await Promise.all([
+        scrape.fetchDoc(scrape.PATHS.oceny),
+        scrape.refreshNews(adapter),
+      ]);
+      if (gradesDoc) {
+        try {
+          const gradesResult = adapter.getGrades(gradesDoc);
+          if (gradesResult && gradesResult.supported) app.data.gradesResult = gradesResult;
+        } catch (e) { /* keep previous gradesResult */ }
+      }
+      if (newsResult && newsResult.supported) app.data.newsResult = newsResult;
+      app.render();
+      app.checkNewsUpdate();
+      maybeUpdateBadge(app.data);
+    } catch (e) { /* a light tick is never worth an unhandled rejection */ }
   }
 
   function clearBadge() {
@@ -272,16 +409,45 @@
       maybeUpdateBadge(data);
       return;
     }
+    // Stale-While-Revalidate on reload: the sessionStorage snapshot of the
+    // last complete data model first paints the panel instantly, while the
+    // same SWR cycle the autorefresh tick runs (collect tier 1, carry tier 2,
+    // force pass on land) replaces it in the background. Only reached while
+    // actually logged in — the isLoggedOut branch above never consults it —
+    // and cleared whenever the redesign unmounts, so an explicit disable or
+    // a login-expiry swap can't serve a stale model on the next mount.
+    const snapshot = readSnapshot();
+    if (snapshot) {
+      app = window.USOSPP_APP.mount(el, snapshot, { darkMode: currentSettings.darkMode, features: currentSettings.features });
+      // Freshness pass in the background (not awaited — nothing below the
+      // mount depends on it); scheduleTier2 doubles as the safety kick in
+      // case the pass bails early (e.g. maintenance unmount).
+      refreshData();
+      app.scheduleTier2();
+      maybeUpdateBadge(app.data);
+      return;
+    }
     const data = await collectAll(adapter);
     if (data.maintenance) {
       mountMaintenanceNotice();
       return;
     }
     app = window.USOSPP_APP.mount(el, data, { darkMode: currentSettings.darkMode, features: currentSettings.features });
+    // Tier 2 (payments×5, kalendarz, zapisy hub, moje-studia) rides off the
+    // critical path: schedule its pass for idle time, not for mount — see
+    // app.js's scheduleTier2. Eager kicks still catch a user who gets
+    // there before idle fires. (No snapshot save here — the usospp:tier2
+    // listener writes one only after the pass lands, in inject.)
+    app.scheduleTier2();
     maybeUpdateBadge(data);
+    lastFullCollectionAt = Date.now();
   }
 
   function unmountRedesign() {
+    // The panel is gone — so is the tab's claim to a "recently open" data
+    // model: the next mount starts cold instead of serving a stale snapshot
+    // from a session the user explicitly ended.
+    clearSnapshot();
     clearBadge();
     if (app) {
       app.destroy();
@@ -1473,12 +1639,36 @@
     else document.removeEventListener('keydown', onKeydown);
 
     if (settings.enabled && settings.features.autorefresh) {
-      if (!autorefreshTimer) autorefreshTimer = setInterval(refreshData, 120000);
+      if (!autorefreshTimer) {
+        // Tick discipline: every 3rd tick (~6 min) a full collection, the
+        // rest light ticks (oceny + news, 2 fetches) — see refreshDataLight.
+        // Hidden tabs untouched: the tick handler no-ops on document.hidden,
+        // so spreading the deadline on return is the visibilitychange
+        // wiring below, not phantom refresh storms in a suppressed tab.
+        autorefreshTimer = setInterval(() => {
+          if (document.hidden) return;
+          autorefreshTick++;
+          if (autorefreshTick % AUTOREFRESH_FULL_EVERY === 0) refreshData();
+          else refreshDataLight();
+        }, 120000);
+      }
     } else if (autorefreshTimer) {
       clearInterval(autorefreshTimer);
       autorefreshTimer = null;
     }
   }
+
+  // Coming back to a tab whose ticks all no-op'd while hidden: refresh right
+  // away rather than waiting out the remainder of the two-minute slot. Long
+  // absences (more than one slot past the last full collection) go straight
+  // to a full collection; short ones take the light tick. Gated on
+  // autorefreshTimer so both the feature switch and mid-session unmount
+  // mean "no passive refreshes".
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !autorefreshTimer || !app) return;
+    if (Date.now() - lastFullCollectionAt > AUTOREFRESH_OK_DELAY_MS) refreshData();
+    else refreshDataLight();
+  });
 
   // A whole-extension kill switch, distinct from `enabled` (which only
   // toggles the full-page panel) — see popup.js's danger zone. When

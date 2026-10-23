@@ -9,6 +9,7 @@ const FEATURE_GROUPS = [
       keyboardNav: ['Nawigacja klawiaturą', 'Skróty 1–9 do przełączania sekcji w USOS++'],
       autorefresh: ['Automatyczne odświeżanie danych', 'Dane odświeżają się bez przeładowania strony'],
       gradeBadge: ['Odznaka średniej na ikonie', 'Aktualizuje się, gdy USOS++ jest włączony'],
+      lessonProgressBar: ['Pasek postępu lekcji', 'Dolna ramka topbara pokazuje postęp trwających zajęć'],
     },
   },
   {
@@ -123,6 +124,19 @@ let actionErrorRetry = 'addUniversity';
 // otherwise retrying "quick" finds no tile and silently does nothing.
 let actionErrorRetryView = null;
 
+// Zgłaszanie błędów: formularz w popupie BEZ backendu. Klik buduje gotową
+// treść i otwiera GitHub Issues / mailto / schowek — nic nie wysyła się samo
+// (patrz PRIVACY.md: rozszerzenie nie wysyła danych na żaden serwer).
+const FEEDBACK_ISSUES_URL = 'https://github.com/zuukie/USOSPlus/issues/new';
+const FEEDBACK_EMAIL = 'usosplus@zuukie.dev';
+const FEEDBACK_CATEGORIES = ['Plan', 'Oceny', 'Egzaminy', 'Zapisy', 'Planer', 'Studenci', 'Mapa', 'IRK', 'Inne'];
+let feedbackCategory = 'Inne';
+let feedbackDesc = '';
+let feedbackSteps = '';
+let feedbackIncludeDiag = true;
+let feedbackCopied = false;
+let feedbackError = null;
+
 function originPatternFor(url) {
   try {
     const u = new URL(url);
@@ -223,6 +237,79 @@ function nextSessionSub(ns) {
   return bits.join(' · ') || 'szczegóły w Planie';
 }
 
+function feedbackDiagnostics() {
+  // Tylko techniczne, nieosobowe: wersja, platforma, host, flagi. Bez ocen,
+  // planu szczegółowego, nazwisk i treści wiadomości — użytkownik widzi ten
+  // blok w podglądzie formularza przed wysyłką.
+  let version = '';
+  try {
+    version = chrome.runtime.getManifest().version || '';
+  } catch (e) { /* popup must not die over a version string */ }
+  let host = '';
+  try {
+    host = tab && tab.url ? new URL(tab.url).hostname : '';
+  } catch (e) { host = ''; }
+  const platform = tab && looksLikeIrk ? 'irk' : tab && looksLikeUsos ? 'usos' : 'unknown';
+  const onFeatures = Object.keys(state.features || {}).filter((k) => state.features[k]);
+  return [
+    `Wersja: ${version || '—'}`,
+    `Platforma: ${platform}${host ? ` (${host})` : ''}`,
+    `Panel USOS: ${state.enabled ? 'wł.' : 'wył.'} · Panel IRK: ${state.irkEnabled ? 'wł.' : 'wył.'} · Tryb ciemny: ${state.darkMode ? 'wł.' : 'wył.'}`,
+    `Funkcje wł.: ${onFeatures.length ? onFeatures.join(', ') : '—'}`,
+    snapshot ? `Dane: ${snapshot.planEventCount || 0} poz. w planie · ${snapshot.examCount || 0} egzaminów` : null,
+  ].filter(Boolean).join('\n');
+}
+
+function buildFeedbackTitle() {
+  return `[Błąd/${feedbackCategory}] `;
+}
+
+function buildFeedbackBody() {
+  const parts = [
+    `**Kategoria:** ${feedbackCategory}`,
+    '',
+    '**Opis:**',
+    feedbackDesc.trim() || '—',
+  ];
+  if (feedbackSteps.trim()) {
+    parts.push('', '**Kroki do odtworzenia:**', feedbackSteps.trim());
+  }
+  if (feedbackIncludeDiag) {
+    parts.push('', '**Diagnostyka:**', '```', feedbackDiagnostics(), '```');
+  }
+  return parts.join('\n');
+}
+
+function buildIssueUrl() {
+  // GitHub issues/new przyjmuje title+body w query — za długi opis mógłby
+  // uciąć URL, więc diagnostykę tnij najpierw (opis zawsze cały).
+  let body = buildFeedbackBody();
+  let url = `${FEEDBACK_ISSUES_URL}?title=${encodeURIComponent(buildFeedbackTitle())}&body=${encodeURIComponent(body)}`;
+  if (url.length > 7000 && feedbackIncludeDiag) {
+    body = buildFeedbackBodyWithoutDiag();
+    url = `${FEEDBACK_ISSUES_URL}?title=${encodeURIComponent(buildFeedbackTitle())}&body=${encodeURIComponent(body)}`;
+  }
+  return url;
+}
+
+function buildFeedbackBodyWithoutDiag() {
+  const parts = [
+    `**Kategoria:** ${feedbackCategory}`,
+    '',
+    '**Opis:**',
+    feedbackDesc.trim() || '—',
+  ];
+  if (feedbackSteps.trim()) {
+    parts.push('', '**Kroki do odtworzenia:**', feedbackSteps.trim());
+  }
+  return parts.join('\n');
+}
+
+function buildMailtoUrl() {
+  const subject = encodeURIComponent(`USOS++ — błąd (${feedbackCategory})`);
+  return `mailto:${FEEDBACK_EMAIL}?subject=${subject}&body=${encodeURIComponent(buildFeedbackBody())}`;
+}
+
 function render() {
   const dark = state.darkMode;
   // The bounce area paints from <html>, outside .pp-root's theme scope
@@ -232,10 +319,11 @@ function render() {
   // FEATURE_GROUPS, so an IRK-looking tab always gets its own small
   // header+body instead of being routed through view === 'features'.
   const irkView = !!(tab && looksLikeIrk);
+  const feedbackView = view === 'feedback';
   appEl.innerHTML = `
     <div class="pp-root" data-theme="${dark ? 'dark' : 'light'}">
-      ${view === 'features' ? renderFeaturesHeader() : view === 'about' ? renderAboutHeader() : irkView ? renderIrkHeader() : renderMainHeader()}
-      ${view === 'features' ? renderFeaturesBody() : view === 'about' ? renderAboutBody() : irkView ? renderIrkBody() : renderMainBody()}
+      ${view === 'features' ? renderFeaturesHeader() : view === 'about' ? renderAboutHeader() : feedbackView ? renderFeedbackHeader() : irkView ? renderIrkHeader() : renderMainHeader()}
+      ${view === 'features' ? renderFeaturesBody() : view === 'about' ? renderAboutBody() : feedbackView ? renderFeedbackBody() : irkView ? renderIrkBody() : renderMainBody()}
       ${renderFooter()}
     </div>
   `;
@@ -324,6 +412,69 @@ function renderAboutBody() {
         </div>
       </div>
       <div class="pp-empty">Przełączniki funkcji znajdziesz w „Zarządzaj funkcjami", tryb ciemny w stopce poniżej.</div>
+      <div class="pp-manage-row" data-action="goFeedback">
+        <span>Zgłoś błąd</span>
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="var(--ink-3)" stroke-width="2"><path d="M7.5 5l5.5 5-5.5 5"></path></svg>
+      </div>
+    </div>
+  `;
+}
+
+// Formularz zgłoszenia błędu (widok popupu, bez backendu — patrz stałe
+// FEEDBACK_* u góry). Pola żyją w modułowych `feedback*` powyżej, więc tekst
+// nie ginie przy przerysowaniu (np. po przełączeniu trybu ciemnego).
+function renderFeedbackHeader() {
+  return `
+    <div class="pp-header">
+      <div class="pp-back" data-action="goMain">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--ink)" stroke-width="1.8"><path d="M12.5 5L7 10l5.5 5"></path></svg>
+        <div class="pp-back-title">Zgłoś błąd</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderFeedbackBody() {
+  const descOk = feedbackDesc.trim().length >= 10;
+  return `
+    <div class="pp-body">
+      <div class="pp-empty">Opisz, co nie działa — treść wyślesz sam(a) przez GitHub lub e-mail. Nic nie wysyła się automatycznie.</div>
+      ${feedbackError ? `
+        <div class="pp-unsupported-banner">
+          <span>⚠️</span>
+          <div>${esc(feedbackError)}</div>
+        </div>
+      ` : ''}
+      <div>
+        <div class="pp-section-heading">Co nie działa?</div>
+        <select class="pp-feedback-select" data-feedback-field="category">
+          ${FEEDBACK_CATEGORIES.map((c) => `<option value="${esc(c)}"${c === feedbackCategory ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <div class="pp-section-heading">Opis (min. 10 znaków)</div>
+        <textarea class="pp-feedback-textarea" rows="4" placeholder="np. Plan pokazuje puste okno po wejściu w tryb Dynamiczny…" data-feedback-field="desc">${esc(feedbackDesc)}</textarea>
+      </div>
+      <div>
+        <div class="pp-section-heading">Kroki do odtworzenia (opcjonalnie)</div>
+        <textarea class="pp-feedback-textarea" rows="3" placeholder="1. Wejdź w Plan  2. Przełącz na Dynamiczny…" data-feedback-field="steps">${esc(feedbackSteps)}</textarea>
+      </div>
+      <div class="pp-feedback-diag-row" data-action="toggleFeedbackDiag">
+        <div class="pp-switch ${feedbackIncludeDiag ? 'on' : ''}"><div class="pp-switch-knob"></div></div>
+        <div>
+          <div class="pp-feature-label">Dołącz diagnostykę techniczną</div>
+          <div class="pp-feature-hint">Tylko wersja, platforma i włączone funkcje — bez ocen i danych osobowych.</div>
+        </div>
+      </div>
+      ${feedbackIncludeDiag ? `<pre class="pp-feedback-preview">${esc(feedbackDiagnostics())}</pre>` : ''}
+      <button class="pp-main-btn off" data-action="feedbackGithub" ${descOk ? '' : 'disabled'}>
+        Otwórz zgłoszenie na GitHubie
+      </button>
+      <div style="display:flex;gap:8px;">
+        <button class="pp-feedback-btn" data-action="feedbackMail" ${descOk ? '' : 'disabled'}>Wyślij mailem</button>
+        <button class="pp-feedback-btn" data-action="feedbackCopy" ${descOk ? '' : 'disabled'}>${feedbackCopied ? 'Skopiowano ✓' : 'Kopiuj treść'}</button>
+      </div>
+      ${descOk ? '' : '<div class="pp-main-hint" style="text-align:left;margin:0;">Uzupełnij opis (min. 10 znaków), żeby odblokować wysyłkę.</div>'}
     </div>
   `;
 }
@@ -559,6 +710,10 @@ function renderFooter() {
         <span>Tryb ciemny</span>
         ${switchHtml(dark, '__dark')}
       </div>
+      <div class="pp-feedback-link" data-action="goFeedback" title="Zgłoś błąd">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 2.5a7 7 0 0 0-7 7v2.5a1.5 1.5 0 0 0 1.5 1.5H6v-5H4.6A5.5 5.5 0 0 1 10 4a5.5 5.5 0 0 1 5.4 4.5H14v5h1.5A1.5 1.5 0 0 0 17 12V9.5a7 7 0 0 0-7-7z"></path><circle cx="10" cy="13.5" r="1.2"></circle></svg>
+        <span>Zgłoś błąd</span>
+      </div>
       <div class="pp-settings-icon" data-action="openExtensionPage">
         <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="2.4"></circle><path d="M10 2.5v2.2M10 15.3v2.2M17.5 10h-2.2M4.7 10H2.5M15 5l-1.5 1.5M6.5 13.5L5 15M15 15l-1.5-1.5M6.5 6.5L5 5"></path></svg>
       </div>
@@ -584,6 +739,29 @@ function bindEvents() {
   appEl.querySelectorAll('[data-action]').forEach((el) => {
     el.addEventListener('click', () => onAction(el));
   });
+
+  // Pola formularza zgłoszeń: aktualizują modułowe `feedback*` BEZ
+  // przerysowania (render() straciłby focus textarei przy każdym znaku).
+  // Stan przycisków (disabled) odświeżany jest w miejscu.
+  appEl.querySelectorAll('[data-feedback-field]').forEach((el) => {
+    const update = () => {
+      const field = el.dataset.feedbackField;
+      if (field === 'category') feedbackCategory = el.value;
+      else if (field === 'desc') feedbackDesc = el.value;
+      else if (field === 'steps') feedbackSteps = el.value;
+      feedbackCopied = false;
+      const ok = feedbackDesc.trim().length >= 10;
+      appEl.querySelectorAll('[data-action="feedbackGithub"], [data-action="feedbackMail"], [data-action="feedbackCopy"]').forEach((b) => {
+        if (ok) b.removeAttribute('disabled');
+        else b.setAttribute('disabled', '');
+      });
+      appEl.querySelectorAll('[data-action="feedbackCopy"]').forEach((b) => {
+        b.textContent = 'Kopiuj treść';
+      });
+    };
+    el.addEventListener('input', update);
+    el.addEventListener('change', update);
+  });
 }
 
 async function onAction(el) {
@@ -592,6 +770,43 @@ async function onAction(el) {
 
   if (action === 'goFeatures') { view = 'features'; render(); return; }
   if (action === 'goMain') { view = 'main'; render(); return; }
+  if (action === 'goFeedback') { view = 'feedback'; feedbackError = null; feedbackCopied = false; render(); return; }
+  if (action === 'toggleFeedbackDiag') { feedbackIncludeDiag = !feedbackIncludeDiag; render(); return; }
+  if (action === 'feedbackGithub') {
+    if (feedbackDesc.trim().length < 10) return;
+    feedbackError = null;
+    chrome.tabs.create({ url: buildIssueUrl() });
+    window.close();
+    return;
+  }
+  if (action === 'feedbackMail') {
+    if (feedbackDesc.trim().length < 10) return;
+    feedbackError = null;
+    // mailto: przez tabs.create bywa blokowane — nawigacja samego popupu
+    // niezawodnie otwiera domyślnego klienta poczty.
+    window.location.href = buildMailtoUrl();
+    return;
+  }
+  if (action === 'feedbackCopy') {
+    if (feedbackDesc.trim().length < 10) return;
+    const text = buildFeedbackBody();
+    const done = () => { feedbackCopied = true; feedbackError = null; render(); };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, () => {
+          feedbackError = 'Nie udało się skopiować — zaznacz treść ręcznie.';
+          render();
+        });
+      } else {
+        feedbackError = 'Schowek niedostępny w tym popupie — użyj GitHuba lub maila.';
+        render();
+      }
+    } catch (e) {
+      feedbackError = 'Nie udało się skopiować — użyj GitHuba lub maila.';
+      render();
+    }
+    return;
+  }
   if (action === 'toggleDark') { state = await setState({ darkMode: !state.darkMode }); render(); return; }
   if (action === 'removeMyUniversity') { state = await setState({ myUniversity: null }); render(); return; }
   if (action === 'setMyUniversity') {

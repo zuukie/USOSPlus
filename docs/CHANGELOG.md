@@ -1,5 +1,13 @@
 # Co nowego w USOS++
 
+## 0.9.13
+
+- **Panel otwiera się i odświeża szybciej i spokojniej** — na start pobierane jest tylko to, co naprawdę potrzebne do pierwszego renderu, reszta dociąga się w tle (albo w momencie wejścia w taki widok, z krótkim „Dociąganie danych z USOS…”); odświeżanie strony wraca od razu z ostatniego stanu, a w tle podmienia na świeże dane.
+- **Drobne usprawnienia pobierania danych w tle** — odświeżanie robi teraz mniej zapytań i pauzuje, gdy karta jest w tle; bez mignięć przy podmianie danych w otwartym widoku, bez dublowanych pobrań, a zgubione odnośniki nie są ponawiane od zera przy każdym wejściu w plan.
+- **Cudzy plan z wygasłym linkiem powie Ci to wprost** — wygasły/nieprawidłowy odnośnik (token po 14 dniach, odrzucone os_id) pokazuje jasną informację „link wygasł albo jest nieprawidłowy" zamiast mylącego „chwilowy błąd USOSa", a nowy link podmieniasz na miejscu przyciskiem „Podmień link…" — bez usuwania planu z listy (podpis zostaje).
+- **Zgłoś błąd z poziomu wtyczki** — w menu rozszerzenia (stopka i „O rozszerzeniu") oraz w Ustawieniach panelu jest formularz zgłoszenia: kategoria, opis i kroki do odtworzenia, z opcjonalną diagnostyką techniczną (wersja, platforma, włączone funkcje — bez ocen i danych osobowych). Treść wysyłasz sam(a) przez GitHub, e-mail albo schowek — nic nie wysyła się automatycznie.
+- **Pasek postępu lekcji w topbarze** — w trakcie zajęć dolna ramka górnego paska zamienia się w pomarańczowy pasek pokazujący, ile lekcji już minęło; pełznie co minutę i znika razem z końcem zajęć. Najechanie na pasek wysuwa wstęgę z detalami (przedmiot, godziny, sala). Da się wyłączyć w Ustawieniach („Pasek postępu lekcji”).
+
 ## 0.9.12
 
 - **Budynek na mapie prosto z planu** — w szczegółach zajęć wiersz Budynek ma „Zobacz na mapie →" i otwiera mapkę kampusu ze znacznikiem (ten sam wzorzec co lista studentów); na dole jest skok do pełnej Mapy.

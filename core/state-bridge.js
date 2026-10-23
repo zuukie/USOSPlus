@@ -16,6 +16,7 @@
       gradeBadge: true,
       keyboardNav: false,
       classicWidgets: true,
+      lessonProgressBar: true,
     },
   };
 

@@ -1360,11 +1360,153 @@
       return genericInfoTable(doc);
     },
 
-    // Verified live (2026-09-14): empty account (no lecturer has published
-    // electronic grading rules yet) renders a single <info-box> and no
-    // table. See genericInfoTable's comment.
+    // Sprawdziany (dla_stud/studia/sprawdziany/index) — zweryfikowane na
+    // żywo na web.usos.pwr.edu.pl (USOSweb 7.3.1.0) 2026-10-18. Strona nie
+    // jest tabelką: każdy <usos-frame> ma nagłówek h3[slot="title"] z
+    // Sprawdziany (dla_stud/studia/sprawdziany/index) — zweryfikowane na
+    // żywo na web.usos.pwr.edu.pl (USOSweb 7.3.1.0) 2026-10-18. Strona nie
+    // jest tabelką: każdy <usos-frame> ma nagłówek h3[slot="title"] z
+    // semestrem i <ul class="no-bullets separated">, którego
+    // <li class="flex"> trzyma nazwę+kod przedmiotu, link do prowadzącego
+    // (katalog2/osoby/pokazOsobe&os_id=…) oraz link "pokaż"
+    // (dla_stud/studia/sprawdziany/pokaz&wez_id=…). Pusty stan to samotny
+    // <info-box> "Brak …" bez listy — wiersze zostają puste, bez awarii.
+    // Zwraca wezId każdego sprawdzianu (do późniejszego fetchu szczegółów),
+    // NIE link do zewnętrznego USOSweb — szczegóły są parsowane do naszego
+    // panelu przez getTestDetails.
     getTests(doc = document) {
-      return genericInfoTable(doc);
+      const rows = [];
+      const frames = [...doc.querySelectorAll('usos-frame')];
+      const listFrame = frames.find((f) => f.querySelector('h3[slot="title"]') && f.querySelector('ul.no-bullets.separated, ul'));
+      if (!listFrame) return { supported: true, verified: true, rows: [] };
+      const list = listFrame.querySelector('ul.no-bullets.separated, ul');
+      list.querySelectorAll(':scope > li').forEach((li) => {
+        const main = li.querySelector(':scope > div:first-child') || li;
+        const info = main.querySelector(':scope > div:first-child') || main;
+        const spans = [...info.querySelectorAll(':scope > span')];
+        const name = textOf(spans[0]) || null;
+        const code = textOf(spans[1]) || null;
+        const teacherLink = li.querySelector('a.wrhidden, a[href*="pokazOsobe"]') || null;
+        const teacher = teacherLink ? textOf(teacherLink) : null;
+        const pokazLink = li.querySelector('a.fwdlink, a[href*="sprawdziany/pokaz"]') || null;
+        let wezId = null;
+        if (pokazLink) {
+          try {
+            wezId = new URL(pokazLink.href).searchParams.get('wez_id');
+          } catch (e) { /* keep null */ }
+        }
+        if (!name && !code && !teacher) return;
+        const fields = {};
+        if (name) fields['Przedmiot'] = name;
+        if (code) fields['Kod przedmiotu'] = code;
+        if (teacher) fields['Prowadzący'] = teacher;
+        rows.push({ fields, wezId });
+      });
+      return { supported: true, verified: true, rows };
+    },
+
+    // Szczegóły rozliczania jednego sprawdzianu
+    // (dla_stud/studia/sprawdziany/pokaz&wez_id=N). Zweryfikowane na żywo
+    // na web.usos.pwr.edu.pl 2026-10-18. Parsuje nazwę+kod przedmiotu z h1,
+    // grupę z h2 oraz drzewo elementów rozliczania z tabel #drzewo i
+    // kontenerów #childrenof<wez_id>. Hierarchia wynika wyłącznie z
+    // struktury DOM (kontenery childrenof), NIE z nazw elementów — tak jak
+    // w klasycznym USOSie. Wszystko pozostaje w naszym panelu — brak
+    // odsyłacza do klasycznego USOSweb.
+    getTestDetails(doc = document) {
+      let nazwa = null, kod = null, semestr = null, grupa = null;
+      const h1 = doc.querySelector('h1');
+      if (h1) {
+        const link = h1.querySelector('a[href*="pokazPrzedmiot"]');
+        nazwa = textOf(link) || null;
+        if (link) {
+          const m = link.getAttribute('href')?.match(/[?&]prz_kod=([^&]+)/);
+          if (m) kod = decodeURIComponent(m[1]);
+          const next = link.nextElementSibling;
+          if (next && next.classList.contains('note')) kod = textOf(next) || kod;
+        }
+        const sm = textOf(h1).match(/Semestr\s+([^\n<]+)/i);
+        semestr = sm ? sm[1].trim().replace(/\s+/g, ' ') : null;
+      }
+      const h2 = doc.querySelector('h2');
+      if (h2) {
+        const gm = textOf(h2).match(/Zasady rozliczania dla (.+)/i);
+        grupa = gm ? gm[1].trim() : null;
+      }
+
+      // Rekurencyjnie przetwarza kontener (div#childrenof<N> lub #drzewo)
+      // i zwraca listę elementów rozliczania z zagnieżdzonymi dziećmi.
+      function processContainer(container) {
+        const elements = [];
+        if (!container) return elements;
+        container.querySelectorAll(':scope > table.grey').forEach((table) => {
+          const row = table.querySelector('tbody > tr');
+          if (!row) return;
+          const cells = [...row.querySelectorAll(':scope > td')];
+          // Wiersz korzenia ma 4 komórki (link "pokaż szczegóły") — pomijamy.
+          if (cells.length >= 4 || cells.length < 3) return;
+          const nameCell = cells[1];
+          const resultCell = cells[2];
+          const nameText = textOf(nameCell) || '';
+          if (/\(korzeń\)/.test(nameText)) return;
+          const noteSpan = nameCell.querySelector('span.note');
+          let elNazwa = nameText;
+          if (noteSpan) elNazwa = elNazwa.replace(textOf(noteSpan), '').trim();
+          elNazwa = elNazwa.replace(/-\s*max\s*/i, '').trim();
+          const maxPktM = nameText.match(/max\s*([\d.,]+)\s*pkt/i);
+          const maxPkt = maxPktM ? maxPktM[1] : null;
+          const wynikSpan = resultCell.querySelector('span.note');
+          const wynik = wynikSpan ? textOf(wynikSpan) : textOf(resultCell);
+
+          // wez_id z linka statystyki w pierwszej komórce — klucz do
+          // odnalezienia kontenera dzieci tego elementu.
+          let wezId = null;
+          const statsLink = cells[0].querySelector('a[href*="statystyki&wez_id="]');
+          if (statsLink) {
+            const m = statsLink.getAttribute('href').match(/[?&]wez_id=(\d+)/);
+            if (m) wezId = m[1];
+          }
+
+          // Dzieci tego elementu są w nastepnym rodzeństwie:
+          // <div id="childrenof<wez_id>"> — nie zgadujemy poziomu po nazwie.
+          let children = [];
+          if (wezId) {
+            const next = table.nextElementSibling;
+            if (next && next.id === `childrenof${wezId}`) {
+              children = processContainer(next);
+            }
+          }
+
+          elements.push({
+            nazwa: elNazwa || null,
+            maxPkt,
+            wynik: wynik ? wynik.trim() : null,
+            wezId,
+            children,
+          });
+        });
+        return elements;
+      }
+
+      const drzewo = doc.querySelector('#drzewo') || doc;
+      // Pierwsza tabela w #drzewo to korzeń (przedmiot) — jej wez_id otwiera
+      // kontener z prawdziwymi elementami rozliczania.
+      const firstTable = drzewo.querySelector('table.grey');
+      let tree = [];
+      if (firstTable) {
+        const firstRow = firstTable.querySelector('tbody > tr');
+        const firstCells = firstRow ? [...firstRow.querySelectorAll(':scope > td')] : [];
+        const statsLink = firstCells[0]?.querySelector('a[href*="statystyki&wez_id="]');
+        let rootWezId = null;
+        if (statsLink) {
+          const m = statsLink.getAttribute('href').match(/[?&]wez_id=(\d+)/);
+          if (m) rootWezId = m[1];
+        }
+        const rootContainer = rootWezId ? doc.querySelector(`#childrenof${rootWezId}`) : null;
+        tree = processContainer(rootContainer || drzewo);
+      }
+
+      return { supported: true, verified: true, nazwa, kod, semestr, grupa, tree };
     },
 
     // Verified live (2026-09-14): with zero submitted petitions, the page

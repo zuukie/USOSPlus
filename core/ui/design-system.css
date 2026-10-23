@@ -135,6 +135,48 @@ html[data-usospp-theme="light"] { background-color: oklch(97.5% 0.006 60); color
 .usospp-title { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
 .usospp-subtitle { font-size: 12.5px; color: var(--ink-3); margin-top: 1px; }
 .usospp-topbar-actions { display: flex; align-items: center; gap: 16px; }
+/* Lesson progress bar: replaces the topbar's bottom border while a lesson
+   is running (see currentLessonProgress in usos/app.js). Absolutely
+   positioned over the 1px border (the sticky topbar is the offset parent),
+   widened in place every 60 s by the countdown ticker. */
+.usospp-lesson-progress {
+  position: absolute; left: 0; bottom: -1px; height: 3px; width: 0;
+  background: #d9773a; border-radius: 0 2px 2px 0;
+  transition: width 60s linear; pointer-events: none;
+}
+/* Invisible hover hitbox: a 3px bar can't be hovered comfortably, so the
+   hover target extends ~6px above and below it. */
+.usospp-lesson-progress::before {
+  content: ''; position: absolute; left: 0; right: 0; top: -6px; bottom: -6px;
+  pointer-events: auto;
+}
+/* One-line lesson ribbon sliding down under the topbar on progress-bar
+   hover (see renderTopbar's lessonTip). Absolutely positioned against the
+   sticky header, so it overlays page content without moving anything.
+   Pure CSS show/hide — no JS state, no re-renders. */
+.usospp-lesson-tip {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 19;
+  background: var(--bg-card); border-bottom: 1px solid var(--border);
+  border-radius: 0 0 12px 12px;
+  box-shadow: 0 12px 32px rgba(20,15,10,0.14);
+  padding: 11px 32px; font-size: 13px; line-height: 1.5; font-weight: 600;
+  color: var(--ink-2); text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* Hoverable itself: moving the cursor from the bar down onto the ribbon
+     keeps it visible (see the :hover rule below) instead of hiding it.
+     visibility (not just opacity) does the hiding — an opacity:0 strip
+     would still swallow clicks on the page content underneath. */
+  pointer-events: auto; visibility: hidden; opacity: 0; transform: translateY(-6px);
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0ms linear 310ms;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  /* Lingering hide: the bar is a thin hover target, so the ribbon waits
+     ~90ms before sliding back up — no flicker when the cursor briefly
+     slips off. visibility flips only after the fade (90+220ms), and
+     showing stays instant (delays below are overridden). */
+  transition-delay: 90ms, 90ms, 310ms;
+}
+.usospp-lesson-progress:hover + .usospp-lesson-tip,
+.usospp-lesson-tip:hover { visibility: visible; opacity: 1; transform: none; transition-delay: 0ms, 0ms, 0ms; }
 
 /* Any embedded Leaflet map (the Mapa view's campus map, the unit-page
    preview). The container MUST form its own stacking context: Leaflet
@@ -377,6 +419,8 @@ main[data-content-root][data-enter="1"] .usospp-view { animation: usospp-fade-in
    that rule, so this only needs to target the anchor case. */
 .usospp-root a.usospp-btn-primary,
 .usospp-root a.usospp-btn-primary:hover { color: #fff; }
+.usospp-root a.usospp-btn-ghost,
+.usospp-root a.usospp-btn-ghost:hover { color: var(--ink); }
 .usospp-mode-btn { flex: 1; border: 1px solid var(--border); background: transparent; color: var(--ink); padding: 11px; }
 .usospp-mode-btn.active { border-color: oklch(60% 0.15 45); background: oklch(92% 0.03 45); color: oklch(40% 0.13 45); }
 .usospp-root[data-theme="dark"] .usospp-mode-btn.active { background: oklch(30% 0.03 45); color: oklch(85% 0.05 45); }

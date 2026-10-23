@@ -193,14 +193,22 @@
     planPreferences() {
       return 'kontroler.php?_action=home/preferencje/preferencjeUsosweb';
     },
-    // Four small "Moje studia" pages, all verified live against an empty
-    // account (semester just started — no scholarship decisions, checkpoint
-    // rules, petitions or open surveys yet): each one renders either a plain
-    // <info-box> "brak ..." message or (podania) nothing at all when there's
-    // nothing to show. None of them had real rows to check the "has data"
-    // markup against — see adapter.genericInfoTable's comment.
+    // Four small "Moje studia" pages. stypendia, podania i ankiety zostały
+    // zweryfikowane live tylko na pustym stanie konta (semestr się nie
+    // zaczął — brak decyzji, wniosków, ankiet); żadna nie miała prawdziwych
+    // wierszy do sprawdzenia markupu "ma dane" — patrz komentarz
+    // adapter.genericInfoTable. sprawdziany ma od 2026-10-18 własny,
+    // zweryfikowany parser `getTests` w `pwrAdapter` (strona to lista, nie
+    // tabela) — zweryfikowane live na web.usos.pwr.edu.pl przeciwko
+    // niepustym danym.
     stypendia: 'kontroler.php?_action=dla_stud/studia/stypendia/stypendia',
     sprawdziany: 'kontroler.php?_action=dla_stud/studia/sprawdziany/index',
+    // Szczegóły jednego sprawdzianu (pokaz&wez_id=N) — pobierane leniwie przy
+    // wejściu w widok Sprawdziany, nie na mountcie (każdy sprawdzian ma swój
+    // własny wez_id, więc to nie jest jedna statyczna strona).
+    testDetails(wezId) {
+      return `kontroler.php?_action=dla_stud/studia/sprawdziany/pokaz&wez_id=${encodeURIComponent(wezId)}`;
+    },
     podania: 'kontroler.php?_action=dla_stud/studia/podania/listaZlozonych',
     ankiety: 'kontroler.php?_action=dla_stud/studia/ankiety/index',
     // mLegitymacja order-status page — read-only display (see
@@ -217,19 +225,52 @@
   // jsonSzukajJednostki all returned the same 503 dispatch; the normal
   // shell shows none of those markers, so no false positives). One fetch
   // failing doesn't mean the system is down, but a run where EVERY fetch
-  // got a 503 does — collectAll/collectAnon compare the two counters to
-  // flag exactly that, and inject.js turns the flag into a clear "godzina
-  // przerwy" notice instead of an all-empty panel. HTTP-503-only by
-  // design: other failure modes (5xx, network) keep the per-view error
-  // cards, which is the honest message there.
-  let trackedCount = 0;
-  let unavailableCount = 0;
+  // got a 503 does — collectAll/collectAnon/ensureTier2 compare the two
+  // counters of THEIR OWN run to flag exactly that, and inject.js turns
+  // the flag into a clear "godzina przerwy" notice instead of an
+  // all-empty panel. HTTP-503-only by design: other failure modes (5xx,
+  // network) keep the per-view error cards, which is the honest message
+  // there.
+  //
+  // The counters are per-run (each collection installs a fresh object
+  // here) rather than one pair shared across runs: a refresh tick landing
+  // mid-collection used to RESET the shared counters and split its fetches
+  // between two runs, so a "all 503" verdict could be computed over half
+  // of each run. collectAll/collectAnon/ensureTier2 are additionally
+  // serialized behind collectionChain, so two collections never interleave
+  // their counter windows; a user-typed search inside a window still rides
+  // into the current run's counters, same as it always did (it can only
+  // err the verdict toward "not maintenance", never toward a false alarm).
+  let activeCounters = { trackedCount: 0, unavailableCount: 0 };
+
+  // In-flight dedup + serialization for the collection family. Same-kind
+  // requests (two collectAll callers racing — mount + autorefresh tick)
+  // share one promise instead of double-scraping; different-kind and
+  // tier-2 passes queue behind collectionChain so counter windows can't
+  // overlap.
+  const collectionRuns = { all: null, anon: null };
+  let collectionChain = Promise.resolve();
+  function serializedRun(key, runner) {
+    if (collectionRuns[key]) return collectionRuns[key];
+    const run = collectionChain.then(runner);
+    collectionRuns[key] = run;
+    collectionChain = run.catch(() => {});
+    const settle = () => { if (collectionRuns[key] === run) collectionRuns[key] = null; };
+    run.then(settle, settle);
+    return run;
+  }
+
+  function freshCounters() {
+    const counters = { trackedCount: 0, unavailableCount: 0 };
+    activeCounters = counters;
+    return counters;
+  }
 
   async function fetchJson(path) {
     try {
       const res = await fetch(path, { credentials: 'same-origin' });
-      trackedCount++;
-      if (res.status === 503) unavailableCount++;
+      activeCounters.trackedCount++;
+      if (res.status === 503) activeCounters.unavailableCount++;
       if (!res.ok) return null;
       return await res.json();
     } catch (e) {
@@ -245,8 +286,8 @@
   async function fetchJsonAbortable(path, signal) {
     try {
       const res = await fetch(path, { credentials: 'same-origin', signal });
-      trackedCount++;
-      if (res.status === 503) unavailableCount++;
+      activeCounters.trackedCount++;
+      if (res.status === 503) activeCounters.unavailableCount++;
       if (!res.ok) return null;
       return await res.json();
     } catch (e) {
@@ -293,14 +334,93 @@
   async function fetchDoc(path) {
     try {
       const res = await fetch(path, { credentials: 'same-origin' });
-      trackedCount++;
-      if (res.status === 503) unavailableCount++;
+      activeCounters.trackedCount++;
+      if (res.status === 503) activeCounters.unavailableCount++;
       if (!res.ok) return null;
       const html = await res.text();
       return new DOMParser().parseFromString(html, 'text/html');
     } catch (e) {
       return null;
     }
+  }
+
+  // fetchDoc that keeps the HTTP status visible for the one call site that
+  // must tell "the resource is really gone" (4xx) apart from "server is
+  // having a moment" (5xx) or "the network is" (status 0) — see
+  // fetchGroupDetails' negative cache. Everything else keeps counting into
+  // the current run's 503 window exactly like fetchDoc.
+  async function fetchDocWithStatus(path) {
+    try {
+      const res = await fetch(path, { credentials: 'same-origin' });
+      activeCounters.trackedCount++;
+      if (res.status === 503) activeCounters.unavailableCount++;
+      if (!res.ok) return { status: res.status, doc: null };
+      const html = await res.text();
+      return { status: res.status, doc: new DOMParser().parseFromString(html, 'text/html') };
+    } catch (e) {
+      return { status: 0, doc: null };
+    }
+  }
+
+  // Concurrency gate for LAZY multi-page passes (participants roster with
+  // their tab_limit=500 follow-ups, group details for the whole plan, per-stage
+  // settlement and test pages). Mount's tier-1 window stays un-gated on
+  // purpose: those 6 pages ARE the first paint. A lazy pass without a cap,
+  // however, fanned 13+ (roster: ~26) fetches into the browser's per-host
+  // queue at once — the user's very own click-throughs (a group page opened
+  // mid-pass, a search probe) would queue behind them and type/jank.
+  // LAZY_SLOTS = 5: the classic 6-connections-per-host budget minus one such
+  // that user actions always have a free lane; HTTP/2 multiplexing makes the
+  // per-slot cost small anyway, so slower is mostly "slightly staggered", not
+  // "slower overall". FIFO queue keeps fairness trivial and obvious.
+  const LAZY_SLOTS = 5;
+  const lazyQueue = [];
+  let lazySlotsFree = LAZY_SLOTS;
+  function acquireLazySlot() {
+    if (lazySlotsFree > 0) {
+      lazySlotsFree--;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => lazyQueue.push(resolve));
+  }
+  function releaseLazySlot() {
+    const next = lazyQueue.shift();
+    if (next) next();
+    else lazySlotsFree++;
+  }
+  async function gatedFetchDoc(path) {
+    await acquireLazySlot();
+    try {
+      return await fetchDoc(path);
+    } finally {
+      releaseLazySlot();
+    }
+  }
+
+  // Timing bookkeeping for the report form's technical diagnostics block
+  // (feedbackDiagBlock in app.js) and console spelunking: how long the
+  // collection phases actually took on this machine/install. Never hidden
+  // parameters, never sent anywhere — printed to console.debug and exposed
+  // through getRuntimePerf() for the user-driven report form copy (the same
+  // "the user sends it themselves" pipeline as the rest of the diagnostics).
+  // performance.now() (not Date.now) so unrelated clock changes never fake
+  // a slow USOSweb.
+  const runtimePerf = {};
+  function markPhase(kind, startedAt, pageCount) {
+    const ms = Math.max(0, Math.round(performance.now() - startedAt));
+    const note = (existing) => ({
+      ...((existing && typeof existing === 'object') ? existing : {}),
+      [kind + 'Ms']: ms,
+      [kind + 'At']: Math.round(startedAt),
+      [kind + 'Pages']: pageCount,
+    });
+    const existing = runtimePerf[kind];
+    runtimePerf[kind] = note(existing);
+    console.debug(`[USOS++] ${kind}: ${ms}ms, ${pageCount} zapytań`);
+    return ms;
+  }
+  function getRuntimePerf() {
+    try { return JSON.parse(JSON.stringify(runtimePerf)); } catch (e) { return {}; }
   }
 
   // The exams module is a client-rendered AngularJS app that fetches its own
@@ -374,27 +494,147 @@
     return collectNews(adapter, newsDoc);
   }
 
-  async function collectAll(adapter) {
-    trackedCount = 0;
-    unavailableCount = 0;
-    // Critical-for-dashboard first: home, zaliczenia, oceny, plan, hub,
-    // news, kalendarz + płatności + moje-studia. Deliberately NOT here:
-    // exams (hidden iframe ~6s), faculty rejestracje + per-stage subjects
-    // (N extra pages) — those load lazily on view entry via
-    // fetchExamsResult/fetchRegistrationsResult/fetchStageSubjectsResult.
+  // Default shapes for sections that haven't loaded in the current phase.
+  // A fresh object per call (never shared between runs — renderers must be
+  // free to treat these as instance data without cross-run leakage).
+  function unsup(extra) {
+    return { supported: false, verified: false, ...extra };
+  }
+
+  // Every key of the collected data model that comes from a tier-2 page —
+  // inject.js's autorefresh carry uses this list to hold the previous
+  // model's values over a fresh collection (stale-while-revalidate: render
+  // with the old data immediately, then replace when ensureTier2's fresh
+  // pass lands). Keep in sync with runTier2 below.
+  const TIER2_KEYS = [
+    'ownProgrammesResult',
+    'personalCalendarResult',
+    'paymentsResult',
+    'scholarshipsResult',
+    'testsResult',
+    'petitionsResult',
+    'surveysResult',
+  ];
+
+  // collectAll is layered. Tier 1 fetches ONLY the six pages the shell and
+  // the dashboard need for first paint (user card, ECTS progress, grades
+  // average, plan week, news) — everything else (payments×5, kalendarz,
+  // zapisy hub, moje-studia ×4) moves to ensureTier2, fetched on idle after
+  // the panel is up, or eagerly on first entry to a view that renders it.
+  // That's 11 fewer fetches + parses per mount instead of one 17-page burst.
+  // Deliberately NOT here (unchanged lazy policy): exams (hidden iframe
+  // ~6s), faculty rejestracje + per-stage subjects (N extra pages) — those
+  // load lazily on view entry via fetchExamsResult/fetchRegistrationsResult/
+  // fetchStageSubjectsResult; stage subjects additionally wait for tier 2
+  // (they read ownProgrammesResult from the zapisyHub page), which
+  // app.js's tier-2-landed hook re-kicks.
+  async function runCollectAll(adapter) {
+    const counters = freshCounters();
+    const tier1T0 = performance.now();
     const [
-      homeDoc, grupyDoc, zaliczeniaDoc, ocenyDoc, planDoc, zapisyHubDoc, newsDoc,
-      kalendarzDoc,
-      platnosciNierozDoc, planyRatalneDoc, wplatyDoc, wplatyNierozDoc, kontaBankoweDoc,
-      stypendiaDoc, sprawdzianyDoc, podaniaDoc, ankietyDoc,
+      homeDoc, grupyDoc, zaliczeniaDoc, ocenyDoc, planDoc, newsDoc,
     ] = await Promise.all([
       fetchDoc(PATHS.home),
       fetchDoc(PATHS.grupy),
       fetchDoc(PATHS.zaliczenia),
       fetchDoc(PATHS.oceny),
       fetchDoc(PATHS.plan),
-      fetchDoc(PATHS.zapisyHub),
       fetchDoc(PATHS.news),
+    ]);
+
+    // Prefer the fetched home page (has the album/faculty info panel); fall
+    // back to the live document (still has cas-bar, so at least the name
+    // resolves) if that fetch failed for some reason.
+    const user = homeDoc ? adapter.getUser(homeDoc) : adapter.getUser(document);
+    const etapyResult = zaliczeniaDoc
+      ? adapter.getEtapy(zaliczeniaDoc)
+      : unsup({ etapy: [] });
+    const gradesResult = ocenyDoc
+      ? adapter.getGrades(ocenyDoc)
+      : unsup({ rows: [] });
+    const planResult = planDoc
+      ? adapter.getPlan(planDoc)
+      : unsup({ raw: null });
+    // Weekly plan reconstruction source: home/grupy lists every enrolled
+    // group with its recurring schedule lines (server-rendered, unlike the
+    // client-side home/plan timetable). getMyGroups is optional on older
+    // adapters — guard with typeof.
+    let myGroupsResult = unsup({ subjects: [] });
+    try {
+      if (grupyDoc && typeof adapter.getMyGroups === 'function') {
+        myGroupsResult = adapter.getMyGroups(grupyDoc);
+      }
+    } catch (e) {
+      // leave myGroupsResult as the unsupported default
+    }
+    const newsResult = await collectNews(adapter, newsDoc);
+
+    // True when every single fetch of this run was a 503 dispatch — USOSweb
+    // is down (see the counters' block comment above). Partial failure keeps
+    // the ordinary per-view supported:false degradation instead. Computed on
+    // the tier-1 window (serialized run) — a tier-2-only outage degrades to
+    // per-view error cards until the next autorefresh pass re-verdicts.
+    const maintenance = counters.trackedCount > 0 && counters.trackedCount === counters.unavailableCount;
+    const tier1Pages = counters.trackedCount;
+    // Timing note lives on the model (read by the diagnostics block) AND in
+    // the runtime per-kind registry (latest wins — runTier2 merges its own
+    // entry with this one later).
+    markPhase('tier1', tier1T0, tier1Pages);
+    const tier1Entry = runtimePerf.tier1;
+
+    return {
+      user, etapyResult, gradesResult, planResult, myGroupsResult,
+      examsResult: unsup({ exams: [], deferred: true }),
+      registrationsResult: unsup({ groups: [], deferred: true }),
+      stageSubjectsResult: unsup({ stages: [], deferred: true }),
+      etapDetailsResult: unsup({ byId: {} }),
+      newsResult,
+      // Tier-2 sections start at collectAnon's same empty shapes; they are
+      // real (or honestly unsupported) once ensureTier2's pass has landed.
+      ownProgrammesResult: unsup({ programmes: [] }),
+      personalCalendarResult: unsup({ sections: [] }),
+      paymentsResult: {
+        supported: false,
+        verified: true,
+        unpaid: unsup({ groups: [], grandTotal: null }),
+        installments: unsup({ groups: [], grandTotal: null }),
+        payments: unsup({ groups: [], grandTotal: null }),
+        unsettledPayments: unsup({ groups: [], grandTotal: null }),
+        bankAccounts: unsup({ accounts: [] }),
+      },
+      scholarshipsResult: unsup({ rows: [] }),
+      testsResult: unsup({ rows: [] }),
+      petitionsResult: unsup({ rows: [] }),
+      surveysResult: unsup({ rows: [] }),
+      // Phase bookkeeping consumed by app.js (stale-while-revalidate carry,
+      // skeleton gates, eager kicks) — see ensureTier2 below.
+      tier2Pending: true,
+      tier2Loaded: false,
+      maintenance,
+      perf: { tier1Ms: tier1Entry.tier1Ms, tier1At: tier1Entry.tier1At, tier1Pages },
+    };
+  }
+
+  function collectAll(adapter) {
+    return serializedRun('all', () => runCollectAll(adapter));
+  }
+
+  // Tier 2: the eleven remaining mount pages, fetched in one parallel
+  // window and parsed onto the data model in place. app.js triggers this
+  // via requestIdleCallback right after every collection (see
+  // scheduleTier2/ensureTier2DataNow) and eagerly on first entry to a
+  // view that renders tier-2 data. Only after the data has landed do the
+  // dependent lazy fetches run — fetchStageSubjectsResult reads
+  // ownProgrammesResult, so it must not see the empty default.
+  async function runTier2(adapter, data) {
+    const counters = freshCounters();
+    const tier2T0 = performance.now();
+    const [
+      zapisyHubDoc, kalendarzDoc,
+      platnosciNierozDoc, planyRatalneDoc, wplatyDoc, wplatyNierozDoc, kontaBankoweDoc,
+      stypendiaDoc, sprawdzianyDoc, podaniaDoc, ankietyDoc,
+    ] = await Promise.all([
+      fetchDoc(PATHS.zapisyHub),
       fetchDoc(PATHS.kalendarz),
       fetchDoc(PATHS.platnosciNierozliczone),
       fetchDoc(PATHS.platnosciPlanyRatalne),
@@ -407,86 +647,85 @@
       fetchDoc(PATHS.ankiety),
     ]);
 
-    // Prefer the fetched home page (has the album/faculty info panel); fall
-    // back to the live document (still has cas-bar, so at least the name
-    // resolves) if that fetch failed for some reason.
-    const user = homeDoc ? adapter.getUser(homeDoc) : adapter.getUser(document);
-    const etapyResult = zaliczeniaDoc
-      ? adapter.getEtapy(zaliczeniaDoc)
-      : { supported: false, verified: false, etapy: [] };
-    const gradesResult = ocenyDoc
-      ? adapter.getGrades(ocenyDoc)
-      : { supported: false, verified: false, rows: [] };
-    const planResult = planDoc
-      ? adapter.getPlan(planDoc)
-      : { supported: false, verified: false, raw: null };
-    // Weekly plan reconstruction source: home/grupy lists every enrolled
-    // group with its recurring schedule lines (server-rendered, unlike the
-    // client-side home/plan timetable). getMyGroups is optional on older
-    // adapters — guard with typeof.
-    let myGroupsResult = { supported: false, verified: false, subjects: [] };
-    try {
-      if (grupyDoc && typeof adapter.getMyGroups === 'function') {
-        myGroupsResult = adapter.getMyGroups(grupyDoc);
-      }
-    } catch (e) {
-      // leave myGroupsResult as the unsupported default
-    }
-    const ownProgrammesResult = zapisyHubDoc
+    data.ownProgrammesResult = zapisyHubDoc
       ? adapter.getOwnProgrammes(zapisyHubDoc)
-      : { supported: false, verified: false, programmes: [] };
-    const newsResult = await collectNews(adapter, newsDoc);
-
-    const EMPTY_GROUPS = { supported: false, verified: false, groups: [], grandTotal: null };
-    const paymentsResult = {
-      supported: !!(platnosciNierozDoc || wplatyDoc),
-      verified: true,
-      unpaid: platnosciNierozDoc ? adapter.getPaymentGroups(platnosciNierozDoc) : EMPTY_GROUPS,
-      installments: planyRatalneDoc ? adapter.getPaymentGroups(planyRatalneDoc) : EMPTY_GROUPS,
-      payments: wplatyDoc ? adapter.getPaymentGroups(wplatyDoc) : EMPTY_GROUPS,
-      unsettledPayments: wplatyNierozDoc ? adapter.getPaymentGroups(wplatyNierozDoc) : EMPTY_GROUPS,
-      bankAccounts: kontaBankoweDoc ? adapter.getBankAccounts(kontaBankoweDoc) : { supported: false, verified: false, accounts: [] },
-    };
-
-    const examsResult = { supported: false, verified: false, exams: [], deferred: true };
-    const registrationsResult = { supported: false, verified: false, groups: [], deferred: true };
+      : unsup({ programmes: [] });
 
     // Personal calendar — primary source for the Zapisy view (see PATHS
     // above). Independent of facultyCode: it works wherever USOS serves
     // the dla_stud calendar for the logged-in student.
-    let personalCalendarResult = { supported: false, verified: false, sections: [] };
+    let personalCalendarResult = unsup({ sections: [] });
     try {
       if (kalendarzDoc) personalCalendarResult = adapter.getPersonalCalendar(kalendarzDoc);
     } catch (e) {
       // leave personalCalendarResult as the unsupported default
     }
+    data.personalCalendarResult = personalCalendarResult;
 
-    const stageSubjectsResult = { supported: false, verified: false, stages: [], deferred: true };
-
-    const scholarshipsResult = stypendiaDoc
-      ? adapter.getScholarships(stypendiaDoc)
-      : { supported: false, verified: false, rows: [] };
-    const testsResult = sprawdzianyDoc
-      ? adapter.getTests(sprawdzianyDoc)
-      : { supported: false, verified: false, rows: [] };
-    const petitionsResult = podaniaDoc
-      ? adapter.getPetitions(podaniaDoc)
-      : { supported: false, verified: false, rows: [] };
-    const surveysResult = ankietyDoc
-      ? adapter.getSurveys(ankietyDoc)
-      : { supported: false, verified: false, rows: [] };
-
-    return {
-      user, etapyResult, gradesResult, planResult, myGroupsResult, examsResult, registrationsResult,
-      personalCalendarResult,
-      ownProgrammesResult, stageSubjectsResult, etapDetailsResult: { supported: false, verified: false, byId: {} },
-      newsResult, paymentsResult,
-      scholarshipsResult, testsResult, petitionsResult, surveysResult,
-      // True when every single fetch of this run was a 503 dispatch — USOSweb
-      // is down (see the counters' block comment above). Partial failure keeps
-      // the ordinary per-view supported:false degradation instead.
-      maintenance: trackedCount > 0 && trackedCount === unavailableCount,
+    // Same single nav-view merge of the five payment sub-pages as before —
+    // unchanged from the pre-tiering collectAll block this moved out of.
+    data.paymentsResult = {
+      supported: !!(platnosciNierozDoc || wplatyDoc),
+      verified: true,
+      unpaid: platnosciNierozDoc ? adapter.getPaymentGroups(platnosciNierozDoc) : unsup({ groups: [], grandTotal: null }),
+      installments: planyRatalneDoc ? adapter.getPaymentGroups(planyRatalneDoc) : unsup({ groups: [], grandTotal: null }),
+      payments: wplatyDoc ? adapter.getPaymentGroups(wplatyDoc) : unsup({ groups: [], grandTotal: null }),
+      unsettledPayments: wplatyNierozDoc ? adapter.getPaymentGroups(wplatyNierozDoc) : unsup({ groups: [], grandTotal: null }),
+      bankAccounts: kontaBankoweDoc ? adapter.getBankAccounts(kontaBankoweDoc) : unsup({ accounts: [] }),
     };
+
+    data.scholarshipsResult = stypendiaDoc
+      ? adapter.getScholarships(stypendiaDoc)
+      : unsup({ rows: [] });
+    data.testsResult = sprawdzianyDoc
+      ? adapter.getTests(sprawdzianyDoc)
+      : unsup({ rows: [] });
+    data.petitionsResult = podaniaDoc
+      ? adapter.getPetitions(podaniaDoc)
+      : unsup({ rows: [] });
+    data.surveysResult = ankietyDoc
+      ? adapter.getSurveys(ankietyDoc)
+      : unsup({ rows: [] });
+    const tier2Pages = counters.trackedCount;
+    markPhase('tier2', tier2T0, tier2Pages);
+    // Timing note rides on the model next to tier 1's (both entries live in
+    // runtimePerf too, which is what the diagnostics block actually reads —
+    // data.perf is just the snapshot-friendly copy).
+    data.perf = {
+      ...((data && data.perf && typeof data.perf === 'object') ? data.perf : {}),
+      tier2Ms: runtimePerf.tier2.tier2Ms,
+      tier2At: runtimePerf.tier2.tier2At,
+      tier2Pages,
+    };
+    return data;
+  }
+
+  // One tier-2 pass per data model: the guard lives on the model itself
+  // (data.tier2Promise), NOT on a module-global slot — after an
+  // autorefresh swap two models can legitimately coexist and each needs
+  // its own pass; the global part (collectionChain) only serializes backend
+  // work so counter windows can't interleave. force=true is the
+  // autorefresh re-scrape path: the model then carries the PREVIOUS run's
+  // tier-2 results (stale-while-revalidate carry in inject.js, so no
+  // sidebar-dot flicker) and this runs a fresh parallel pass regardless,
+  // assigning onto the model only when it lands.
+  function ensureTier2(adapter, data, force) {
+    if (!data || data.tier2Loaded === undefined) return Promise.resolve(data);
+    if (data.tier2Loaded && !force) return Promise.resolve(data);
+    if (data.tier2Promise) return data.tier2Promise;
+    const run = collectionChain.then(() => runTier2(adapter, data));
+    collectionChain = run.catch(() => {});
+    const settle = () => {
+      // The pass RAN for this model — the pending gate slides off and
+      // dependent lazy fetches may proceed, whether or not every page
+      // parsed.
+      if (data.tier2Promise === run) data.tier2Promise = null;
+      data.tier2Pending = false;
+      data.tier2Loaded = true;
+    };
+    run.then(settle, settle);
+    data.tier2Promise = run;
+    return run;
   }
 
   // Logged-out counterpart of collectAll — see app.js's PUBLIC_VIEWS for
@@ -496,40 +735,43 @@
   // family (search + katalog2 pages, campus buildings) is fetched lazily on
   // view entry. Every other key keeps collectAll's empty/unsupported default
   // shape, so no getter or renderer that reads a personal section can crash
-  // on the anonymous data model.
-  async function collectAnon(adapter) {
-    trackedCount = 0;
-    unavailableCount = 0;
-    const newsDoc = await fetchDoc(PATHS.news);
-    const newsResult = await collectNews(adapter, newsDoc);
-    return {
-      user: null,
-      etapyResult: { supported: false, verified: false, etapy: [] },
-      gradesResult: { supported: false, verified: false, rows: [] },
-      planResult: { supported: false, verified: false, raw: null },
-      myGroupsResult: { supported: false, verified: false, subjects: [] },
-      examsResult: { supported: false, verified: false, exams: [] },
-      registrationsResult: { supported: false, verified: false, groups: [] },
-      personalCalendarResult: { supported: false, verified: false, sections: [] },
-      ownProgrammesResult: { supported: false, verified: false, programmes: [] },
-      stageSubjectsResult: { supported: false, verified: false, stages: [] },
-      etapDetailsResult: { supported: false, verified: false, byId: {} },
-      newsResult,
-      paymentsResult: {
-        supported: false,
-        verified: true,
-        unpaid: { supported: false, verified: false, groups: [], grandTotal: null },
-        installments: { supported: false, verified: false, groups: [], grandTotal: null },
-        payments: { supported: false, verified: false, groups: [], grandTotal: null },
-        unsettledPayments: { supported: false, verified: false, groups: [], grandTotal: null },
-        bankAccounts: { supported: false, verified: false, accounts: [] },
-      },
-      scholarshipsResult: { supported: false, verified: false, rows: [] },
-      testsResult: { supported: false, verified: false, rows: [] },
-      petitionsResult: { supported: false, verified: false, rows: [] },
-      surveysResult: { supported: false, verified: false, rows: [] },
-      maintenance: trackedCount > 0 && trackedCount === unavailableCount,
-    };
+  // on the anonymous data model. There is no tier 2 here — the personal
+  // pages are all just the same login prompt while logged out, so the
+  // anonymous model is complete as returned.
+  function collectAnon(adapter) {
+    return serializedRun('anon', async () => {
+      const counters = freshCounters();
+      const newsDoc = await fetchDoc(PATHS.news);
+      const newsResult = await collectNews(adapter, newsDoc);
+      return {
+        user: null,
+        etapyResult: unsup({ etapy: [] }),
+        gradesResult: unsup({ rows: [] }),
+        planResult: unsup({ raw: null }),
+        myGroupsResult: unsup({ subjects: [] }),
+        examsResult: unsup({ exams: [] }),
+        registrationsResult: unsup({ groups: [] }),
+        personalCalendarResult: unsup({ sections: [] }),
+        ownProgrammesResult: unsup({ programmes: [] }),
+        stageSubjectsResult: unsup({ stages: [] }),
+        etapDetailsResult: unsup({ byId: {} }),
+        newsResult,
+        paymentsResult: {
+          supported: false,
+          verified: true,
+          unpaid: unsup({ groups: [], grandTotal: null }),
+          installments: unsup({ groups: [], grandTotal: null }),
+          payments: unsup({ groups: [], grandTotal: null }),
+          unsettledPayments: unsup({ groups: [], grandTotal: null }),
+          bankAccounts: unsup({ accounts: [] }),
+        },
+        scholarshipsResult: unsup({ rows: [] }),
+        testsResult: unsup({ rows: [] }),
+        petitionsResult: unsup({ rows: [] }),
+        surveysResult: unsup({ rows: [] }),
+        maintenance: counters.trackedCount > 0 && counters.trackedCount === counters.unavailableCount,
+      };
+    });
   }
 
   // Fresh personal calendar on demand (see PATHS.rejSubjects): the
@@ -604,11 +846,39 @@
   // lifetime): one group page per enrolled group, fetched lazily on plan
   // view entry, never on mount.
   const groupDetailsCache = new Map();
+  // Negative cache for outcomes USOS itself rules out: a 4xx (400–499) says
+  // the resource doesn't exist right now — dead os_id share, deleted group,
+  // revoked link. On every plan re-entry we used to re-probe those pages and
+  // re-lose; now a hit short-circuits to the miss shape until a short TTL
+  // expires and normal probing resumes (semester rollover, a re-created
+  // group). Deliberately NOT negative-cached: 5xx/503 (maintenance window —
+  // exactly the case the success-only rule exists to avoid poisoning) and
+  // status 0 network errors. The TTL plus the same >100 eviction as the
+  // positive cache keep the map from growing without bound.
+  const GROUPDETAILS_NEGATIVE_TTL_MS = 10 * 60 * 1000;
+  const groupDetailsNegative = new Map();
   async function fetchGroupDetails(adapter, url) {
     const miss = { supported: false, verified: false };
     if (!url || !adapter || typeof adapter.getGroupDetails !== 'function') return miss;
     if (groupDetailsCache.has(url)) return groupDetailsCache.get(url);
-    const doc = await fetchDoc(url);
+    const until = groupDetailsNegative.get(url);
+    if (until) {
+      if (Date.now() < until) {
+        return miss;
+      }
+      groupDetailsNegative.delete(url);
+    }
+    // Same slot gate as the other lazy bursts (ensurePlanDetails kicks one
+    // page per enrolled group at once); a direct user click into a group
+    // detail rides through the same 5 slots — invisible when they're free.
+    await acquireLazySlot();
+    let statusDoc;
+    try {
+      statusDoc = await fetchDocWithStatus(url);
+    } finally {
+      releaseLazySlot();
+    }
+    const { status, doc } = statusDoc;
     let res = miss;
     if (doc) {
       try {
@@ -623,6 +893,15 @@
       if (groupDetailsCache.size > 100) {
         const oldest = groupDetailsCache.keys().next().value;
         groupDetailsCache.delete(oldest);
+      }
+    } else if (status >= 400 && status < 500) {
+      // Stable "no". Status evidence comes from fetchDocWithStatus, whose
+      // 503 path is untouched by this branch — a maintenance outage stays
+      // retryable on the next entry (see the comment above).
+      groupDetailsNegative.set(url, Date.now() + GROUPDETAILS_NEGATIVE_TTL_MS);
+      if (groupDetailsNegative.size > 100) {
+        const oldest = groupDetailsNegative.keys().next().value;
+        groupDetailsNegative.delete(oldest);
       }
     }
     return res;
@@ -659,10 +938,35 @@
       return miss;
     }
   }
-  async function fetchSharedPlan(adapter, url, mondayIso) {    const miss = { supported: false, verified: false, notShared: false, ownerName: null, sessions: [] };
+  async function fetchSharedPlan(adapter, url, mondayIso) {
+    const miss = { supported: false, verified: false, notShared: false, dead: false, ownerName: null, sessions: [] };
     if (!url || !adapter || typeof adapter.getSharedPlan !== 'function') return miss;
-    const doc = await fetchDoc(url);
-    if (!doc) return miss;
+    let res = null;
+    try {
+      res = await fetch(url, { credentials: 'same-origin' });
+    } catch (e) {
+      return miss; // network failure — keep the transient 'error' semantics
+    }
+    activeCounters.trackedCount++;
+    if (res.status === 503) activeCounters.unavailableCount++;
+    // fetchDoc's !res.ok → null bucket would fold USOS's "link is dead"
+    // rejection into every other failure, and the plan UI would then say
+    // "chwilowy błąd" while the truth is the share link itself is gone.
+    // Verified live (2026-10-22, web.usos.pwr.edu.pl): a missing/invalid
+    // token AND a bogus os_id both land on HTTP 400 "Niepoprawne żądanie",
+    // while a valid link returns 200 — so 4xx on THIS page means the link
+    // itself is dead (expired token, wrong/rejected os_id), not that USOS
+    // hiccuped. 5xx/network stay transient.
+    if (!res.ok) {
+      if (res.status >= 400 && res.status < 500) return { ...miss, dead: true };
+      return miss;
+    }
+    let doc = null;
+    try {
+      doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    } catch (e) {
+      return miss;
+    }
     try {
       return adapter.getSharedPlan(doc, mondayIso);
     } catch (e) {
@@ -671,16 +975,49 @@
   }
   async function fetchExamsResult(adapter, data) {
     if (!data || data.examsResultLoaded) return data ? data.examsResult : null;
-    try {
-      const examsDoc = await fetchExamsDoc();
-      data.examsResult = examsDoc
-        ? adapter.getExams(examsDoc)
-        : { supported: false, verified: false, exams: [] };
-    } catch (e) {
-      data.examsResult = { supported: false, verified: false, exams: [] };
+    // In-flight dedup per data model: the dashboard's idle-timed kick and a
+    // user clicking Egzaminy can now outrun each other (the idle window
+    // widened it), and fetchExamsDoc opens a real hidden iframe per call —
+    // two concurrent calls used to mean double the Angular app.
+    if (data.examsPromise) return data.examsPromise;
+    data.examsPromise = (async () => {
+      try {
+        const examsDoc = await fetchExamsDoc();
+        data.examsResult = examsDoc
+          ? adapter.getExams(examsDoc)
+          : { supported: false, verified: false, exams: [] };
+      } catch (e) {
+        data.examsResult = { supported: false, verified: false, exams: [] };
+      }
+      data.examsResultLoaded = true;
+      return data.examsResult;
+    })();
+    return data.examsPromise;
+  }
+
+  // Szczegóły rozliczania każdego sprawdzianu z jego podstrony
+  // (dla_stud/studia/sprawdziany/pokaz&wez_id=N). Leniwe — ładuje się dopiero
+  // przy wejściu w widok Sprawdziany, nie na mountcie.
+  async function fetchTestDetailsResult(adapter, data) {
+    if (!data || data.testDetailsResultLoaded) return data ? data.testDetailsResult : null;
+    let result = { supported: false, verified: false, byWezId: {} };
+    const rows = data.testsResult && Array.isArray(data.testsResult.rows) ? data.testsResult.rows : [];
+    const wezIds = [...new Set(rows.map((r) => r.wezId).filter(Boolean))];
+    if (wezIds.length && typeof adapter.getTestDetails === 'function') {
+      try {
+        const docs = await Promise.all(wezIds.map((id) => gatedFetchDoc(PATHS.testDetails(id))));
+        const byWezId = {};
+        wezIds.forEach((id, i) => {
+          const doc = docs[i];
+          if (!doc) return;
+          byWezId[id] = adapter.getTestDetails(doc);
+        });
+        result = { supported: Object.keys(byWezId).length > 0, verified: true, byWezId };
+      } catch (e) { /* keep default */ }
     }
-    data.examsResultLoaded = true;
-    return data.examsResult;
+    data.testDetailsResult = result;
+    data.testDetailsResultLoaded = true;
+    return result;
   }
 
   async function fetchRegistrationsResult(adapter, data) {
@@ -705,7 +1042,7 @@
     const ids = [...new Set(etapy.map((e) => e && e.detailsId).filter(Boolean))];
     if (ids.length && typeof adapter.getEtapDetails === 'function') {
       try {
-        const docs = await Promise.all(ids.map((id) => fetchDoc(PATHS.etapDetails(id))));
+        const docs = await Promise.all(ids.map((id) => gatedFetchDoc(PATHS.etapDetails(id))));
         const byId = {};
         ids.forEach((id, i) => {
           const doc = docs[i];
@@ -727,7 +1064,7 @@
     if (own && own.supported && Array.isArray(own.programmes) && own.programmes.length) {
       try {
         const stageDocs = await Promise.all(
-          own.programmes.map((p) => fetchDoc(PATHS.stageSubjects(p.prgKod, p.etpKod)))
+          own.programmes.map((p) => gatedFetchDoc(PATHS.stageSubjects(p.prgKod, p.etpKod)))
         );
         const stages = own.programmes
           .map((p, i) => {
@@ -763,14 +1100,14 @@
         return miss;
       }
     };
-    let doc = await fetchDoc(url);
+    let doc = await gatedFetchDoc(url);
     let res = doc ? parse(doc) : miss;
     if (doc && res.supported && !res.hidden) {
       const bigLink = [...doc.querySelectorAll('table.wrnav a')]
         .map((a) => a.href)
         .find((h) => /tab_limit=500/.test(h || ''));
       if (bigLink) {
-        const bigDoc = await fetchDoc(bigLink);
+        const bigDoc = await gatedFetchDoc(bigLink);
         if (bigDoc) {
           const bigRes = parse(bigDoc);
           if (bigRes.supported && !bigRes.hidden && bigRes.students.length >= res.students.length) res = bigRes;
@@ -834,5 +1171,5 @@
     data.mlegitymacjaResultLoaded = true;
     return result;
   }
-  window.USOSPP_SCRAPE = { collectAll, collectAnon, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchSharedPlan, fetchOwnPlanLink, fetchPlanVisibility, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchEtapDetailsResult, fetchStageSubjectsResult, fetchMlegitymacjaResult };
+  window.USOSPP_SCRAPE = { collectAll, collectAnon, ensureTier2, TIER2_KEYS, fetchDoc, PATHS, searchCatalog, refreshNews, refreshPersonalCalendar, fetchRejSubjects, fetchRejGroups, fetchGroupDetails, fetchSharedPlan, fetchOwnPlanLink, fetchPlanVisibility, fetchGroupParticipants, fetchParticipantsResult, fetchExamsResult, fetchRegistrationsResult, fetchEtapDetailsResult, fetchStageSubjectsResult, fetchMlegitymacjaResult, fetchTestDetailsResult, getRuntimePerf };
 })();
